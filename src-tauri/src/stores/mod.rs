@@ -38,6 +38,14 @@ pub fn scan_all() -> Vec<Game> {
 #[cfg(test)]
 mod tests {
     /// `cargo test print_library -- --ignored --nocapture` to see what gets detected on this machine.
+    #[test]
+    #[ignore]
+    fn live_updates() {
+        for g in super::scan_all().iter().filter(|g| g.update.is_some()) {
+            println!("{:<40} {:<8} {:?} via {:?} size {:?}", g.title, g.store, g.update, g.update_via, g.update_size);
+        }
+    }
+
     /// Writes the scanned library as JSON to $LODESTONE_DUMP (for checking UI logic against real data).
     #[test]
     #[ignore]

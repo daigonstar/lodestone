@@ -147,7 +147,33 @@ pub async fn refresh() -> Result<usize, String> {
     }
     let n = entries.len();
     write("library.json", &entries)?;
+    refresh_builds().await;
     Ok(n)
+}
+
+/// Build installed on disk, from the game's goggame-<id>.info.
+fn installed_build(i: &Installed) -> Option<String> {
+    let v: Value = serde_json::from_str(&fs::read_to_string(Path::new(&i.path).join(format!("goggame-{}.info", i.id))).ok()?).ok()?;
+    v["buildId"].as_str().map(String::from)
+}
+
+/// Newest Windows build per installed game, from GOG's public content-system API.
+async fn refresh_builds() {
+    let mut latest: HashMap<String, String> = HashMap::new();
+    for i in installed() {
+        let url = format!("https://content-system.gog.com/products/{}/os/windows/builds?generation=2", i.id);
+        if let Ok(v) = net::get_json(&url, &[]).await {
+            if let Some(b) = v["items"][0]["build_id"].as_str() {
+                latest.insert(i.id.clone(), b.to_string());
+            }
+        }
+    }
+    let _ = write("builds.json", &latest);
+}
+
+pub fn update_cmd(id: &str) -> Result<LaunchSpec, String> {
+    let i = installed().into_iter().find(|i| i.id == id).ok_or("not installed by Lodestone")?;
+    gogdl(&["update", id, "--platform", "windows", "--path", &i.path, "--lang", "en-US"])
 }
 
 pub fn install_dir() -> PathBuf {
@@ -179,10 +205,12 @@ pub fn scan() -> Vec<Game> {
         return vec![];
     }
     let inst: HashMap<String, Installed> = installed().into_iter().filter(|i| Path::new(&i.path).is_dir()).map(|i| (i.id.clone(), i)).collect();
+    let latest: HashMap<String, String> = read("builds.json");
     read::<Vec<Entry>>("library.json")
         .into_iter()
         .map(|e| {
             let i = inst.get(&e.id);
+            let update = i.is_some_and(|i| matches!((installed_build(i), latest.get(&i.id)), (Some(h), Some(l)) if &h != l));
             Game {
                 id: format!("gog:{}", e.id),
                 store: "gog".into(),
@@ -196,6 +224,8 @@ pub fn scan() -> Vec<Game> {
                 can_install: i.is_none(),
                 can_uninstall: i.is_some(),
                 prefix: Some(path_str(&prefix(&e.id))),
+                update: update.then(|| "available".into()),
+                update_via: update.then(|| "lodestone".into()),
                 genres: e.genres.clone().unwrap_or_default(),
                 series: e.series.clone(),
                 ..Default::default()

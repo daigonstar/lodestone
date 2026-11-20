@@ -161,6 +161,7 @@ async function load(quiet = false) {
   state.copies = copiesByKey();
   computeSeries();
   render();
+  announceUpdates();
   // Look up series for games not checked yet (no-op when everything is cached).
   if (state.games.length) invoke("refresh_series").catch(() => {});
   if (!quiet) {
@@ -234,6 +235,7 @@ function filtered() {
     if (state.view === "favorites" && !g.favorite) return false;
     if (state.view === "recent" && !g.last_played) return false;
     if (state.view === "modded" && !(g.kiln && (g.installed || g.kiln_managed))) return false;
+    if (state.view === "updates" && !(g.installed && g.update)) return false;
     if (STORES[state.view] && g.store !== state.view) return false;
     if (q && !g.title.toLowerCase().includes(q)) return false;
     return true;
@@ -263,6 +265,8 @@ function renderNav() {
     ["favorites", "Favorites", visible.filter((g) => g.favorite).length],
     ["recent", "Recently played", visible.filter((g) => g.last_played && inst(g)).length],
   ];
+  const updN = visible.filter((g) => g.installed && g.update).length;
+  if (updN) lib.splice(1, 0, ["updates", "Updates", updN]);
   const kilnN = visible.filter((g) => g.kiln && (g.installed || g.kiln_managed)).length;
   if (kilnN) lib.push(["modded", "Modded (Kiln)", kilnN]);
   const hiddenN = state.games.filter((g) => g.hidden).length;
@@ -294,6 +298,7 @@ function cardHTML(g) {
       <span class="badges">${dots.map((d) => `<span class="badge" style="background:${d.color}" title="${d.label}"></span>`).join("")}</span>
       ${g.favorite ? '<span class="fav">★</span>' : ""}
       ${g.kiln_managed ? '<span class="modded" title="Modded with Kiln">MODDED</span>' : ""}
+      ${g.installed && g.update ? `<span class="upd-badge" title="${g.update === "updating" ? "Updating" : "Update available"}">${g.update === "updating" ? "UPDATING" : "UPDATE"}</span>` : ""}
       ${run ? `<div class="state">${run.state === "launching" ? "Launching…" : "Running"}</div>` : ""}
     </div>
     <div class="title" title="${esc(g.title)}">${esc(g.title)}</div>
@@ -333,7 +338,7 @@ function renderGrid() {
   state.visible = list;
   renderFilters(state.preLetter);
   $("#grid").innerHTML = list.map(cardHTML).join("");
-  const title = { all: "All games", favorites: "Favorites", recent: "Recently played", hidden: "Hidden", modded: "Modded with Kiln" }[state.view] || store(state.view).label;
+  const title = { all: "All games", favorites: "Favorites", recent: "Recently played", hidden: "Hidden", modded: "Modded with Kiln", updates: "Updates available" }[state.view] || store(state.view).label;
   $("#grid-title").textContent = title;
   $("#grid-count").textContent = `${list.length} game${list.length === 1 ? "" : "s"}`;
   const empty = $("#empty");
@@ -372,6 +377,7 @@ function renderHero() {
   const meta = [`Played <b>${fmtTime(g.playtime)}</b>`, `Last played <b>${fmtAgo(g.last_played)}</b>`];
   const size = fmtSize(g.size);
   if (size) meta.push(`<b>${size}</b>`);
+  if (g.installed && g.update) meta.push(`<span class="upd-text">${g.update === "updating" ? "Updating in Steam…" : `Update available${g.update_size ? ` · ${fmtSize(g.update_size)}` : ""}`}</span>`);
   hero.querySelector(".hero-meta").innerHTML = meta.map((m) => `<span>${m}</span>`).join("");
   const tags = [...genresOf(g)].map((x) => `<button class="tag" data-pick-genre="${esc(x)}">${esc(x)}</button>`);
   const sk = seriesOfGame(g);
@@ -396,6 +402,9 @@ function renderHero() {
   $("#btn-play-menu").classList.toggle("hidden", !(g.kiln_managed && g.installed && !run));
   play.classList.toggle("split", !!(g.kiln_managed && g.installed && !run));
   $("#btn-workshop").classList.toggle("hidden", !g.workshop);
+  const ub = $("#btn-update");
+  ub.classList.toggle("hidden", !(g.installed && g.update === "available"));
+  ub.textContent = g.update_via === "steam" ? "⟳ Update in Steam" : "⟳ Update";
   $('#menu [data-act="uninstall"]').classList.toggle("hidden", !(g.installed && g.can_uninstall));
   $('#menu [data-act="runtimes"]').classList.toggle("hidden", !(g.installed && g.prefix));
   const fav = $("#btn-fav");
@@ -910,6 +919,15 @@ $("#play-menu").onclick = (e) => {
   play(state.selected, b.dataset.playMode);
 };
 document.addEventListener("click", (e) => { if (!e.target.closest(".play-wrap")) $("#play-menu").classList.add("hidden"); });
+$("#btn-update").onclick = async () => {
+  const g = state.games.find((x) => x.id === state.selected);
+  if (!g) return;
+  try {
+    const how = await invoke("update_game", { id: g.id });
+    if (how === "download") { toast(`Updating ${g.title}…`); pollDownloads(); }
+    else toast(`Steam's Downloads page is opening. Steam updates ${g.title} there (or right before you play).`);
+  } catch (e) { toast(String(e), true); }
+};
 $("#btn-fav").onclick = () => {
   const g = state.games.find((x) => x.id === state.selected);
   if (g) setFlag(g.id, "favorite", !g.favorite);
@@ -1092,6 +1110,20 @@ $("#ob-steamkey-save").onclick = async () => {
   try { await invoke("store_refresh"); toast("Steam library updated from your account"); load(true); } catch (e) { toast(String(e), true); }
 };
 $("#btn-rerun-setup").onclick = () => { $("#dlg-settings").close(); obOpen(); };
+
+// ---------- background update checks ----------
+let knownUpdates = null;
+function announceUpdates() {
+  const now = new Set(state.games.filter((g) => g.installed && g.update === "available").map((g) => g.id));
+  if (knownUpdates) {
+    const fresh = [...now].filter((id) => !knownUpdates.has(id)).map((id) => state.games.find((g) => g.id === id)?.title).filter(Boolean);
+    if (fresh.length) toast(`Update${fresh.length > 1 ? "s" : ""} available: ${fresh.slice(0, 3).join(", ")}${fresh.length > 3 ? ` +${fresh.length - 3} more` : ""}`);
+  }
+  knownUpdates = now;
+}
+// Steam writes update state to disk itself, so a quiet rescan picks it up; Epic/GOG need a store check.
+setInterval(() => load(true), 5 * 60 * 1000);
+setInterval(() => { invoke("store_refresh").catch(() => {}).finally(() => load(true)); }, 30 * 60 * 1000);
 
 invoke("startup_view")
   .then((v) => { if (v) { state.view = v; ls.set("view", v); } })

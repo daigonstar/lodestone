@@ -140,6 +140,11 @@ pub fn scan() -> Vec<Game> {
             let meta = &g["metadata"];
             let i = inst.get(app);
             let path = i.and_then(|i| i["install_path"].as_str());
+            // Installed build vs the newest build in the library data (refreshed on Rescan / every 30 min).
+            let platform = i.and_then(|i| i["platform"].as_str()).unwrap_or("Windows");
+            let latest = g["asset_infos"][platform]["build_version"].as_str();
+            let have = i.and_then(|i| i["version"].as_str());
+            let update = matches!((have, latest), (Some(h), Some(l)) if h != l);
             Some(Game {
                 id: format!("epic:{app}"),
                 store: "epic".into(),
@@ -154,6 +159,8 @@ pub fn scan() -> Vec<Game> {
                 can_install: i.is_none(),
                 can_uninstall: i.is_some(),
                 prefix: Some(path_str(&prefix(app))),
+                update: update.then(|| "available".into()),
+                update_via: update.then(|| "lodestone".into()),
                 genres: dbmeta.get(app).map(|m| m.genres.clone()).unwrap_or_default(),
                 series: dbmeta.get(app).and_then(|m| m.series.clone()),
                 ..Default::default()
@@ -167,6 +174,11 @@ pub fn install_cmd(app: &str) -> Result<LaunchSpec, String> {
     let dir = install_dir();
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     cmd(&["install", app, "-y", "--base-path", &dir.to_string_lossy(), "--platform", "Windows", "--skip-sdl", "--with-dlcs"])
+}
+
+/// Update an installed game (download job; resumes like an install).
+pub fn update_cmd(app: &str) -> Result<LaunchSpec, String> {
+    cmd(&["install", app, "--update-only", "-y", "--skip-sdl"])
 }
 
 pub async fn uninstall(app: &str) -> Result<(), String> {

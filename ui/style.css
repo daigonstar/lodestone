@@ -337,3 +337,8 @@ main.no-scroll { overflow: hidden; }
 .shop-bar { display: flex; gap: 6px; align-items: center; }
 .shop-url { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; padding: 0 8px; }
 .shop-frame { flex: 1; border-radius: 12px; border: 1px solid var(--line); background: var(--bg-2); overflow: hidden; }
+
+/* Updates */
+.card .upd-badge { position: absolute; bottom: 8px; left: 8px; background: #2f8cff; color: #fff; font-size: 10px; font-weight: 800; letter-spacing: .5px; padding: 2px 6px; border-radius: 5px; box-shadow: 0 0 0 2px #0006; }
+.upd-text { color: #6fb3ff; font-weight: 600; }
+button.upd-btn { color: #9cc9ff; border-color: #2f8cff66; }

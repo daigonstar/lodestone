@@ -102,6 +102,26 @@ pub fn library_dirs() -> Vec<PathBuf> {
     libs
 }
 
+/// Steam's AppState flags: 2 = update required; 256/1024/1048576 = update running/started/downloading.
+/// TargetBuildID differing from buildid also means Steam has a newer build queued.
+fn steam_update(app: &vdf::Vdf, flags: u32) -> Option<(&'static str, Option<u64>)> {
+    let num = |k: &str| app.str(k).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    let (build, target) = (num("buildid"), num("TargetBuildID"));
+    let pending = flags & 2 != 0 || (target != 0 && target != build);
+    if flags & 4 == 0 && flags & 2 == 0 {
+        return None; // not installed (or installing for the first time)
+    }
+    let left = num("BytesToDownload").saturating_sub(num("BytesDownloaded"));
+    let size = (pending && left > 0).then_some(left);
+    if flags & (256 | 1024 | 1_048_576) != 0 {
+        Some(("updating", size))
+    } else if pending {
+        Some(("available", size))
+    } else {
+        None
+    }
+}
+
 fn genres_of(i: Option<&steam_appinfo::AppInfo>) -> Vec<String> {
     let Some(i) = i else { return vec![] };
     let mut v: Vec<String> = i.genres.iter().filter_map(|g| steam_genre(*g)).map(String::from).collect();
@@ -143,6 +163,7 @@ pub fn scan() -> Vec<Game> {
                     continue;
                 }
                 let flags: u32 = app.str("StateFlags").and_then(|s| s.parse().ok()).unwrap_or(0);
+                let update = steam_update(app, flags);
                 let (cover, hero) = cover_for(&cache, appid);
                 let id_num: u32 = appid.parse().unwrap_or(0);
                 // -silent: if Steam isn't running it starts minimized to tray instead of opening its window.
@@ -165,6 +186,9 @@ pub fn scan() -> Vec<Game> {
                     workshop: info.get(&id_num).filter(|i| i.workshop).map(|_| id_num),
                     genres: genres_of(info.get(&id_num)),
                     series: info.get(&id_num).and_then(|i| i.franchise.clone()),
+                    update_via: update.as_ref().map(|_| "steam".into()),
+                    update_size: update.as_ref().and_then(|u| u.1),
+                    update: update.map(|u| u.0.to_string()),
                     ..Default::default()
                 });
             }

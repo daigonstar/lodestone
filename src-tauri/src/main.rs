@@ -303,6 +303,29 @@ async fn install_game(id: String, inner: State<'_, Shared>) -> Result<String, St
     Ok("client".into())
 }
 
+/// Update a game: Epic/GOG games installed by Lodestone download here; Steam games go to Steam's
+/// Downloads page (only the Steam client can update them).
+#[tauri::command]
+async fn update_game(id: String, inner: State<'_, Shared>) -> Result<String, String> {
+    let game = inner.games.lock().unwrap().get(&id).cloned().ok_or("Unknown game")?;
+    if let Some(app) = id.strip_prefix("epic:") {
+        tools::LEGENDARY.ensure().await?;
+        downloads::start(&format!("update-{id}"), &format!("Updating {}", game.title), &stores::epic::update_cmd(app)?, None)?;
+        return Ok("download".into());
+    }
+    if let Some(gid) = id.strip_prefix("gog:") {
+        tools::GOGDL.ensure().await?;
+        downloads::start(&format!("update-{id}"), &format!("Updating {}", game.title), &stores::gog::update_cmd(gid)?, None)?;
+        return Ok("download".into());
+    }
+    if id.starts_with("steam:") {
+        let spec = stores::steam::open_url("steam://open/downloads").ok_or("Steam isn't installed")?;
+        launcher::spawn(&spec, launcher::log_path("steam-url")).map_err(|e| e.to_string())?;
+        return Ok("steam".into());
+    }
+    Err(format!("{} updates through {}", game.title, game.via))
+}
+
 #[tauri::command]
 async fn uninstall_game(id: String, inner: State<'_, Shared>) -> Result<String, String> {
     if let Some(app) = id.strip_prefix("epic:").filter(|_| stores::epic::account().is_some()) {
@@ -826,6 +849,7 @@ fn main() {
             read_log,
             running,
             install_game,
+            update_game,
             uninstall_game,
             open_url,
             workshop_items,

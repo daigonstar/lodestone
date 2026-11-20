@@ -67,6 +67,12 @@ pub struct Game {
     pub kiln: Option<String>,
     /// The game has been set up in Kiln (it has a mod list).
     pub kiln_managed: bool,
+    /// "available" (a newer build exists) or "updating" (the store is downloading it).
+    pub update: Option<String>,
+    /// Download size of the pending update, when the store says.
+    pub update_size: Option<u64>,
+    /// How the update happens: "steam" (Steam client) or "lodestone" (Lodestone downloads it).
+    pub update_via: Option<String>,
 }
 
 pub fn home() -> PathBuf {
