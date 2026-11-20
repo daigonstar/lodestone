@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lodestone</title>
+  <link rel="icon" href="lodestone.svg" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><img class="brand-icon" src="lodestone.svg" alt="" />Lodestone</div>
+    <nav id="nav-library" class="nav"></nav>
+    <div class="nav-label">Stores</div>
+    <nav id="nav-stores" class="nav"></nav>
+    <div class="nav-label">Shop</div>
+    <nav id="nav-shop" class="nav"></nav>
+    <div class="sidebar-foot">
+      <button id="btn-add" class="ghost">+ Add game</button>
+      <button id="btn-refresh" class="ghost" title="Rescan all libraries (Ctrl+R)">⟳ Rescan</button>
+      <button id="btn-accounts" class="ghost">👤 Accounts</button>
+      <button id="btn-settings" class="ghost">⚙ Settings</button>
+    </div>
+  </aside>
+
+  <main>
+    <header class="topbar">
+      <input id="search" type="search" placeholder="Search your games   ( / )" autocomplete="off" spellcheck="false" />
+      <select id="sort" title="Sort">
+        <option value="recent">Recently played</option>
+        <option value="title">A–Z</option>
+        <option value="playtime">Most played</option>
+        <option value="size">Size on disk</option>
+      </select>
+      <label class="toggle"><input id="show-uninstalled" type="checkbox" /> Not installed</label>
+      <label class="toggle" title="Minimize Lodestone when a game starts"><input id="minimize" type="checkbox" /> Minimize on play</label>
+      <div id="mini" class="mini hidden">
+        <div class="mini-art"></div>
+        <div class="grow"><div class="mini-title"></div><div class="mini-store"></div></div>
+        <button id="mini-more" class="ghost" title="Back to the details">Details ↑</button>
+        <button id="mini-fav" class="icon sm" title="Favorite">☆</button>
+        <button id="mini-play" class="play">▶ Play</button>
+      </div>
+    </header>
+
+    <section id="hero" class="hero empty">
+      <div class="hero-bg"></div>
+      <div class="hero-content">
+        <img class="hero-cover" alt="" />
+        <div class="hero-info">
+          <div class="hero-store"></div>
+          <h1 class="hero-title"></h1>
+          <div class="hero-meta"></div>
+          <div class="hero-tags"></div>
+          <div class="hero-kiln hidden"></div>
+          <div class="hero-also hidden"></div>
+          <div class="hero-actions">
+            <div class="play-wrap">
+              <button id="btn-play" class="play">▶ Play</button><button id="btn-play-menu" class="play menu-caret hidden" title="Play modded or without mods">▾</button>
+              <div id="play-menu" class="menu play-menu hidden">
+                <button data-play-mode="modded">▶ Play modded <small class="muted">through Kiln's checks</small></button>
+                <button data-play-mode="vanilla">▶ Play without mods <small class="muted">mods go back next time</small></button>
+              </div>
+            </div>
+            <button id="btn-workshop" class="ghost tall hidden" title="Steam Workshop">Workshop</button>
+            <button id="btn-fav" class="icon" title="Favorite (F)">☆</button>
+            <div class="menu-wrap">
+              <button id="btn-more" class="icon" title="More">⋯</button>
+              <div id="menu" class="menu hidden">
+                <button data-act="hide">Hide from library</button>
+                <button data-act="log">View launch log</button>
+                <button data-act="runtimes">Install DirectX &amp; VC++ runtimes</button>
+                <button data-act="client">Open store app</button>
+                <button data-act="uninstall">Uninstall…</button>
+                <button data-act="remove" class="danger">Remove custom game</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div id="setup" class="setup hidden"></div>
+    <div class="grid-head"><span id="grid-title">All games</span><span id="grid-count"></span></div>
+    <div id="filters" class="filters">
+      <select id="f-genre" title="Genre"></select>
+      <select id="f-series" title="Series"></select>
+      <button id="f-clear" class="ghost hidden">✕ Clear filters</button>
+      <div id="f-letters" class="letters"></div>
+    </div>
+    <section id="grid" class="grid" tabindex="0"></section>
+    <div id="empty" class="empty-state hidden"></div>
+
+    <section id="shop" class="shop hidden">
+      <div class="shop-bar">
+        <button class="icon sm" data-shop-nav="back" title="Back">←</button>
+        <button class="icon sm" data-shop-nav="forward" title="Forward">→</button>
+        <button class="icon sm" data-shop-nav="reload" title="Reload">⟳</button>
+        <button class="icon sm" data-shop-nav="home" title="Store home">⌂</button>
+        <span id="shop-url" class="shop-url muted"></span>
+        <button class="ghost" id="shop-external" title="Open this page in your web browser">Open in browser ↗</button>
+      </div>
+      <div id="shop-frame" class="shop-frame"><div class="muted pad">Loading the store…</div></div>
+    </section>
+
+    <section id="mc" class="mc hidden">
+      <div class="mc-head">
+        <div class="mc-icon"></div>
+        <div class="mc-info">
+          <select id="mc-instance" class="hidden"></select>
+          <h1 id="mc-name"></h1>
+          <div id="mc-chips" class="chips"></div>
+        </div>
+        <div class="mc-actions">
+          <button id="mc-folder" class="ghost tall">Open folder</button>
+          <button id="mc-play" class="play">▶ Play</button>
+        </div>
+      </div>
+      <div class="mc-bar">
+        <div class="seg" id="mc-kind">
+          <button data-kind="mod" class="on">Mods</button>
+          <button data-kind="resourcepack">Resource packs</button>
+          <button data-kind="shader">Shaders</button>
+        </div>
+        <div class="seg" id="mc-tab">
+          <button data-tab="installed" class="on">Installed</button>
+          <button data-tab="browse">Browse</button>
+        </div>
+      </div>
+
+      <div id="mc-installed">
+        <div class="mc-tools">
+          <input id="mc-filter" type="search" placeholder="Filter installed…" />
+          <span id="mc-summary" class="muted"></span>
+          <button id="mc-check" class="ghost">Check for updates</button>
+          <button id="mc-update-all" class="play small hidden"></button>
+        </div>
+        <div id="mc-list" class="mc-list"></div>
+      </div>
+
+      <div id="mc-browse" class="hidden">
+        <div class="mc-tools">
+          <div class="seg" id="mc-source">
+            <button data-source="modrinth" class="on">Modrinth</button>
+            <button data-source="curseforge">CurseForge</button>
+          </div>
+          <input id="mc-query" type="search" placeholder="Search Modrinth…" />
+        </div>
+        <div id="mc-results" class="mc-list"></div>
+        <div class="center"><button id="mc-more" class="ghost hidden">Load more</button></div>
+      </div>
+    </section>
+  </main>
+
+  <div id="running" class="running"></div>
+  <div id="downloads" class="downloads"></div>
+  <div id="toasts" class="toasts"></div>
+
+  <dialog id="dlg-add">
+    <form method="dialog" id="form-add">
+      <h2>Add a game</h2>
+      <p class="hint">Anything with a command line: a native game, a Windows game through <code>umu-run</code> or <code>wine</code>, an emulator, a script.
+        Battle.net and Guild Wars 2 are easiest to install in Lutris; they'll show up here automatically.</p>
+      <label>Title<input name="title" required placeholder="Guild Wars 2" /></label>
+      <label class="check"><input type="checkbox" name="proton" /> Windows game: run it with Proton (own prefix, no Steam needed)</label>
+      <label><span id="cmd-label">Command</span><input name="command" required placeholder="/home/you/Games/mygame/start.sh" /></label>
+      <label>Store
+        <select name="store">
+          <option value="custom">Other</option>
+          <option value="battlenet">Battle.net</option>
+          <option value="arenanet">ArenaNet</option>
+          <option value="ea">EA</option>
+          <option value="ubisoft">Ubisoft</option>
+          <option value="minecraft">Minecraft</option>
+        </select>
+      </label>
+      <label>Cover image (optional, path or URL)<input name="cover" placeholder="/home/you/Pictures/gw2.jpg" /></label>
+      <div class="dlg-actions">
+        <button type="button" class="ghost" id="add-cancel">Cancel</button>
+        <button type="submit" class="play">Add</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-log">
+    <h2>Launch log</h2>
+    <pre id="log-text"></pre>
+    <div class="dlg-actions"><button class="play" onclick="this.closest('dialog').close()">Close</button></div>
+  </dialog>
+
+  <dialog id="dlg-workshop">
+    <h2 id="ws-title">Steam Workshop</h2>
+    <p class="hint">Subscribing happens on Steam Community: sign in once in the browse window and Steam downloads what you subscribe to. Changes show here after Steam finishes.</p>
+    <div class="dlg-actions left">
+      <button id="ws-browse" class="play">Browse Workshop</button>
+      <button id="ws-steam" class="ghost">Open in Steam</button>
+    </div>
+    <div id="ws-list" class="ws-list"></div>
+    <div class="dlg-actions"><button class="ghost" onclick="this.closest('dialog').close()">Close</button></div>
+  </dialog>
+
+  <dialog id="dlg-accounts">
+    <h2>Accounts</h2>
+    <p class="hint">Sign in on each store's own page in a Lodestone window. Lodestone never sees your password; it only receives the store's sign-in token, kept in <code>~/.local/share/lodestone</code>.</p>
+    <div id="acct-list" class="acct-list"></div>
+    <div class="dlg-actions"><button class="ghost" onclick="this.closest('dialog').close()">Close</button></div>
+  </dialog>
+
+  <dialog id="dlg-settings">
+    <form method="dialog" id="form-settings">
+      <h2>Settings</h2>
+      <h3>Compatibility (Proton)</h3>
+      <div class="row-line"><span id="umu-status" class="umu-status muted">Checking…</span><button type="button" id="umu-setup" class="umu-setup ghost">Set up Proton</button></div>
+      <label>Proton version
+        <select name="proton" id="proton-select" class="proton-select"></select>
+      </label>
+      <p class="hint">Windows games and launchers (Battle.net, Guild Wars 2, games you add) run through Proton using umu-launcher, which Lodestone keeps in its own folder. Steam isn't needed.</p>
+      <h3>Library</h3>
+      <label class="check"><input type="checkbox" id="merge-dupes" /> Show each game once in All games, Favorites and Recently played</label>
+      <p class="hint">When you own a game on several stores, Lodestone shows the installed copy, or else the first store in this order. Use the arrows to change it.</p>
+      <div id="store-order" class="store-order"></div>
+      <label>Steam Web API key (optional)
+        <input name="steamkey" type="password" autocomplete="off" placeholder="Paste your key" />
+      </label>
+      <p class="hint">Without a key, Lodestone guesses your Steam library from Steam's local files, which also keep games you refunded. With your own free key (<a href="#" data-href="https://steamcommunity.com/dev/apikey">steamcommunity.com/dev/apikey</a>, any domain name works) it uses Steam's exact owned-games list. Your profile's <i>Game details</i> must be Public for Steam to answer.</p>
+      <h3>Mods</h3>
+      <label class="check"><input type="checkbox" id="kiln-play" /> Play modded games through Kiln (checks mods are deployed and loaders set up first)</label>
+      <h3>Games</h3>
+      <label>Install Epic and GOG games to
+        <input name="gamesdir" placeholder="~/Games" />
+      </label>
+      <h3>Minecraft</h3>
+      <label>CurseForge API key
+        <input name="cf" type="password" autocomplete="off" placeholder="Paste your key" />
+      </label>
+      <p class="hint">Modrinth works without a key. CurseForge requires a free personal key: sign in at
+        <a href="#" data-href="https://console.curseforge.com/">console.curseforge.com</a> → API keys. It's stored only in
+        <code>~/.config/lodestone/settings.json</code> (readable only by you).</p>
+      <div class="dlg-actions">
+        <button type="button" class="ghost" id="btn-rerun-setup" style="margin-right:auto">Run setup guide again</button>
+        <button type="button" class="ghost" onclick="this.closest('dialog').close()">Cancel</button>
+        <button type="submit" class="play">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="onboard" class="onboard hidden">
+    <div class="ob-card">
+      <div class="ob-dots" id="ob-dots"></div>
+
+      <section class="ob-step" data-step="0">
+        <div class="ob-hero"><img class="ob-icon" src="lodestone.svg" alt="" /></div>
+        <h1>Welcome to Lodestone</h1>
+        <p class="lead">All your games in one library, played from one place.</p>
+        <ul class="ob-points">
+          <li><b>Steam, Epic, GOG, Battle.net, Guild Wars 2, Minecraft</b> and anything else you add, side by side.</li>
+          <li><b>Press Play and the game starts.</b> Other launchers stay hidden in the background.</li>
+          <li><b>Windows games run through Proton</b> without needing Steam, Heroic or Lutris.</li>
+          <li><b>A Minecraft mod manager</b> for Modrinth and CurseForge.</li>
+        </ul>
+        <p class="muted">This takes about two minutes. Everything here can be changed later in Settings.</p>
+      </section>
+
+      <section class="ob-step" data-step="1">
+        <h2>What's already on this PC</h2>
+        <p class="muted">Lodestone reads these launchers' libraries directly. Nothing needs to be imported.</p>
+        <div id="ob-found" class="ob-found"></div>
+      </section>
+
+      <section class="ob-step" data-step="2">
+        <h2>Windows games (Proton)</h2>
+        <p class="muted">Epic, GOG, Battle.net and Windows games you add run through Proton, the same compatibility layer Steam uses. Lodestone keeps its own runner (umu-launcher), so Steam isn't needed for these.</p>
+        <div class="ob-box">
+          <div class="row-line"><span class="umu-status">Checking…</span><button type="button" class="umu-setup play small">Set up Proton</button></div>
+          <label>Proton version
+            <select id="ob-proton" class="proton-select"></select>
+          </label>
+          <p class="hint">"Automatic" uses the newest GE-Proton on this PC, or downloads one the first time a game needs it.</p>
+        </div>
+      </section>
+
+      <section class="ob-step" data-step="3">
+        <h2>Connect your stores</h2>
+        <p class="muted">All optional. Sign in on each store's own page; Lodestone never sees your password.</p>
+        <div id="ob-accounts" class="acct-list"></div>
+        <div class="ob-box">
+          <label>Steam Web API key (recommended)
+            <div class="row-line"><input id="ob-steamkey" type="password" autocomplete="off" placeholder="Paste your key" /><button type="button" class="ghost" id="ob-steamkey-save">Save</button></div>
+          </label>
+          <p class="hint">Lets Lodestone list exactly the Steam games you own, so refunded games don't show up. Get one free at <a href="#" data-href="https://steamcommunity.com/dev/apikey">steamcommunity.com/dev/apikey</a> (any domain, e.g. <code>localhost</code>). Your profile's <i>Game details</i> must be Public.</p>
+        </div>
+        <div class="ob-box ob-row">
+          <div class="grow"><b>Guild Wars 2</b><br /><small class="muted">Installs ArenaNet's official launcher in its own Proton prefix.</small></div>
+          <button type="button" class="ghost" data-winsetup="gw2" id="ob-gw2">Install</button>
+        </div>
+      </section>
+
+      <section class="ob-step" data-step="4">
+        <h2>Your preferences</h2>
+        <h3>Same game on several stores</h3>
+        <p class="muted">All games shows each game once: the installed copy, or else the first store in this list.</p>
+        <div id="ob-store-order" class="store-order"></div>
+        <h3>New installs</h3>
+        <label>Install Epic and GOG games to
+          <input id="ob-gamesdir" placeholder="~/Games" />
+        </label>
+        <label class="check"><input type="checkbox" id="ob-minimize" /> Minimize Lodestone when a game starts</label>
+      </section>
+
+      <section class="ob-step" data-step="5">
+        <div class="ob-hero"><span class="ob-check">✓</span></div>
+        <h1>You're all set</h1>
+        <p class="lead" id="ob-summary"></p>
+        <ul class="ob-points">
+          <li>Press <b>/</b> to search, arrow keys to move, <b>Enter</b> to play.</li>
+          <li>Use the <b>genre</b>, <b>series</b> and <b>A–Z</b> filters above the library.</li>
+          <li>Game won't start? <b>⋯ → View launch log</b>, or <b>⋯ → Install DirectX &amp; VC++ runtimes</b> for Windows games.</li>
+          <li><b>👤 Accounts</b> and <b>⚙ Settings</b> in the sidebar change anything from this guide.</li>
+        </ul>
+      </section>
+
+      <div class="ob-nav">
+        <button type="button" class="ghost" id="ob-skip">Skip setup</button>
+        <span class="grow"></span>
+        <button type="button" class="ghost" id="ob-back">Back</button>
+        <button type="button" class="play" id="ob-next">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script src="minecraft.js"></script>
+</body>
+</html>

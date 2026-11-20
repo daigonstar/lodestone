@@ -1,0 +1,28 @@
+[package]
+name = "lodestone"
+version = "0.1.0"
+description = "One launcher for every game library on Linux"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset", "unstable"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+dirs = "5"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sha1 = "0.10"
+urlencoding = "2"
+tokio = { version = "1", features = ["sync"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Same versions Tauri uses: to place the store browser over part of the window (see shop.rs).
+gtk = "0.18"
+webkit2gtk = "2.0"
+
+[profile.release]
+strip = true
+lto = true
