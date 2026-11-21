@@ -61,10 +61,7 @@
           <div class="hero-actions">
             <div class="play-wrap">
               <button id="btn-play" class="play">▶ Play</button><button id="btn-play-menu" class="play menu-caret hidden" title="Play modded or without mods">▾</button>
-              <div id="play-menu" class="menu play-menu hidden">
-                <button data-play-mode="modded">▶ Play modded <small class="muted">through Kiln's checks</small></button>
-                <button data-play-mode="vanilla">▶ Play without mods <small class="muted">mods go back next time</small></button>
-              </div>
+              <div id="play-menu" class="menu play-menu hidden"></div>
             </div>
             <button id="btn-update" class="ghost tall upd-btn hidden">⟳ Update</button>
             <button id="btn-workshop" class="ghost tall hidden" title="Steam Workshop">Workshop</button>
@@ -285,6 +282,13 @@
           <label><span>Steam game used for details, news and art <small>(app id or store link)</small></span><input name="steam" placeholder="automatic" /></label>
           <label><span>Cover image <small>(link or file path)</small></span><input name="cover" /></label>
           <label><span>Banner image <small>(link or file path)</small></span><input name="hero" /></label>
+          <h3>Play time</h3>
+          <div class="pt-row">
+            <label><span>Hours</span><input name="pt_h" type="number" min="0" step="1" inputmode="numeric" /></label>
+            <label><span>Minutes</span><input name="pt_m" type="number" min="0" max="59" step="1" inputmode="numeric" /></label>
+            <button type="button" class="ghost small" id="pt-auto">Count automatically</button>
+          </div>
+          <p class="hint" id="pt-hint"></p>
           <h3>Install location</h3>
           <p class="hint" id="loc-hint">Only if Lodestone didn't find the game where it's installed.</p>
           <label><span>Install folder</span><input name="installdir" spellcheck="false" placeholder="/home/you/Games/World of Warcraft" /></label>
@@ -307,6 +311,53 @@
         <button type="button" class="ghost danger-text" id="meta-reset">Reset to store data</button>
         <span class="grow"></span>
         <button type="button" class="ghost" id="meta-cancel">Cancel</button>
+        <button type="submit" class="play">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-mh" class="wide">
+    <form method="dialog" id="form-mh">
+      <h2>MangoHud overlay</h2>
+      <p class="hint">What the overlay shows and where. Saved to <code id="mh-path">MangoHud.conf</code>, so it applies wherever you use MangoHud. Settings Lodestone doesn't list here are kept.</p>
+      <div class="mh-presets"><span class="muted">Start from:</span>
+        <button type="button" class="ghost small" data-mh-preset="fps">FPS only</button>
+        <button type="button" class="ghost small" data-mh-preset="basic">Basic</button>
+        <button type="button" class="ghost small" data-mh-preset="full">Everything</button>
+        <button type="button" class="ghost small" data-mh-preset="bar">Slim bar</button>
+      </div>
+      <div class="mh-grid">
+        <div>
+          <h3>Show</h3>
+          <div class="mh-checks" id="mh-checks"></div>
+        </div>
+        <div>
+          <h3>Look</h3>
+          <label>Position
+            <select name="position">
+              <option value="top-left">Top left</option><option value="top-center">Top centre</option><option value="top-right">Top right</option>
+              <option value="middle-left">Middle left</option><option value="middle-right">Middle right</option>
+              <option value="bottom-left">Bottom left</option><option value="bottom-center">Bottom centre</option><option value="bottom-right">Bottom right</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" name="horizontal" /> One line across the screen (horizontal)</label>
+          <label><span>Text size <small>(default 24)</small></span><input name="font_size" type="number" min="8" max="96" /></label>
+          <label><span>Background opacity <small>(0 to 1, default 0.5)</small></span><input name="background_alpha" type="number" min="0" max="1" step="0.05" /></label>
+          <label><span>Rounded corners <small>(pixels)</small></span><input name="round_corners" type="number" min="0" max="30" /></label>
+          <h3>Behaviour</h3>
+          <label><span>FPS limit <small>(empty for none; several like 60,120 to switch between)</small></span><input name="fps_limit" placeholder="none" /></label>
+          <label><span>Show/hide key</span><input name="toggle_hud" placeholder="Shift_R+F12" /></label>
+          <label class="check"><input type="checkbox" name="no_display" /> Start hidden (press the key to show it)</label>
+        </div>
+      </div>
+      <details class="mh-adv"><summary>Advanced: edit the settings file</summary>
+        <textarea id="mh-text" spellcheck="false" rows="12"></textarea>
+        <p class="hint">Every option is in MangoHud's documentation (<a href="#" data-href="https://github.com/flightlessmango/MangoHud#hud-configuration">MangoHud on GitHub</a>). Changes here update the form, and the other way round.</p>
+      </details>
+      <div class="dlg-actions">
+        <button type="button" class="ghost" id="mh-preview" title="Opens a small spinning-cube window with the overlay on it">Preview</button>
+        <span class="grow"></span>
+        <button type="button" class="ghost" id="mh-cancel">Cancel</button>
         <button type="submit" class="play">Save</button>
       </div>
     </form>
@@ -362,6 +413,7 @@
       <p class="hint">Without a key, Lodestone finds artwork from Steam's store. A free SteamGridDB key (<a href="#" data-href="https://www.steamgriddb.com/profile/preferences/api">steamgriddb.com → Preferences → API</a>) adds thousands of community covers and banners, including for games that aren't on Steam.</p>
       <h3>Performance overlay (MangoHud)</h3>
       <div class="row-line"><span id="mh-status" class="muted">Checking…</span><button type="button" id="mh-setup" class="ghost">Set up MangoHud</button></div>
+      <div class="row-line"><button type="button" class="ghost" id="mh-config">Customize the overlay…</button></div>
       <label class="check"><input type="checkbox" id="mh-all" /> Show MangoHud in every game (turn it off or on per game in the game's ⋯ menu)</label>
       <p class="hint">FPS, frame times, CPU and GPU load over your games. Lodestone uses MangoHud from your system, or sets up the official release in its own folder. It works for games Lodestone starts; for Steam games, add <code>mangohud %command%</code> to the game's launch options in Steam.</p>
       <h3>Mods</h3>

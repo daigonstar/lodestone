@@ -16,6 +16,14 @@ pub struct Entry {
     pub favorite: bool,
     #[serde(default)]
     pub hidden: bool,
+    /// You set the play time yourself: it's used as is (instead of the store's figure) and
+    /// Lodestone keeps adding the time you play from here on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual_playtime: bool,
+    /// Lodestone's own count when you last edited it, and the value you set: going back to automatic
+    /// restores the count plus anything played since.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playtime_before_edit: Option<(u64, u64)>,
     /// MangoHud for this game: on/off, or None to follow Settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mangohud: Option<bool>,

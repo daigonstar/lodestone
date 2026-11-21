@@ -116,6 +116,42 @@ fn register(lib: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// MangoHud's own settings file (used by every program MangoHud runs in).
+pub fn config_path() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".config")).join("MangoHud/MangoHud.conf")
+}
+
+pub fn config_get() -> (String, String) {
+    let p = config_path();
+    (p.to_string_lossy().into_owned(), fs::read_to_string(&p).unwrap_or_default())
+}
+
+/// Save the settings file (the old one is kept as MangoHud.conf.bak the first time).
+pub fn config_save(text: &str) -> Result<(), String> {
+    let p = config_path();
+    fs::create_dir_all(p.parent().unwrap()).map_err(net::err)?;
+    let bak = p.with_extension("conf.bak");
+    if p.is_file() && !bak.exists() {
+        let _ = fs::copy(&p, &bak);
+    }
+    let mut t = text.replace("\r\n", "\n");
+    if !t.ends_with('\n') {
+        t.push('\n');
+    }
+    fs::write(&p, t).map_err(net::err)
+}
+
+/// Show the overlay on a small test window (vkcube), so you can see your settings.
+pub fn preview() -> Result<LaunchSpec, String> {
+    if info().installed.is_none() {
+        return Err("Set up MangoHud first".into());
+    }
+    let cube = which("vkcube").ok_or("vkcube isn't installed (it comes with the vulkan-tools package)")?;
+    let mut s = LaunchSpec::new(cube.to_string_lossy(), &[]);
+    s.env.insert("MANGOHUD".into(), "1".into());
+    Ok(s)
+}
+
 /// Whether this launch runs through Proton/Wine (the Vulkan layer is enough there).
 fn is_proton(spec: &LaunchSpec) -> bool {
     spec.env.contains_key("WINEPREFIX") || spec.program.ends_with("umu-run")

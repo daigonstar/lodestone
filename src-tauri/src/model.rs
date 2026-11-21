@@ -55,6 +55,9 @@ pub struct Game {
     #[serde(skip)]
     pub alt_launch: Option<LaunchSpec>,
     pub alt_label: Option<String>,
+    /// Game accounts you can pick from when starting it (WoW's "WoW1", "WoW2").
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub accounts: Vec<String>,
     #[serde(skip)]
     pub uninstall: Option<LaunchSpec>,
     pub can_install: bool,

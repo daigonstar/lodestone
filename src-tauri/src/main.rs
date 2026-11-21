@@ -57,6 +57,8 @@ struct GameDto {
     edited: bool,
     /// MangoHud for this game: on/off, or null to follow Settings.
     mangohud: Option<bool>,
+    /// You set the play time yourself.
+    playtime_edited: bool,
 }
 
 fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> impl std::future::Future<Output = Result<T, String>> {
@@ -79,7 +81,7 @@ async fn list_games(inner: State<'_, Shared>) -> Result<Vec<GameDto>, String> {
             .map(|g| {
                 let e = store.games.get(&g.id).cloned().unwrap_or_default();
                 let s = played.get(&g.id).copied().unwrap_or_default();
-                GameDto { game: g.clone(), playtime: e.playtime.max(s.seconds), last_played: e.last_played.max(s.last), favorite: e.favorite, hidden: e.hidden, art_missing: meta::art_missing(g), edited: meta::edited(&g.id), mangohud: e.mangohud }
+                GameDto { game: g.clone(), playtime: if e.manual_playtime { e.playtime } else { e.playtime.max(s.seconds) }, playtime_edited: e.manual_playtime, last_played: e.last_played.max(s.last), favorite: e.favorite, hidden: e.hidden, art_missing: meta::art_missing(g), edited: meta::edited(&g.id), mangohud: e.mangohud }
             })
             .collect();
         *inner.games.lock().unwrap() = games.into_iter().map(|g| (g.id.clone(), g)).collect();
@@ -172,6 +174,15 @@ fn launch_game(id: String, mode: Option<String>, inner: State<'_, Shared>, app: 
     };
     // "alt": the game's second way to start (e.g. through Battle.net instead of directly).
     let alt = if mode == "alt" { game.alt_launch.as_ref() } else { None };
+    // WoW started directly: "acct:WoW2", "realm" or "acct:WoW2+realm" pick the game account and/or show
+    // the realm list.
+    if alt.is_none() && !game.accounts.is_empty() || mode.contains("realm") {
+        let account = mode.split('+').find_map(|p| p.strip_prefix("acct:"));
+        let realm = mode.split('+').any(|p| p == "realm");
+        if let Some(dir) = game.launch.as_ref().and_then(|l| l.cwd.as_ref()).filter(|_| account.is_some() || realm) {
+            stores::winapps::wow_prepare(dir, account, &game.accounts, realm)?;
+        }
+    }
     let spec = alt.or(kiln_spec.as_ref()).or(game.launch.as_ref()).ok_or("No launch method for this game")?;
     let hud = inner.store.lock().unwrap().games.get(&id).and_then(|e| e.mangohud).unwrap_or_else(|| settings::load().mangohud);
     let with_hud;
@@ -210,6 +221,33 @@ fn set_flag(id: String, flag: String, value: bool, inner: State<'_, Shared>) -> 
         "hidden" => e.hidden = value,
         "mangohud" => e.mangohud = Some(value),
         _ => return Err("unknown flag".into()),
+    }
+    s.save();
+    Ok(())
+}
+
+/// Set a game's play time (seconds); Lodestone adds what you play from now on. None goes back to
+/// counting automatically (the store's figure or Lodestone's own, whichever is bigger).
+#[tauri::command]
+fn set_playtime(id: String, seconds: Option<u64>, inner: State<'_, Shared>) -> Result<(), String> {
+    let mut s = inner.store.lock().unwrap();
+    let e = s.entry(&id);
+    match seconds {
+        Some(n) => {
+            let own = match e.playtime_before_edit {
+                Some((own, set)) if e.manual_playtime => own + e.playtime.saturating_sub(set),
+                _ => e.playtime,
+            };
+            e.playtime_before_edit = Some((own, n));
+            e.playtime = n;
+            e.manual_playtime = true;
+        }
+        None => {
+            if let Some((own, set)) = e.playtime_before_edit.take().filter(|_| e.manual_playtime) {
+                e.playtime = own + e.playtime.saturating_sub(set);
+            }
+            e.manual_playtime = false;
+        }
     }
     s.save();
     Ok(())
@@ -1098,6 +1136,22 @@ async fn setup_mangohud() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn mangohud_config_get() -> (String, String) {
+    mangohud::config_get()
+}
+
+#[tauri::command]
+fn mangohud_config_save(text: String) -> Result<(), String> {
+    mangohud::config_save(&text)
+}
+
+#[tauri::command]
+fn mangohud_preview() -> Result<(), String> {
+    let spec = mangohud::preview()?;
+    launcher::spawn(&spec, launcher::log_path("mangohud-preview")).map(|_| ()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn set_mangohud(on: bool) -> Result<(), String> {
     let mut s = settings::load();
     s.mangohud = on;
@@ -1230,6 +1284,7 @@ fn main() {
             launch_game,
             forget_session,
             set_flag,
+            set_playtime,
             add_custom_game,
             remove_custom_game,
             open_client,
@@ -1258,6 +1313,9 @@ fn main() {
             mangohud_info,
             setup_mangohud,
             set_mangohud,
+            mangohud_config_get,
+            mangohud_config_save,
+            mangohud_preview,
             setup_proton,
             set_proton,
             winapp_status,

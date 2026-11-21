@@ -310,6 +310,7 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
     let mut installed_codes = std::collections::HashSet::new();
     let aggregate = bnet_catalog::aggregate_products(&c);
     let wow = bnet_catalog::wow_versions(&c);
+    let wow_accounts = bnet_catalog::wow_accounts(&c);
     let mut wow_installed = std::collections::HashSet::new();
     // Retail by its product code (Battle.net's usual Play); the others by install id.
     let wow_exec = |v: &bnet_catalog::WowVersion| match v.uid.as_str() {
@@ -398,6 +399,7 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
                             g.via = "Direct · Proton".into();
                             g.alt_launch = through_bnet;
                             g.alt_label = Some("Play through Battle.net".into());
+                            g.accounts = wow_accounts.get(bnet_catalog::WOW[v.order].1).cloned().unwrap_or_default();
                             g
                         }
                         None => wow_game(v, true, through_bnet),
@@ -483,6 +485,50 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
         }
     }
     out
+}
+
+/// Before starting a WoW version directly: pick which game account it signs in to (WoW keeps the
+/// default in WTF/Config.wtf as `SET accountList "WoW1|!WoW2|"`, ! marking it), and, if asked,
+/// forget the last realm so WoW shows the realm list.
+pub fn wow_prepare(version_dir: &Path, account: Option<&str>, accounts: &[String], pick_realm: bool) -> Result<(), String> {
+    let f = version_dir.join("WTF/Config.wtf");
+    let text = fs::read_to_string(&f).unwrap_or_default();
+    let out = wow_config(&text, account, accounts, pick_realm);
+    if out != text {
+        fs::create_dir_all(f.parent().unwrap()).map_err(|e| e.to_string())?;
+        fs::write(&f, out).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn wow_config(text: &str, account: Option<&str>, accounts: &[String], pick_realm: bool) -> String {
+    let mut lines: Vec<String> = text.lines().map(String::from).collect();
+    if let Some(acct) = account {
+        let at = lines.iter().position(|l| l.trim_start().starts_with("SET accountList "));
+        // Names already in the list keep WoW's spelling; any it doesn't know yet are added.
+        let mut names: Vec<String> = at
+            .and_then(|i| lines[i].split('"').nth(1).map(|v| v.split('|').filter(|s| !s.is_empty()).map(|s| s.trim_start_matches('!').to_string()).collect()))
+            .unwrap_or_default();
+        for a in accounts.iter().map(String::as_str).chain([acct]) {
+            if !names.iter().any(|n| n.eq_ignore_ascii_case(a)) {
+                names.push(a.to_string());
+            }
+        }
+        let list: String = names.iter().map(|n| if n.eq_ignore_ascii_case(acct) { format!("!{n}|") } else { format!("{n}|") }).collect();
+        let line = format!("SET accountList \"{list}\"");
+        match at {
+            Some(i) => lines[i] = line,
+            None => lines.push(line),
+        }
+    }
+    if pick_realm {
+        lines.retain(|l| !l.trim_start().starts_with("SET realmName "));
+    }
+    let mut s = lines.join("\n");
+    if !s.is_empty() {
+        s.push('\n');
+    }
+    s
 }
 
 /// The game's own program in a WoW version folder (_retail_/Wow.exe, _classic_*/WowClassic.exe).
@@ -901,6 +947,22 @@ mod foreign_tests {
         }
         assert!(!super::app_in(super::find("ubisoft").unwrap(), &crate::proton::drive_c(&lutris)));
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod wow_config_tests {
+    #[test]
+    fn picks_the_game_account_and_realm_list() {
+        let cfg = "SET portal \"EU\"\nSET accountList \"WoW1|!WoW2|\"\nSET realmName \"Draenor\"\n";
+        let accts = vec!["WoW1".to_string(), "WoW2".to_string()];
+        let out = super::wow_config(cfg, Some("WoW1"), &accts, false);
+        assert!(out.contains("SET accountList \"!WoW1|WoW2|\""));
+        assert!(out.contains("realmName"));
+        let out = super::wow_config(cfg, None, &accts, true);
+        assert!(!out.contains("realmName") && out.contains("!WoW2"));
+        // A fresh install has no Config.wtf yet.
+        assert_eq!(super::wow_config("", Some("WoW2"), &accts, false), "SET accountList \"WoW1|!WoW2|\"\n");
     }
 }
 

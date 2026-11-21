@@ -535,10 +535,14 @@ function renderHero() {
   const play = $("#btn-play");
   play.classList.toggle("running", !!run);
   play.disabled = (!g.installed && !g.can_install) || !!run;
-  play.textContent = !g.installed ? (g.can_install ? "⤓ Install" : "Not installed") : run ? (run.state === "launching" ? "Launching…" : "● Running") : g.kiln_managed && state.kilnPlay ? "▶ Play modded" : "▶ Play";
-  play.title = g.kiln_managed && state.kilnPlay ? "Launches through Kiln, which checks your mods first" : "";
-  $("#btn-play-menu").classList.toggle("hidden", !(g.kiln_managed && g.installed && !run));
-  play.classList.toggle("split", !!(g.kiln_managed && g.installed && !run));
+  const acct = lastAccount(g);
+  play.textContent = !g.installed ? (g.can_install ? "⤓ Install" : "Not installed") : run ? (run.state === "launching" ? "Launching…" : "● Running") : g.kiln_managed && state.kilnPlay ? "▶ Play modded" : acct ? `▶ Play as ${acct}` : "▶ Play";
+  play.title = g.kiln_managed && state.kilnPlay ? "Launches through Kiln, which checks your mods first" : acct ? "The ▾ menu picks another game account or shows the realm list" : "";
+  const options = playOptions(g);
+  $("#play-menu").innerHTML = options.map(([mode, label, hint]) => `<button data-play-mode="${esc(mode)}">${label}${hint ? ` <small class="muted">${hint}</small>` : ""}</button>`).join("");
+  const split = !!(options.length && g.installed && !run);
+  $("#btn-play-menu").classList.toggle("hidden", !split);
+  play.classList.toggle("split", split);
   $("#btn-workshop").classList.toggle("hidden", !g.workshop);
   const ub = $("#btn-update");
   ub.classList.toggle("hidden", !(g.installed && g.update === "available"));
@@ -1080,6 +1084,119 @@ async function renderMangohud() {
   $("#mh-all").checked = m.all_games;
   return m;
 }
+// ---------- MangoHud settings editor ----------
+// Checkboxes write key=1 / key=0 (MangoHud shows some things by default, so off has to be explicit).
+const MH_SHOW = [
+  ["fps", "FPS", 1], ["frametime", "Frame time (ms)", 1], ["frame_timing", "Frame time graph", 1], ["fps_metrics", "1% and 0.1% lows", 0],
+  ["cpu_stats", "CPU load", 1], ["cpu_temp", "CPU temperature", 0], ["cpu_power", "CPU power", 0], ["cpu_mhz", "CPU clock", 0],
+  ["gpu_stats", "GPU load", 1], ["gpu_temp", "GPU temperature", 0], ["gpu_power", "GPU power", 0], ["gpu_core_clock", "GPU clock", 0], ["gpu_name", "GPU name", 0],
+  ["vram", "VRAM used", 0], ["ram", "RAM used", 0], ["swap", "Swap used", 0],
+  ["resolution", "Resolution", 0], ["vulkan_driver", "Driver", 0], ["wine", "Wine/Proton version", 0], ["engine_version", "Graphics API (DXVK, VKD3D…)", 0],
+  ["gamemode", "GameMode status", 0], ["battery", "Battery", 0], ["time", "Clock", 0], ["show_fps_limit", "FPS limit", 0],
+];
+const MH_VALUES = ["position", "font_size", "background_alpha", "round_corners", "fps_limit", "toggle_hud"];
+const MH_PRESETS = {
+  fps: { on: ["fps"], set: { position: "top-left" } },
+  basic: { on: ["fps", "frametime", "frame_timing", "cpu_stats", "gpu_stats"], set: { position: "top-left" } },
+  full: { on: MH_SHOW.map((x) => x[0]), set: {} },
+  bar: { on: ["fps", "frametime", "cpu_stats", "gpu_stats", "cpu_temp", "gpu_temp", "ram", "vram"], set: { position: "top-center", horizontal: true } },
+};
+$("#mh-checks").innerHTML = MH_SHOW.map(([k, l]) => `<label class="check"><input type="checkbox" data-mh="${k}" /> ${l}</label>`).join("");
+// The file as key -> value ("" for a bare key like "fps"); comments and order are kept in mhLines.
+function mhParse(text) {
+  const m = new Map();
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const i = t.indexOf("=");
+    m.set((i < 0 ? t : t.slice(0, i)).trim(), i < 0 ? "" : t.slice(i + 1).trim());
+  }
+  return m;
+}
+function mhOn(m, k, def) {
+  if (!m.has(k)) return !!def && !m.has("full");
+  const v = m.get(k);
+  return v === "" || v === "1" || v === "true";
+}
+function mhToForm() {
+  const m = mhParse($("#mh-text").value);
+  const f = $("#form-mh");
+  // An empty file means MangoHud's own default set.
+  const empty = m.size === 0;
+  for (const [k, , def] of MH_SHOW) f.querySelector(`[data-mh="${k}"]`).checked = m.has("full") ? !(m.get(k) === "0") : mhOn(m, k, empty || def);
+  f.position.value = m.get("position") || "top-left";
+  f.horizontal.checked = mhOn(m, "horizontal", 0);
+  f.no_display.checked = mhOn(m, "no_display", 0);
+  for (const k of ["font_size", "background_alpha", "round_corners", "fps_limit", "toggle_hud"]) f[k].value = m.get(k) || "";
+}
+// Write the form into the file text, changing only the lines for these settings.
+function mhFromForm() {
+  const f = $("#form-mh");
+  const want = new Map();
+  for (const [k] of MH_SHOW) want.set(k, f.querySelector(`[data-mh="${k}"]`).checked ? "1" : "0");
+  want.set("full", null);
+  want.set("position", f.position.value);
+  want.set("horizontal", f.horizontal.checked ? "1" : null);
+  want.set("no_display", f.no_display.checked ? "1" : null);
+  for (const k of ["font_size", "background_alpha", "round_corners", "fps_limit", "toggle_hud"]) want.set(k, f[k].value.trim() || null);
+  const lines = $("#mh-text").value.split("\n");
+  const done = new Set();
+  const out = [];
+  for (const line of lines) {
+    const t = line.trim();
+    const key = t && !t.startsWith("#") ? t.split("=")[0].trim() : null;
+    if (key && want.has(key)) {
+      if (done.has(key)) continue;
+      done.add(key);
+      const v = want.get(key);
+      if (v !== null) out.push(`${key}=${v}`);
+    } else out.push(line);
+  }
+  while (out.length && out[out.length - 1] === "") out.pop();
+  // New lines only where it differs from MangoHud's default (lines already in the file are kept explicit).
+  const defaults = new Map(MH_SHOW.map(([k, , d]) => [k, d ? "1" : "0"]));
+  const added = [...want].filter(([k, v]) => !done.has(k) && v !== null && defaults.get(k) !== v);
+  if (added.length && !out.some((l) => l.includes("Set by Lodestone"))) out.push("", "# Set by Lodestone");
+  for (const [k, v] of added) out.push(`${k}=${v}`);
+  $("#mh-text").value = out.join("\n") + "\n";
+}
+$("#form-mh").addEventListener("change", (e) => { if (e.target.id !== "mh-text") mhFromForm(); });
+$("#mh-text").addEventListener("input", mhToForm);
+$("#form-mh").addEventListener("click", (e) => {
+  const p = e.target.closest("[data-mh-preset]");
+  if (!p) return;
+  const pre = MH_PRESETS[p.dataset.mhPreset], f = $("#form-mh");
+  for (const [k] of MH_SHOW) f.querySelector(`[data-mh="${k}"]`).checked = pre.on.includes(k);
+  f.horizontal.checked = !!pre.set.horizontal;
+  if (pre.set.position) f.position.value = pre.set.position;
+  mhFromForm();
+});
+$("#mh-config").onclick = async () => {
+  try {
+    const [path, text] = await invoke("mangohud_config_get");
+    $("#mh-path").textContent = path;
+    $("#mh-text").value = text;
+    mhToForm();
+    $("#dlg-mh").showModal();
+  } catch (e) { toast(String(e), true); }
+};
+$("#mh-cancel").onclick = () => $("#dlg-mh").close();
+$("#mh-preview").onclick = async () => {
+  try {
+    await invoke("mangohud_config_save", { text: $("#mh-text").value });
+    await invoke("mangohud_preview");
+    toast("Preview window opening. MangoHud picks up saved changes while it runs.");
+  } catch (e) { toast(String(e), true); }
+};
+$("#form-mh").onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    await invoke("mangohud_config_save", { text: $("#mh-text").value });
+    $("#dlg-mh").close();
+    toast("MangoHud settings saved. Games pick them up the next time they start (running ones within a second or two).");
+  } catch (err) { toast(String(err), true); }
+};
+
 $("#mh-setup").onclick = async () => {
   $("#mh-status").textContent = "Downloading MangoHud…";
   $("#mh-setup").disabled = true;
@@ -1152,9 +1269,29 @@ function select(id, scroll = false) {
 }
 
 // ---------- actions ----------
+// WoW with several game accounts: Play uses the one you picked last (WoW keeps it too).
+const lastAccount = (g) => (g.accounts && g.accounts.length > 1 ? ls.get(`account:${g.id}`, g.accounts[0]) : null);
+// The ▾ menu next to Play: [mode, label, hint].
+function playOptions(g) {
+  const o = [];
+  if (g.kiln_managed) {
+    o.push(["modded", "▶ Play modded", "through Kiln's checks"], ["vanilla", "▶ Play without mods", "mods go back next time"]);
+  }
+  if (g.accounts && g.accounts.length > 1) {
+    for (const a of g.accounts) o.push([`acct:${a}`, `▶ Play as ${esc(a)}`, a === lastAccount(g) ? "last used" : ""]);
+    o.push([`acct:${lastAccount(g)}+realm`, "▶ Play and choose a realm", "shows the realm list"]);
+  } else if (g.accounts && g.accounts.length === 1) {
+    o.push(["realm", "▶ Play and choose a realm", "shows the realm list"]);
+  }
+  if (g.alt_label) o.push(["alt", `▶ ${esc(g.alt_label)}`, ""]);
+  return o;
+}
 async function play(id, mode = null) {
   const g = state.games.find((x) => x.id === id);
   if (!g || !g.installed) return;
+  const acct = mode && mode.match(/^acct:([^+]+)/);
+  if (acct) { ls.set(`account:${g.id}`, acct[1]); renderHero(); }
+  else if (!mode && lastAccount(g)) mode = `acct:${lastAccount(g)}`;
   try {
     await invoke("launch_game", { id, mode });
     toast(mode === "vanilla" ? `Starting ${g.title} without mods (Kiln takes them out; Play modded puts them back)…` : `Starting ${g.title}…`);
@@ -1772,6 +1909,12 @@ function metaPreview() {
   $("#mp-cover").style.backgroundImage = c ? `url("${imgSrc(c, 320)}")` : "";
   $("#mp-hero").style.backgroundImage = h ? `url("${imgSrc(h, 640)}")` : "";
 }
+let metaPt = null;
+$("#pt-auto").onclick = () => {
+  metaPt.auto = true;
+  $("#pt-auto").classList.add("hidden");
+  $("#pt-hint").textContent = "Saving goes back to counting automatically.";
+};
 async function openMeta(g) {
   metaGame = g;
   let o = {};
@@ -1783,6 +1926,14 @@ async function openMeta(g) {
   f.steam.value = o.steam_appid || "";
   f.cover.value = o.auto ? "" : (o.cover || "");
   f.hero.value = o.hero || "";
+  const pt = g.playtime || 0;
+  f.pt_h.value = Math.floor(pt / 3600);
+  f.pt_m.value = Math.floor((pt % 3600) / 60);
+  metaPt = { h: f.pt_h.value, m: f.pt_m.value, auto: false };
+  $("#pt-auto").classList.toggle("hidden", !g.playtime_edited);
+  $("#pt-hint").textContent = g.playtime_edited
+    ? "You set this. Lodestone adds the time you play from now on. Count automatically goes back to the store's record and Lodestone's own count."
+    : "Set it if the store's record is missing or wrong (Battle.net, EA and Ubisoft keep none). Lodestone adds the time you play from then on.";
   f.installdir.value = o.install_dir || "";
   f.exe.value = o.exe || "";
   $("#loc-hint").textContent = g.store === "steam"
@@ -1861,6 +2012,12 @@ $("#form-meta").onsubmit = async (e) => {
   btn.disabled = true;
   btn.textContent = "Saving…";
   try {
+    const ptChanged = metaPt && (f.pt_h.value !== metaPt.h || f.pt_m.value !== metaPt.m);
+    if (metaPt && metaPt.auto && !ptChanged) await invoke("set_playtime", { id: metaGame.id, seconds: null });
+    else if (ptChanged) {
+      const h = Math.max(0, parseInt(f.pt_h.value || "0", 10) || 0), m = Math.min(59, Math.max(0, parseInt(f.pt_m.value || "0", 10) || 0));
+      await invoke("set_playtime", { id: metaGame.id, seconds: h * 3600 + m * 60 });
+    }
     await invoke("meta_save", { id: metaGame.id, edit });
     detailsCache.delete(metaGame.id);
     gameNewsCache.delete(metaGame.id);

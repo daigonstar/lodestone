@@ -419,6 +419,41 @@ pub fn wow_owned(drive_c: &Path) -> HashSet<String> {
     out
 }
 
+/// Your WoW game accounts per product type ("retail" -> ["WoW1", "WoW2"]), from Battle.net's logs.
+pub fn wow_accounts(drive_c: &Path) -> HashMap<String, Vec<String>> {
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    let Some(logs) = local_battlenet(drive_c).map(|p| p.join("Logs")) else { return out };
+    let mut files: Vec<PathBuf> = fs::read_dir(logs).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("battle.net-"))).collect();
+    files.sort();
+    for f in files.iter().rev().take(6) {
+        let Ok(b) = fs::read(f) else { continue };
+        for (t, n) in wow_accounts_in(&String::from_utf8_lossy(&b)) {
+            let v = out.entry(t).or_default();
+            if !v.contains(&n) {
+                v.push(n);
+            }
+        }
+    }
+    for v in out.values_mut() {
+        v.sort();
+    }
+    out
+}
+
+fn wow_accounts_in(log: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut rest = log;
+    while let Some(i) = rest.find("GameAccount(WoW:") {
+        rest = &rest[i + "GameAccount(WoW:".len()..];
+        let inner = &rest[..rest.find(')').unwrap_or(rest.len())];
+        let t = inner.split_whitespace().next().unwrap_or("");
+        if let Some(n) = inner.split_whitespace().find_map(|w| w.strip_prefix("name=")) {
+            out.push((t.to_string(), n.to_string()));
+        }
+    }
+    out
+}
+
 fn wow_owned_in(log: &str) -> HashSet<String> {
     let mut out = HashSet::new();
     let mut rest = log;
