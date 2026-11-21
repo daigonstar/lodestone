@@ -393,6 +393,7 @@ function renderGrid() {
   renderFilters(state.preLetter);
   $("#grid").className = `grid layout-${state.layout}`;
   document.querySelectorAll("#layout [data-layout]").forEach((b) => b.classList.toggle("on", b.dataset.layout === state.layout));
+  parkDetail();
   $("#grid").innerHTML = (state.layout === "list" && list.length ? `<div class="row-head"><span></span><span>Game</span><span>Genres</span><span>Played</span><span>Last played</span><span>Size</span><span>ProtonDB</span><span></span></div>` : "") + list.map(cardHTML).join("");
   const title = { missing: "Missing artwork", all: "All games", favorites: "Favorites", recent: "Recently played", hidden: "Hidden", modded: "Modded with Kiln", updates: "Updates available" }[state.view] || store(state.view).label;
   $("#grid-title").textContent = title;
@@ -412,7 +413,66 @@ function renderGrid() {
     const el = fallback && $(`.card[data-id="${CSS.escape(fallback.id)}"]`);
     el && el.classList.add("selected");
   }
+  placeDetail();
 }
+
+// ---------- details open inline, under the row of the game you clicked ----------
+state.open = false;
+function parkDetail() {
+  const d = $("#detail");
+  if (d.parentElement !== $("#detail-home").parentElement || d.previousElementSibling !== $("#detail-home")) $("#detail-home").after(d);
+}
+function detailCard() {
+  const g = state.games.find((x) => x.id === state.selected);
+  return $(`#grid .card[data-id="${CSS.escape(state.selected || "")}"]`) || (g && $(`#grid .card[data-key="${CSS.escape(titleKey(g.title))}"]`));
+}
+function placeDetail() {
+  const d = $("#detail");
+  const gridView = !["home", "minecraft"].includes(state.view) && !state.view.startsWith("shop:");
+  const card = state.open && gridView ? detailCard() : null;
+  if (!card) {
+    if (state.open && gridView && state.selected) state.open = false;
+    parkDetail();
+    d.classList.add("hidden");
+    updateMiniVisibility();
+    return;
+  }
+  // Last card on the clicked card's row (cards on one row share a top edge).
+  let last = card;
+  if (state.layout !== "list") {
+    for (let n = card.nextElementSibling; n && n.classList.contains("card") && n.offsetTop === card.offsetTop; n = n.nextElementSibling) last = n;
+  }
+  if (last.nextElementSibling !== d) last.after(d);
+  d.classList.remove("hidden");
+  // Point the little notch at the clicked card.
+  d.style.setProperty("--notch-x", `${card.offsetLeft - d.offsetLeft + card.offsetWidth / 2}px`);
+  updateMiniVisibility();
+}
+function openDetail(id, scroll = true) {
+  if (state.open && state.selected === id) return closeDetail();
+  state.open = true;
+  select(id);
+  placeDetail();
+  if (scroll) requestAnimationFrame(() => {
+    const card = detailCard();
+    const main = document.querySelector("main");
+    const top = (card || $("#detail")).getBoundingClientRect().top - main.getBoundingClientRect().top;
+    const bottom = $("#detail").getBoundingClientRect().bottom - main.getBoundingClientRect().top;
+    // Keep the card and as much of the details as fit; only scroll as far as needed.
+    const pad = 80, h = main.clientHeight;
+    if (top < pad) main.scrollBy({ top: top - pad, behavior: "smooth" });
+    else if (bottom > h) main.scrollBy({ top: Math.min(bottom - h + 16, top - pad), behavior: "smooth" });
+  });
+}
+function closeDetail() {
+  const card = detailCard();
+  state.open = false;
+  placeDetail();
+  if (card) card.scrollIntoView({ block: "nearest" });
+}
+$("#detail-close").onclick = closeDetail;
+let detailResize;
+window.addEventListener("resize", () => { clearTimeout(detailResize); detailResize = setTimeout(() => state.open && (parkDetail(), placeDetail()), 120); });
 
 function renderHero() {
   const g = state.games.find((x) => x.id === state.selected);
@@ -560,7 +620,7 @@ function renderMini(g) {
 }
 let heroVisible = true;
 function updateMiniVisibility() {
-  const show = !heroVisible && state.view !== "minecraft" && !$("#hero").classList.contains("empty") && !$("#hero").classList.contains("hidden");
+  const show = state.open && !heroVisible && state.view !== "minecraft" && !$("#hero").classList.contains("empty") && !$("#hero").classList.contains("hidden");
   $("#mini").classList.toggle("hidden", !show);
 }
 new IntersectionObserver(([e]) => { heroVisible = e.isIntersecting; updateMiniVisibility(); }, { root: document.querySelector("main"), rootMargin: "-80px 0px 0px 0px", threshold: 0.15 }).observe($("#hero"));
@@ -877,6 +937,7 @@ function select(id, scroll = false) {
     if (scroll) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
   renderHero();
+  if (state.open) { parkDetail(); placeDetail(); }
 }
 
 // ---------- actions ----------
@@ -986,9 +1047,9 @@ document.addEventListener("click", (e) => {
   const act = e.target.closest("[data-act]");
   if (act) return menuAction(act.dataset.act);
   if (!e.target.closest(".menu-wrap")) $("#menu").classList.add("hidden");
-  const card = e.target.closest(".card");
-  if (card) {
-    select(card.dataset.id);
+  const card = e.target.closest("#grid .card");
+  if (card && !e.target.closest("#detail")) {
+    openDetail(card.dataset.id);
   }
 });
 $("#btn-play").onclick = () => {
@@ -1068,6 +1129,7 @@ document.addEventListener("keydown", (e) => {
   const inSearch = document.activeElement === $("#search");
   if (e.key === "/" && !inSearch) { e.preventDefault(); return $("#search").focus(); }
   if (e.key === "Escape" && inSearch) { $("#search").value = ""; state.search = ""; $("#search").blur(); return render(); }
+  if (e.key === "Escape" && state.open && !friends.open) { e.preventDefault(); return closeDetail(); }
   if ((e.ctrlKey && e.key === "r") || e.key === "F5") { e.preventDefault(); return load(); }
   if (e.key === "Enter") { e.preventDefault(); return play(state.selected); }
   if (inSearch && !["ArrowDown", "ArrowUp"].includes(e.key)) return;
@@ -1356,7 +1418,7 @@ document.addEventListener("click", (e) => {
   const ed = e.target.closest("[data-edit-meta]");
   if (ed) { e.preventDefault(); const g = state.games.find((x) => x.id === ed.dataset.editMeta); if (g) openMeta(g); return; }
   const op = e.target.closest("[data-open-game]");
-  if (op) { state.view = "all"; ls.set("view", "all"); state.selected = op.dataset.openGame; ls.set("selected", state.selected); render(); document.querySelector("main").scrollTop = 0; return; }
+  if (op) { state.view = "all"; ls.set("view", "all"); state.selected = op.dataset.openGame; ls.set("selected", state.selected); state.open = false; render(); openDetail(op.dataset.openGame); return; }
 });
 $("#dlg-shot").addEventListener("click", (e) => { if (e.target.id === "dlg-shot" || e.target.id === "shot-img") $("#dlg-shot").close(); });
 
