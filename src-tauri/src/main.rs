@@ -5,6 +5,7 @@ mod friends;
 mod gog_setup;
 mod host;
 mod mangohud;
+mod playtime;
 mod gamesdb;
 mod kiln;
 mod launcher;
@@ -71,11 +72,14 @@ async fn list_games(inner: State<'_, Shared>) -> Result<Vec<GameDto>, String> {
         apply_kiln(&mut games);
         meta::apply(&mut games);
         let store = inner.store.lock().unwrap();
+        // The store's own record when it's bigger (time played before Lodestone, or outside it).
+        let played = playtime::all();
         let out = games
             .iter()
             .map(|g| {
                 let e = store.games.get(&g.id).cloned().unwrap_or_default();
-                GameDto { game: g.clone(), playtime: e.playtime, last_played: e.last_played, favorite: e.favorite, hidden: e.hidden, art_missing: meta::art_missing(g), edited: meta::edited(&g.id), mangohud: e.mangohud }
+                let s = played.get(&g.id).copied().unwrap_or_default();
+                GameDto { game: g.clone(), playtime: e.playtime.max(s.seconds), last_played: e.last_played.max(s.last), favorite: e.favorite, hidden: e.hidden, art_missing: meta::art_missing(g), edited: meta::edited(&g.id), mangohud: e.mangohud }
             })
             .collect();
         *inner.games.lock().unwrap() = games.into_iter().map(|g| (g.id.clone(), g)).collect();
@@ -626,6 +630,8 @@ async fn store_refresh(app: AppHandle) -> Result<(), String> {
         if let Err(e) = stores::epic::refresh().await {
             errs.push(format!("Epic: {e}"));
         }
+        // Play time is extra: no error note if Epic's play-time service doesn't answer.
+        let _ = playtime::refresh_epic().await;
     }
     if stores::gog::account().is_some() {
         if let Err(e) = stores::gog::refresh().await {

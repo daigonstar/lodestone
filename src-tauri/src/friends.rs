@@ -83,16 +83,16 @@ async fn steam() -> Result<Vec<Friend>, String> {
 }
 
 #[derive(Deserialize)]
-struct EpicUser {
+pub(crate) struct EpicUser {
     access_token: String,
-    account_id: String,
+    pub account_id: String,
 }
 
-fn epic_user() -> Option<EpicUser> {
+pub(crate) fn epic_user() -> Option<EpicUser> {
     serde_json::from_str(&fs::read_to_string(crate::stores::epic::config_dir().join("user.json")).ok()?).ok()
 }
 
-async fn epic_get(url: &str, refresh: &mut bool) -> Result<Value, String> {
+pub(crate) async fn epic_get(url: &str, refresh: &mut bool) -> Result<Value, String> {
     loop {
         let u = epic_user().ok_or("not signed in to Epic")?;
         let auth = format!("bearer {}", u.access_token);
