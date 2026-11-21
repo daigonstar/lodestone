@@ -404,6 +404,72 @@ pub fn dismiss(id: &str) {
     });
 }
 
+// ---------------- Play without Battle.net's window ----------------
+
+pub const PLAY_FLAG: &str = "--bnet-play";
+
+/// Play goes through `lodestone --bnet-play <umu-run> <Battle.net.exe> <--exec=launch CODE>`
+/// (with the prefix's environment), which runs `play_hook` below.
+pub fn play_spec(spec: crate::model::LaunchSpec, client: &Path, exec: &str) -> crate::model::LaunchSpec {
+    let Ok(me) = std::env::current_exe() else { return spec };
+    crate::model::LaunchSpec {
+        program: me.to_string_lossy().into_owned(),
+        args: vec![PLAY_FLAG.into(), spec.program.clone(), client.to_string_lossy().into_owned(), exec.into()],
+        env: spec.env,
+        cwd: spec.cwd,
+    }
+}
+
+fn bnet_running() -> bool {
+    fs::read_dir("/proc").into_iter().flatten().flatten().any(|e| {
+        let cmd = fs::read(e.path().join("cmdline")).unwrap_or_default();
+        let cmd = String::from_utf8_lossy(&cmd);
+        cmd.contains("Battle.net\\Battle.net.exe") && !cmd.contains("--type=") && !cmd.contains("umu") && !cmd.contains("--exec")
+    })
+}
+
+/// Battle.net's UI log has a line once it has started and signed in.
+fn bnet_ready_since(prefix: &Path, since: std::time::SystemTime) -> bool {
+    let dir = prefix.join("drive_c/users/steamuser/AppData/Local/Battle.net/Logs");
+    fs::read_dir(dir).into_iter().flatten().flatten().any(|e| {
+        let n = e.file_name().to_string_lossy().into_owned();
+        n.starts_with("battle.net-")
+            && fs::metadata(e.path()).and_then(|m| m.modified()).is_ok_and(|m| m >= since)
+            && fs::read(e.path()).is_ok_and(|b| String::from_utf8_lossy(&b).contains("Attempting to show main window"))
+    })
+}
+
+pub fn play_hook() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) != Some(PLAY_FLAG) {
+        return;
+    }
+    let (Some(umu), Some(client), Some(exec)) = (args.get(2), args.get(3), args.get(4)) else { std::process::exit(2) };
+    let prefix = std::env::var_os("WINEPREFIX").map(PathBuf::from).unwrap_or_default();
+    let drive_c = prefix.join("drive_c");
+    winapps::bnet_quiet_launches(&drive_c);
+    let run = |extra: &[&str]| std::process::Command::new(umu).arg(client).args(extra).stdin(std::process::Stdio::null()).spawn();
+    if !bnet_running() {
+        // Battle.net ignores a launch command given with its tray start, so start it first and wait.
+        let since = std::time::SystemTime::now();
+        if let Err(e) = run(&["--autostarted"]) {
+            eprintln!("couldn't start Battle.net: {e}");
+            std::process::exit(1);
+        }
+        let until = Instant::now() + Duration::from_secs(120);
+        while Instant::now() < until && !bnet_ready_since(&prefix, since) {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        std::thread::sleep(Duration::from_secs(2));
+        println!("Battle.net is running in the tray");
+    }
+    // Handed to the running Battle.net, which starts the game and then closes (GameLaunchWindowBehavior).
+    match run(&[exec.as_str()]).and_then(|mut c| c.wait()) {
+        Ok(_) => println!("asked Battle.net to start the game"),
+        Err(e) => eprintln!("couldn't reach Battle.net: {e}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

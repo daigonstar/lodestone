@@ -104,7 +104,11 @@ impl WinApp {
         if self.id == "battlenet" {
             bnet_keep_signed_in(&proton::drive_c(&self.prefix()));
         }
-        proton::spec(Run { prefix: &self.prefix(), exe, args, store: self.proton_store, game_id: self.game_id })
+        let mut spec = proton::spec(Run { prefix: &self.prefix(), exe, args, store: self.proton_store, game_id: self.game_id })?;
+        // umu's default waits for everything already running in the prefix to exit first. The store app
+        // stays running (often in its tray), so Play/Install/Open would wait forever; join its session.
+        spec.env.insert("PROTON_VERB".into(), "run".into());
+        Ok(spec)
     }
     /// Open the client/game normally (sign in, install games, settings).
     pub fn open(&self) -> Result<LaunchSpec, String> {
@@ -147,9 +151,25 @@ pub async fn setup(app: &WinApp) -> Result<LaunchSpec, String> {
 
 // ---------------- Battle.net games ----------------
 
+/// Start a game through Battle.net without its window: "--autostarted" is Battle.net's tray start
+/// (with AutoStartMinimized on). If Battle.net is already running, the command goes to it.
+fn bnet_play(app: &WinApp, client: &Path, exec: String) -> Result<LaunchSpec, String> {
+    let spec = app.run(client, vec![])?;
+    Ok(super::bnet_agent::play_spec(spec, client, &exec))
+}
+
+/// Battle.net settings for Play from Lodestone: start in the tray, and close once the game is running
+/// (GameLaunchWindowBehavior 2; 1 is "minimize", which some desktops can't do), without coming back
+/// when the game ends.
+pub fn bnet_quiet_launches(drive_c: &Path) {
+    bnet_config_set(drive_c, "AutoStartMinimized", "true");
+    bnet_config_set(drive_c, "GameLaunchWindowBehavior", "2");
+    bnet_config_set(drive_c, "RestoreWindowOnGameEnd", "false");
+}
+
 /// Make Battle.net's tray start ("--autostarted", what Windows uses at login) stay in the tray.
 pub fn bnet_start_minimized(drive_c: &Path) {
-    bnet_config_set(drive_c, "AutoStartMinimized");
+    bnet_config_set(drive_c, "AutoStartMinimized", "true");
 }
 
 /// Launch code ("OSI") and download product ("osi") of a catalog game, for background installs.
@@ -166,21 +186,21 @@ pub fn bnet_product(code: &str) -> Option<(String, String)> {
 /// false in Battle.net.config), so every start asks for the password again. Turn it back on before
 /// starting Battle.net; only that one setting is touched.
 fn bnet_keep_signed_in(drive_c: &Path) {
-    bnet_config_set(drive_c, "AutoLogin");
+    bnet_config_set(drive_c, "AutoLogin", "true");
 }
 
-/// Set a Client setting in Battle.net.config to "true", leaving everything else as it is.
-fn bnet_config_set(drive_c: &Path, key: &str) {
+/// Set a Client setting in Battle.net.config, leaving everything else as it is.
+fn bnet_config_set(drive_c: &Path, key: &str, value: &str) {
     let Ok(users) = fs::read_dir(drive_c.join("users")) else { return };
     for u in users.flatten() {
         let f = u.path().join("AppData/Roaming/Battle.net/Battle.net.config");
         let Ok(text) = fs::read_to_string(&f) else { continue };
         let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
         let Some(client) = v.get_mut("Client").and_then(|c| c.as_object_mut()) else { continue };
-        if client.get(key).and_then(|a| a.as_str().map(|s| s == "true").or(a.as_bool())) == Some(true) {
+        if client.get(key).and_then(|a| a.as_str()) == Some(value) {
             continue;
         }
-        client.insert(key.into(), serde_json::Value::String("true".into()));
+        client.insert(key.into(), serde_json::Value::String(value.into()));
         if let Ok(out) = serde_json::to_string_pretty(&v) {
             let tmp = f.with_extension("config.tmp");
             if fs::write(&tmp, out).is_ok() {
@@ -223,7 +243,7 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
                 Some(p) => format!("--exec=launch {}", p.code),
                 None => format!("--exec=launch_uid {tact}"),
             };
-            let Ok(launch) = app.run(&client, vec![exec]) else { continue };
+            let Ok(launch) = bnet_play(app, &client, exec) else { continue };
             let code = prod.map(|p| p.code.clone()).unwrap_or_else(|| tact.clone());
             installed_codes.insert(code.clone());
             out.push(Game {
@@ -263,7 +283,7 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
                 installed: false,
                 cover: art(&p.cover),
                 hero: art(&p.hero),
-                launch: app.run(&client, vec![format!("--exec=launch {}", p.code)]).ok(),
+                launch: bnet_play(app, &client, format!("--exec=launch {}", p.code)).ok(),
                 can_install: install.is_some(),
                 install,
                 genres: p.genres.clone(),

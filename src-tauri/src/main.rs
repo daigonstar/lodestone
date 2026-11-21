@@ -1156,6 +1156,7 @@ fn tracker(app: AppHandle, inner: Shared) {
 
 fn main() {
     gog_setup::main_hook();
+    stores::bnet_agent::play_hook();
     launcher::ORIGINAL_ENV.get_or_init(|| std::env::vars().collect());
     // WebKitGTK's DMA-BUF renderer shows a blank window with NVIDIA's proprietary driver. Everywhere else
     // it's the fast GPU path, so only turn it off there.
