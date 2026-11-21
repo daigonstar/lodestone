@@ -189,6 +189,7 @@ pub fn build_info_products(path: &Path) -> Vec<String> {
 /// (install uid, product type, `.build.info` product, folder inside "World of Warcraft").
 pub const WOW: &[(&str, &str, &str, &str)] = &[
     ("wow", "retail", "wow", "_retail_"),
+    ("wowf", "wowf", "wowf", "_wowf_"),
     ("wow_classic", "wow_classic", "wow_classic", "_classic_"),
     ("wow_classic_era", "wow_classic_era", "wow_classic_era", "_classic_era_"),
     ("wow_classic_anniversary", "wow_classic_anniversary", "wow_anniversary", "_anniversary_"),
@@ -242,7 +243,7 @@ pub fn wow_versions(drive_c: &Path) -> Vec<WowVersion> {
             let art = |key: &Value| key.as_str().and_then(|k| files[k]["hash"].as_str()).and_then(|h| cached_file(&cache, h));
             let products = d["products"].as_array().cloned().unwrap_or_default();
             let prod = |id: &str| products.iter().find(|x| x["id"].as_str() == Some(id)).map(|x| x["base"].clone()).unwrap_or(Value::Null);
-            let (wow, classic) = (prod("WoW"), prod("WoWC"));
+            let (wow, classic, forever) = (prod("WoW"), prod("WoWC"), prod("WoWF"));
             for v in out.iter_mut() {
                 let ptype = WOW[v.order].1;
                 let t = &wow["types"][ptype];
@@ -250,15 +251,26 @@ pub fn wow_versions(drive_c: &Path) -> Vec<WowVersion> {
                     v.name = if ptype == "retail" {
                         text(&wow["name"]).unwrap_or_default()
                     } else {
-                        // "World of Warcraft Classic" stays as is; "Mists of Pandaria Classic" gets the game's name in front.
-                        text(&t["name"]).map(|n| if n.starts_with("World of Warcraft") { n } else { format!("World of Warcraft: {n}") }).unwrap_or_default()
+                        // "World of Warcraft Classic" stays as is; "Mists of Pandaria Classic" gets the game's name
+                        // in front, and "WoW: Forever" spells it out.
+                        text(&t["name"])
+                            .map(|n| match n.strip_prefix("WoW") {
+                                Some(rest) => format!("World of Warcraft{rest}"),
+                                None if n.starts_with("World of Warcraft") => n,
+                                None => format!("World of Warcraft: {n}"),
+                            })
+                            .unwrap_or_default()
                     };
                 }
                 if v.cover.is_none() {
-                    v.cover = if ptype == "retail" { art(&wow["key_art"]) } else { art(&classic["key_art"]).or_else(|| art(&wow["key_art"])) };
+                    v.cover = match ptype {
+                        "retail" => art(&wow["key_art"]),
+                        "wowf" => art(&forever["key_art"]).or_else(|| art(&wow["key_art"])),
+                        _ => art(&classic["key_art"]).or_else(|| art(&wow["key_art"])),
+                    };
                 }
                 if v.hero.is_none() {
-                    v.hero = art(&t["background"]).or_else(|| art(&wow["background"]));
+                    v.hero = art(&t["background"]).or_else(|| art(&forever["background"]).filter(|_| ptype == "wowf")).or_else(|| art(&wow["background"]));
                 }
             }
         }
@@ -266,6 +278,7 @@ pub fn wow_versions(drive_c: &Path) -> Vec<WowVersion> {
     for v in out.iter_mut().filter(|v| v.name.is_empty()) {
         v.name = match v.uid.as_str() {
             "wow" => "World of Warcraft",
+            "wowf" => "World of Warcraft: Forever",
             "wow_classic" => "World of Warcraft: Mists of Pandaria Classic",
             "wow_classic_era" => "World of Warcraft Classic",
             _ => "World of Warcraft: Burning Crusade Anniversary",

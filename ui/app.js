@@ -1130,7 +1130,7 @@ $("#btn-play").onclick = () => {
   if (g && !g.installed && g.can_install) return install(g);
   play(state.selected);
 };
-$("#btn-play-menu").onclick = (e) => { e.stopPropagation(); $("#play-menu").classList.toggle("hidden"); };
+$("#btn-play-menu").onclick = (e) => { e.stopPropagation(); $("#play-menu").classList.toggle("hidden"); placeMenu($("#play-menu"), $("#btn-play")); };
 $("#play-menu").onclick = (e) => {
   const b = e.target.closest("[data-play-mode]");
   if (!b) return;
@@ -1151,7 +1151,23 @@ $("#btn-fav").onclick = () => {
   const g = state.games.find((x) => x.id === state.selected);
   if (g) setFlag(g.id, "favorite", !g.favorite);
 };
-$("#btn-more").onclick = () => $("#menu").classList.toggle("hidden");
+// Menus sit in the game banner, which clips what sticks out: pin them to the window instead,
+// opening upward when there's room above the button, else downward.
+function placeMenu(menu, btn) {
+  if (menu.classList.contains("hidden")) return;
+  const b = btn.getBoundingClientRect();
+  menu.style.position = "fixed";
+  menu.style.bottom = "auto";
+  menu.style.left = `${Math.max(8, Math.min(b.left, innerWidth - menu.offsetWidth - 8))}px`;
+  const h = menu.offsetHeight;
+  const top = b.top - h - 6 >= 8 ? b.top - h - 6 : Math.min(b.bottom + 6, innerHeight - h - 8);
+  menu.style.top = `${Math.max(8, top)}px`;
+}
+$("#btn-more").onclick = () => { $("#menu").classList.toggle("hidden"); placeMenu($("#menu"), $("#btn-more")); };
+// Keep a pinned menu next to its button while the page scrolls or the window resizes.
+const replaceMenus = () => { placeMenu($("#menu"), $("#btn-more")); placeMenu($("#play-menu"), $("#btn-play")); };
+document.addEventListener("scroll", replaceMenus, true);
+addEventListener("resize", replaceMenus);
 $("#btn-refresh").onclick = async () => {
   toast("Rescanning libraries…");
   try { await invoke("store_refresh"); } catch (e) { toast(String(e), true); }
@@ -1816,3 +1832,18 @@ async function renderOwners(g) {
 
 loadFriends();
 setInterval(() => loadFriends(), 90e3);
+
+// Clicking outside these dialogs (on the dimmed backdrop) closes them, like Cancel/Close.
+// Add game and Edit details stay open so a stray click doesn't lose what you typed.
+for (const id of ["dlg-settings", "dlg-accounts", "dlg-log", "dlg-shot", "dlg-workshop"]) {
+  const d = document.getElementById(id);
+  if (!d) continue;
+  let downOutside = false;
+  const outside = (e) => {
+    const r = d.getBoundingClientRect();
+    return e.target === d && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom);
+  };
+  // Both press and release outside: dragging a text selection out of the dialog doesn't close it.
+  d.addEventListener("mousedown", (e) => { downOutside = outside(e); });
+  d.addEventListener("click", (e) => { if (downOutside && outside(e)) d.close(); downOutside = false; });
+}

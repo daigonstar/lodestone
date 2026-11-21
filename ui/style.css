@@ -85,7 +85,7 @@ button.icon { width: 42px; height: 42px; border-radius: 10px; background: #fffff
 button.icon:hover { background: #ffffff26; }
 button.icon.on { color: #ffd166; }
 .menu-wrap { position: relative; }
-.menu { position: absolute; bottom: 48px; left: 0; background: var(--bg-3); border: 1px solid var(--line); border-radius: 10px; padding: 6px; min-width: 200px; box-shadow: 0 10px 30px #000a; z-index: 10; }
+.menu { position: absolute; bottom: 48px; left: 0; max-height: calc(100vh - 16px); overflow-y: auto; z-index: 40; background: var(--bg-3); border: 1px solid var(--line); border-radius: 10px; padding: 6px; min-width: 200px; box-shadow: 0 10px 30px #000a; }
 .menu button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 8px 10px; border-radius: 6px; }
 .menu button:hover { background: #ffffff12; }
 .menu .danger { color: var(--danger); }

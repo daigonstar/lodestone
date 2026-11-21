@@ -27,6 +27,7 @@ const UIDS: &[(&str, &str)] = &[
     ("S1", "s1"),
     ("S2", "s2"),
     ("WOW", "wow"),
+    ("WOWF", "wowf"),
     ("WOW_CLASSIC", "wow_classic"),
     ("WOW_CLASSIC_ERA", "wow_classic_era"),
     ("WOW_CLASSIC_ANNIVERSARY", "wow_classic_anniversary"),

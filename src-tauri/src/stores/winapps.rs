@@ -312,7 +312,11 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
     let wow = bnet_catalog::wow_versions(&c);
     let mut wow_installed = std::collections::HashSet::new();
     // Retail by its product code (Battle.net's usual Play); the others by install id.
-    let wow_exec = |v: &bnet_catalog::WowVersion| if v.uid == "wow" { "--exec=launch WoW".to_string() } else { format!("--exec=launch_uid {}", v.uid) };
+    let wow_exec = |v: &bnet_catalog::WowVersion| match v.uid.as_str() {
+        "wow" => "--exec=launch WoW".to_string(),
+        "wowf" => "--exec=launch WoWF".to_string(),
+        uid => format!("--exec=launch_uid {uid}"),
+    };
     let wow_game = |v: &bnet_catalog::WowVersion, installed: bool, launch: Option<LaunchSpec>| Game {
         id: format!("battlenet:{}", v.uid),
         store: "battlenet".into(),
@@ -342,7 +346,7 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
             }
             // World of Warcraft: one folder, one row per installed version.
             let rows = bnet_catalog::build_info_products(&dir.join(".build.info"));
-            let versions: Vec<&bnet_catalog::WowVersion> = wow.iter().filter(|v| rows.iter().any(|r| r.eq_ignore_ascii_case(&v.tact)) && dir.join(&v.folder).is_dir()).collect();
+            let versions: Vec<&bnet_catalog::WowVersion> = wow.iter().filter(|v| rows.iter().any(|r| r.eq_ignore_ascii_case(&v.tact))).collect();
             if !versions.is_empty() {
                 for v in versions {
                     wow_installed.insert(v.uid.clone());
