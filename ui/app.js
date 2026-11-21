@@ -868,6 +868,9 @@ function dlLine(d) {
   return parts.join(" · ");
 }
 function dlCard(d, big) {
+  // Downloads found in Battle.net's records only know their install id: show the game's name.
+  const g = dlGame(d);
+  if (g && /^[a-z0-9_]+$/.test(d.title)) d = { ...d, title: d.kind === "update" ? `Updating ${g.title}` : g.title };
   const art = dlArt(d, "hero");
   const s = store(d.store);
   const btn = d.state === "downloading" && d.kind !== "install" ? "" : `<button class="dl-x" title="${d.state === "downloading" ? "Cancel" : "Dismiss"}" data-dl="${esc(d.id)}" data-dl-state="${d.state}">✕</button>`;

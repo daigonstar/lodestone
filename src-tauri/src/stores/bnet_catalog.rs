@@ -182,6 +182,116 @@ pub fn build_info_products(path: &Path) -> Vec<String> {
     out
 }
 
+// ---------------- product.db: every install the Agent knows ----------------
+
+/// One install from the Battle.net Agent's product.db: where it is and how far along it is.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Install {
+    /// Install id ("osi", "wow", "wow_classic_era").
+    pub uid: String,
+    /// Product code (".build.info" product: "osi", "wow", "wow_anniversary").
+    pub code: String,
+    /// Windows path ("C:/Program Files (x86)/World of Warcraft").
+    pub path: String,
+    pub installed: bool,
+    pub playable: bool,
+    /// Download progress 0..1 while installing or updating, with byte counts.
+    pub progress: Option<f64>,
+    pub total: Option<u64>,
+    pub remaining: Option<u64>,
+}
+
+/// Minimal protobuf reading: (field number, wire type, value bytes or number).
+fn pb_fields(mut b: &[u8]) -> Vec<(u32, u8, &[u8], u64)> {
+    fn varint(b: &mut &[u8]) -> Option<u64> {
+        let mut v = 0u64;
+        for i in 0..10 {
+            let (&x, rest) = b.split_first()?;
+            *b = rest;
+            v |= ((x & 0x7f) as u64) << (7 * i);
+            if x & 0x80 == 0 {
+                return Some(v);
+            }
+        }
+        None
+    }
+    let mut out = Vec::new();
+    while !b.is_empty() {
+        let Some(key) = varint(&mut b) else { break };
+        let (field, wire) = ((key >> 3) as u32, (key & 7) as u8);
+        match wire {
+            0 => match varint(&mut b) {
+                Some(v) => out.push((field, 0, &[][..], v)),
+                None => break,
+            },
+            1 if b.len() >= 8 => {
+                out.push((field, 1, &b[..8], u64::from_le_bytes(b[..8].try_into().unwrap())));
+                b = &b[8..];
+            }
+            2 => {
+                let Some(len) = varint(&mut b).map(|l| l as usize) else { break };
+                if len > b.len() {
+                    break;
+                }
+                out.push((field, 2, &b[..len], len as u64));
+                b = &b[len..];
+            }
+            5 if b.len() >= 4 => {
+                out.push((field, 5, &b[..4], u32::from_le_bytes(b[..4].try_into().unwrap()) as u64));
+                b = &b[4..];
+            }
+            _ => break,
+        }
+    }
+    out
+}
+
+fn pb_msg<'a>(fields: &[(u32, u8, &'a [u8], u64)], n: u32) -> Option<&'a [u8]> {
+    fields.iter().find(|f| f.0 == n && f.1 == 2).map(|f| f.2)
+}
+
+fn pb_str(fields: &[(u32, u8, &[u8], u64)], n: u32) -> String {
+    pb_msg(fields, n).map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default()
+}
+
+fn pb_num(fields: &[(u32, u8, &[u8], u64)], n: u32, wire: u8) -> Option<u64> {
+    fields.iter().find(|f| f.0 == n && f.1 == wire).map(|f| f.3)
+}
+
+/// Parse product.db (Database { repeated ProductInstall = 1 }).
+pub fn parse_product_db(b: &[u8]) -> Vec<Install> {
+    pb_fields(b)
+        .into_iter()
+        .filter(|f| f.0 == 1 && f.1 == 2)
+        .filter_map(|(_, _, msg, _)| {
+            let f = pb_fields(msg);
+            let uid = pb_str(&f, 1);
+            if uid.is_empty() || uid == "agent" || uid == "battle.net" || uid == "bna" {
+                return None;
+            }
+            let settings = pb_fields(pb_msg(&f, 3).unwrap_or(&[]));
+            let state = pb_fields(pb_msg(&f, 4).unwrap_or(&[]));
+            let base = pb_fields(pb_msg(&state, 1).unwrap_or(&[]));
+            let update = pb_msg(&state, 4).map(pb_fields);
+            Some(Install {
+                code: pb_str(&f, 2),
+                path: pb_str(&settings, 1),
+                installed: pb_num(&base, 1, 0) == Some(1),
+                playable: pb_num(&base, 2, 0) == Some(1),
+                progress: update.as_ref().and_then(|u| pb_num(u, 2, 1)).map(f64::from_bits),
+                total: update.as_ref().and_then(|u| pb_num(u, 4, 0)),
+                remaining: update.as_ref().and_then(|u| pb_num(u, 5, 0)),
+                uid,
+            })
+        })
+        .collect()
+}
+
+/// Every game install the Battle.net Agent knows about, wherever it is (any folder or drive).
+pub fn installs(drive_c: &Path) -> Vec<Install> {
+    fs::read(drive_c.join("ProgramData/Battle.net/Agent/product.db")).map(|b| parse_product_db(&b)).unwrap_or_default()
+}
+
 // ---------------- World of Warcraft ----------------
 
 /// The playable World of Warcraft versions. Battle.net lists them as one game with a version picker,
@@ -345,6 +455,54 @@ pub fn aggregate_products(drive_c: &Path) -> HashMap<String, String> {
 
 #[cfg(test)]
 mod tests {
+    /// product.db as the Agent writes it: one install done, one downloading.
+    #[test]
+    fn reads_product_db() {
+        fn field(n: u32, payload: &[u8]) -> Vec<u8> {
+            let mut v = vec![((n << 3) | 2) as u8, payload.len() as u8];
+            v.extend_from_slice(payload);
+            v
+        }
+        fn varint_field(n: u32, x: u8) -> Vec<u8> {
+            vec![((n << 3) | 0) as u8, x]
+        }
+        let install = |uid: &str, code: &str, path: &str, installed: u8, progress: Option<f64>| {
+            let mut settings = field(1, path.as_bytes());
+            settings.extend(field(2, b"us"));
+            let mut base = varint_field(1, installed);
+            base.extend(varint_field(2, installed));
+            let mut state = field(1, &base);
+            if let Some(p) = progress {
+                let mut up = vec![(2 << 3) | 1];
+                up.extend(p.to_bits().to_le_bytes());
+                up.extend([(4 << 3) as u8, 100, (5 << 3) as u8, 40]);
+                state.extend(field(4, &up));
+            }
+            let mut m = field(1, uid.as_bytes());
+            m.extend(field(2, code.as_bytes()));
+            m.extend(field(3, &settings));
+            m.extend(field(4, &state));
+            field(1, &m)
+        };
+        let mut db = install("agent", "agent", "C:/ProgramData/Battle.net/Agent", 1, None);
+        db.extend(install("wow_classic_era", "wow_classic_era", "D:/Games/World of Warcraft", 1, None));
+        db.extend(install("wow", "wow", "C:/Program Files (x86)/World of Warcraft", 0, Some(0.6)));
+        let v = super::parse_product_db(&db);
+        assert_eq!(v.len(), 2);
+        assert_eq!((v[0].uid.as_str(), v[0].path.as_str(), v[0].playable), ("wow_classic_era", "D:/Games/World of Warcraft", true));
+        assert_eq!((v[1].installed, v[1].progress, v[1].total, v[1].remaining), (false, Some(0.6), Some(100), Some(40)));
+    }
+
+    /// `cargo test live_product_db -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn live_product_db() {
+        let c = crate::proton::drive_c(&crate::proton::prefix("battlenet"));
+        for i in super::installs(&c) {
+            println!("{i:?}");
+        }
+    }
+
     #[test]
     fn reads_wow_versions_from_logs_and_build_info() {
         let log = "I x GameAccount added to family: family=WoW account=GameAccount(WoW:wow_classic_era region=EU entity=2:1:2 name=WoW1)\n\

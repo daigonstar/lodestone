@@ -324,12 +324,75 @@ fn status_from(key: &str, job: &Job, v: &Value) -> Status {
     }
 }
 
-/// Progress of the installs Lodestone started.
-pub fn statuses() -> Vec<Status> {
-    if with_jobs(|j| j.is_empty()) {
-        return vec![];
+/// Battle.net downloads Lodestone didn't start this session (an earlier session, or Battle.net's own
+/// window): (install id, finished) by game id, so a finished one is reported once.
+static OTHER: Mutex<Option<HashMap<String, (String, bool, Instant)>>> = Mutex::new(None);
+
+fn with_other<R>(f: impl FnOnce(&mut HashMap<String, (String, bool, Instant)>) -> R) -> R {
+    f(OTHER.lock().unwrap().get_or_insert_with(HashMap::new))
+}
+
+/// Downloads the Agent records in product.db that Lodestone isn't tracking itself.
+fn other_statuses(app: &WinApp, own: &[String]) -> Vec<Status> {
+    let installs = crate::stores::bnet_catalog::installs(&proton::drive_c(&app.prefix()));
+    let mut out = Vec::new();
+    let mut running = None;
+    for i in installs {
+        let key = format!("battlenet:{}", code_for_uid(&i.uid).to_ascii_lowercase());
+        if own.contains(&key) {
+            continue;
+        }
+        // An installed game only counts when there's really something left to fetch (an update),
+        // not an old progress record.
+        let downloading = i.progress.is_some_and(|p| p < 0.999) && (!(i.installed || i.playable) || i.remaining.is_some_and(|r| r > 0));
+        if downloading {
+            with_other(|o| o.entry(key.clone()).or_insert((i.uid.clone(), false, Instant::now())).1 = false);
+            // The Agent only downloads while Battle.net (or its Agent) runs.
+            let up = *running.get_or_insert_with(|| connect(&app.prefix()).is_some());
+            let total = i.total.filter(|t| *t > 0);
+            out.push(Status {
+                id: key.clone(),
+                title: i.uid.clone(),
+                state: "downloading",
+                percent: (i.progress.unwrap_or(0.0) * 100.0).clamp(0.0, 99.9) as f32,
+                detail: if up { "Battle.net is downloading".into() } else { "Paused: open Battle.net to carry on".into() },
+                seconds: with_other(|o| o.get(&key).map(|x| x.2.elapsed().as_secs()).unwrap_or(0)),
+                kind: if i.installed { "update" } else { "install" },
+                downloaded: total.map(|t| t.saturating_sub(i.remaining.unwrap_or(t))),
+                total,
+                path: Some(i.path.clone()),
+                ..Default::default()
+            });
+        } else if let Some((_, done, started)) = with_other(|o| o.get(&key).cloned()) {
+            // Was downloading, now finished: report it (the library rescans) until dismissed.
+            with_other(|o| o.get_mut(&key).map(|x| x.1 = true));
+            if i.playable || i.installed || done {
+                out.push(Status {
+                    id: key.clone(),
+                    title: i.uid.clone(),
+                    state: "done",
+                    percent: 100.0,
+                    detail: "Installed".into(),
+                    seconds: started.elapsed().as_secs(),
+                    kind: "install",
+                    total: i.total,
+                    path: Some(i.path.clone()),
+                    ..Default::default()
+                });
+            }
+        }
     }
+    out
+}
+
+/// Progress of the installs Lodestone started, and of Battle.net downloads it didn't start.
+pub fn statuses() -> Vec<Status> {
     let Some(app) = app() else { return vec![] };
+    let own: Vec<String> = with_jobs(|j| j.keys().cloned().collect());
+    let mut other = other_statuses(app, &own);
+    if own.is_empty() {
+        return other;
+    }
     let agent = connect(&app.prefix());
     with_jobs(|jobs| {
         let mut out = Vec::new();
@@ -361,12 +424,13 @@ pub fn statuses() -> Vec<Status> {
                 ..Default::default()
             }));
         }
+        out.extend(other.drain(..));
         out
     })
 }
 
 pub fn is_job(id: &str) -> bool {
-    with_jobs(|j| j.contains_key(id))
+    with_jobs(|j| j.contains_key(id)) || with_other(|o| o.contains_key(id))
 }
 
 /// Ask the Agent to remove a game (also a half-done install). Returns which request worked.
@@ -391,7 +455,9 @@ pub fn uninstall_uid(uid: &str) -> Result<String, String> {
 
 /// Cancel: remove the half-done install.
 pub fn cancel(id: &str) -> Result<(), String> {
-    let uid = with_jobs(|j| j.get(id).map(|x| x.uid.clone())).ok_or("not a Battle.net install")?;
+    let uid = with_jobs(|j| j.get(id).map(|x| x.uid.clone()))
+        .or_else(|| with_other(|o| o.remove(id).map(|x| x.0)))
+        .ok_or("not a Battle.net install")?;
     let r = uninstall_uid(&uid);
     with_jobs(|j| j.remove(id));
     r.map(|_| ())
@@ -401,6 +467,11 @@ pub fn dismiss(id: &str) {
     with_jobs(|j| {
         if j.get(id).is_some_and(|x| x.done) {
             j.remove(id);
+        }
+    });
+    with_other(|o| {
+        if o.get(id).is_some_and(|x| x.1) {
+            o.remove(id);
         }
     });
 }

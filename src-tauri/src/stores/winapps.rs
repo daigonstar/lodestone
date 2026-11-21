@@ -333,20 +333,54 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
         ..Default::default()
     };
 
+    // Where games are: every install Battle.net's Agent records (any folder or drive, including ones
+    // started in an earlier Lodestone session), plus a look through Program Files for older installs.
+    let agent = bnet_catalog::installs(&c);
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for i in agent.iter().filter(|i| i.installed || i.playable) {
+        if let Some(d) = win_path_in(&app.prefix(), &i.path).filter(|d| d.is_dir()) {
+            if !dirs.contains(&d) {
+                dirs.push(d);
+            }
+        }
+    }
     for base in ["Program Files (x86)", "Program Files"] {
-        let Ok(rd) = fs::read_dir(c.join(base)) else { continue };
-        for e in rd.flatten() {
-            let dir = e.path();
-            let folder = e.file_name().to_string_lossy().into_owned();
+        for e in fs::read_dir(c.join(base)).into_iter().flatten().flatten() {
+            let d = e.path();
+            if d.join(".build.info").is_file() && !dirs.contains(&d) {
+                dirs.push(d);
+            }
+        }
+    }
+    // Agent record for a folder: (install id, product code), when it's installed there.
+    let agent_for = |dir: &Path| -> Vec<&bnet_catalog::Install> {
+        agent.iter().filter(|i| (i.installed || i.playable) && win_path_in(&app.prefix(), &i.path).is_some_and(|p| p == dir)).collect()
+    };
+    {
+        for dir in dirs {
+            let folder = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             if folder == "Battle.net" {
                 continue;
             }
-            if !dir.join(".build.info").is_file() {
-                continue;
-            }
-            // World of Warcraft: one folder, one row per installed version.
+            let recs = agent_for(&dir);
+            // World of Warcraft: one folder for every version. A version is installed when the Agent
+            // says so, .build.info lists it, or its folder has the game in it (installs the Agent made
+            // leave .build.info's product column empty).
             let rows = bnet_catalog::build_info_products(&dir.join(".build.info"));
-            let versions: Vec<&bnet_catalog::WowVersion> = wow.iter().filter(|v| rows.iter().any(|r| r.eq_ignore_ascii_case(&v.tact))).collect();
+            let is_wow = recs.iter().any(|r| r.code.starts_with("wow") || r.uid.starts_with("wow"))
+                || rows.iter().any(|r| r.starts_with("wow"))
+                || wow.iter().any(|v| wow_exe(&dir.join(&v.folder)).is_some());
+            let versions: Vec<&bnet_catalog::WowVersion> = if is_wow {
+                wow.iter()
+                    .filter(|v| {
+                        recs.iter().any(|r| r.uid.eq_ignore_ascii_case(&v.uid) || r.code.eq_ignore_ascii_case(&v.tact))
+                            || rows.iter().any(|r| r.eq_ignore_ascii_case(&v.tact))
+                            || wow_exe(&dir.join(&v.folder)).is_some()
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
             if !versions.is_empty() {
                 for v in versions {
                     wow_installed.insert(v.uid.clone());
@@ -373,7 +407,18 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
                 installed_codes.extend(["WoW".to_string(), "WoWC".to_string()]);
                 continue;
             }
-            let Some(tact) = bnet_catalog::build_info_product(&dir.join(".build.info")).or_else(|| aggregate.get(&folder.to_ascii_lowercase()).cloned()) else { continue };
+            if is_wow {
+                continue;
+            }
+            let Some(tact) = recs
+                .first()
+                .map(|r| r.code.clone())
+                .filter(|c| !c.is_empty())
+                .or_else(|| bnet_catalog::build_info_product(&dir.join(".build.info")))
+                .or_else(|| aggregate.get(&folder.to_ascii_lowercase()).cloned())
+            else {
+                continue;
+            };
             let prod = by_tact.get(tact.to_ascii_lowercase().as_str()).copied();
             // Unknown to the catalog (shouldn't happen): fall back to the install id.
             let exec = match prod {
@@ -481,6 +526,25 @@ fn reg_keys(reg: &str, prefix: &str) -> Vec<(String, std::collections::HashMap<S
 }
 
 /// "C:/Program Files/X/" or "C:\\Program Files\\X" inside a prefix -> a Linux path.
+/// A Windows path in a prefix ("D:/Games/World of Warcraft") as a Linux path: C: is drive_c, other
+/// drives follow the prefix's dosdevices links (Z: is usually /).
+fn win_path_in(prefix: &Path, p: &str) -> Option<PathBuf> {
+    let p = p.replace('\\', "/");
+    let (drive, rest) = p.split_once(':')?;
+    if drive.len() != 1 {
+        return None;
+    }
+    let rest = rest.trim_start_matches('/');
+    let d = drive.to_ascii_lowercase();
+    if d == "c" {
+        return Some(proton::drive_c(prefix).join(rest));
+    }
+    let pfx = if prefix.join("pfx/dosdevices").is_dir() { prefix.join("pfx") } else { prefix.to_path_buf() };
+    let link = pfx.join("dosdevices").join(format!("{d}:"));
+    let root = fs::canonicalize(&link).ok()?;
+    Some(root.join(rest))
+}
+
 fn win_to_unix(drive_c: &Path, p: &str) -> Option<PathBuf> {
     let rest = p.strip_prefix("C:").or_else(|| p.strip_prefix("c:"))?;
     let rel = rest.replace('\\', "/");
