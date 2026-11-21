@@ -550,6 +550,9 @@ function renderHero() {
   fav.classList.toggle("on", g.favorite);
   $('#menu [data-act="remove"]').classList.toggle("hidden", !g.id.startsWith("custom:"));
   $('#menu [data-act="hide"]').textContent = g.hidden ? "Unhide" : "Hide from library";
+  const alt = $('#menu [data-act="play-alt"]');
+  alt.textContent = g.alt_label ? `▶ ${g.alt_label}` : "";
+  alt.classList.toggle("hidden", !(g.alt_label && g.installed && !run));
   const hud = $('#menu [data-act="mangohud"]');
   hud.textContent = `MangoHud overlay: ${hudOn(g) ? "on" : "off"}`;
   hud.classList.toggle("hidden", !g.installed || g.store === "steam");
@@ -1194,6 +1197,7 @@ async function menuAction(act) {
   if (!g) return;
   try {
     if (act === "hide") await setFlag(g.id, "hidden", !g.hidden);
+    if (act === "play-alt") return play(g.id, "alt");
     if (act === "mangohud") {
       const on = !hudOn(g);
       if (on && !(await invoke("mangohud_info")).installed) {

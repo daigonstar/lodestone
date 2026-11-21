@@ -51,6 +51,10 @@ pub struct Game {
     /// Hands installation to the store's own client (e.g. Steam's install dialog).
     #[serde(skip)]
     pub install: Option<LaunchSpec>,
+    /// A second way to start it (e.g. through Battle.net instead of directly), and its menu label.
+    #[serde(skip)]
+    pub alt_launch: Option<LaunchSpec>,
+    pub alt_label: Option<String>,
     #[serde(skip)]
     pub uninstall: Option<LaunchSpec>,
     pub can_install: bool,

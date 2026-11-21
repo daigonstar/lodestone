@@ -350,7 +350,25 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
             if !versions.is_empty() {
                 for v in versions {
                     wow_installed.insert(v.uid.clone());
-                    out.push(wow_game(v, true, bnet_play(app, &client, wow_exec(v)).ok()));
+                    let through_bnet = bnet_play(app, &client, wow_exec(v)).ok();
+                    // Straight to the game: no waiting for Battle.net to start and hand it over. WoW asks
+                    // you to sign in itself the first time (it can remember you).
+                    let direct = wow_exe(&dir.join(&v.folder)).and_then(|exe| {
+                        let mut s = app.run(&exe, vec![]).ok()?;
+                        s.cwd = exe.parent().map(Path::to_path_buf);
+                        Some(s)
+                    });
+                    let g = match direct {
+                        Some(d) => {
+                            let mut g = wow_game(v, true, Some(d));
+                            g.via = "Direct · Proton".into();
+                            g.alt_launch = through_bnet;
+                            g.alt_label = Some("Play through Battle.net".into());
+                            g
+                        }
+                        None => wow_game(v, true, through_bnet),
+                    };
+                    out.push(g);
                 }
                 installed_codes.extend(["WoW".to_string(), "WoWC".to_string()]);
                 continue;
@@ -420,6 +438,20 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
         }
     }
     out
+}
+
+/// The game's own program in a WoW version folder (_retail_/Wow.exe, _classic_*/WowClassic.exe).
+fn wow_exe(dir: &Path) -> Option<PathBuf> {
+    for n in ["Wow.exe", "WowClassic.exe"] {
+        if dir.join(n).is_file() {
+            return Some(dir.join(n));
+        }
+    }
+    // Versions named differently: the one Wow*.exe that isn't a crash reporter or a test build.
+    fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).find(|p| {
+        let n = p.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        n.starts_with("wow") && n.ends_with(".exe") && !n.contains("error") && !n.contains("crash") && !n.ends_with("t.exe") && !n.ends_with("b.exe")
+    })
 }
 
 // ---------------- registry (Wine keeps it as text in the prefix) ----------------
@@ -804,6 +836,30 @@ mod foreign_tests {
             assert!(super::app_in(app, &crate::proton::drive_c(p)), "{}", p.display());
         }
         assert!(!super::app_in(super::find("ubisoft").unwrap(), &crate::proton::drive_c(&lutris)));
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod wow_tests {
+    #[test]
+    fn finds_each_wow_versions_program() {
+        let root = std::env::temp_dir().join(format!("lodestone-wow-exe-{}", std::process::id()));
+        let mk = |sub: &str, files: &[&str]| {
+            let d = root.join(sub);
+            std::fs::create_dir_all(&d).unwrap();
+            for f in files {
+                std::fs::write(d.join(f), b"MZ").unwrap();
+            }
+            d
+        };
+        let retail = mk("_retail_", &["Wow.exe", "WowErrorReporter.exe"]);
+        let classic = mk("_classic_era_", &["WowClassic.exe"]);
+        let other = mk("_wowf_", &["BlizzardError.exe", "WowCrashHandler.exe", "WowForever.exe"]);
+        assert!(super::wow_exe(&retail).unwrap().ends_with("Wow.exe"));
+        assert!(super::wow_exe(&classic).unwrap().ends_with("WowClassic.exe"));
+        assert!(super::wow_exe(&other).unwrap().ends_with("WowForever.exe"));
+        assert!(super::wow_exe(&mk("_empty_", &[])).is_none());
         let _ = std::fs::remove_dir_all(root);
     }
 }

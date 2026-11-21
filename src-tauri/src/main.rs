@@ -170,7 +170,9 @@ fn launch_game(id: String, mode: Option<String>, inner: State<'_, Shared>, app: 
         (true, Some(k), "vanilla") => kiln::play_vanilla(k),
         _ => None,
     };
-    let spec = kiln_spec.as_ref().or(game.launch.as_ref()).ok_or("No launch method for this game")?;
+    // "alt": the game's second way to start (e.g. through Battle.net instead of directly).
+    let alt = if mode == "alt" { game.alt_launch.as_ref() } else { None };
+    let spec = alt.or(kiln_spec.as_ref()).or(game.launch.as_ref()).ok_or("No launch method for this game")?;
     let hud = inner.store.lock().unwrap().games.get(&id).and_then(|e| e.mangohud).unwrap_or_else(|| settings::load().mangohud);
     let with_hud;
     let spec = if hud {
