@@ -285,6 +285,7 @@ function renderNav() {
   const inst = (g) => g.installed || state.showUninstalled;
   const lib = [
     ["home", "Home", ""],
+    ["downloads", "Downloads", (state.dl || []).filter((d) => d.state === "downloading").length || ""],
     ["all", "All games", ls.get("mergeDupes", true) ? mergeList(visible.filter(inst)).length : visible.filter(inst).length],
     ["favorites", "Favorites", visible.filter((g) => g.favorite).length],
     ["recent", "Recently played", visible.filter((g) => g.last_played && inst(g)).length],
@@ -448,7 +449,7 @@ function detailCard() {
 }
 function placeDetail() {
   const d = $("#detail");
-  const gridView = !["home", "minecraft"].includes(state.view) && !state.view.startsWith("shop:");
+  const gridView = !["home", "minecraft", "downloads"].includes(state.view) && !state.view.startsWith("shop:");
   const card = state.open && gridView ? detailCard() : null;
   if (!card) {
     if (state.open && gridView && state.selected) state.open = false;
@@ -672,10 +673,23 @@ function render() {
   $("#nav-shop").innerHTML = SHOPS.map(([k, l]) => `<button data-view="shop:${k}" class="${state.view === "shop:" + k ? "active" : ""}"><span class="dot" style="background:${store(k).color}"></span>${l}</button>`).join("");
   const shopView = state.view.startsWith("shop:");
   const home = state.view === "home";
-  const mc = state.view === "minecraft" || shopView || home;
+  const dlv = state.view === "downloads";
+  const mc = state.view === "minecraft" || shopView || home || dlv;
   for (const el of ["#hero", ".grid-head", "#grid", "#setup", "#filters"]) $(el).classList.toggle("hidden", mc);
   $("#home").classList.toggle("hidden", !home);
+  $("#dlv").classList.toggle("hidden", !dlv);
+  $("#downloads").classList.toggle("hidden", dlv);
   if (mc) $("#about").classList.add("hidden");
+  if (dlv) {
+    $("#empty").classList.add("hidden");
+    $("#mini").classList.add("hidden");
+    $("#mc").classList.add("hidden");
+    $("#shop").classList.add("hidden");
+    shopHide();
+    renderDlView();
+    renderRunning();
+    return;
+  }
   if (home) {
     $("#empty").classList.add("hidden");
     $("#mini").classList.add("hidden");
@@ -815,6 +829,137 @@ if (T) T.event.listen("account", ({ payload }) => {
 // ---------- downloads ----------
 let dlTimer = null;
 const dlSeen = new Map();
+// ---------- downloads: overlay cards and the Downloads tab ----------
+const dlSamples = new Map();
+const fmtRate = (b) => (b ? `${b >= 1e9 ? (b / 1e9).toFixed(2) + " GB" : b >= 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1e3)) + " KB"}/s` : null);
+function fmtLeft(s) {
+  if (s == null || s <= 0) return null;
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? `${h} h ${m} min left` : m ? `${m} min left` : `${s} s left`;
+}
+function fmtDur(s) {
+  if (!s) return "—";
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return h ? `${h} h ${m} min` : m ? `${m} min ${sec} s` : `${sec} s`;
+}
+const dlGame = (d) => state.games.find((g) => g.id === d.game_id);
+const dlDone = (d) => ({ update: "Up to date", uninstall: "Uninstalled", runtimes: "Runtimes installed" }[d.kind] || "Installed");
+const dlKind = (k) => ({ update: "Update", uninstall: "Uninstall", runtimes: "Runtimes" }[k] || "Install");
+function dlArt(d, kind) {
+  const g = dlGame(d);
+  const p = g && (kind === "cover" ? g.cover || g.hero : g.hero || g.cover);
+  return p ? imgSrc(p, kind === "cover" ? 120 : 640) : null;
+}
+// One line: "45% · 1.2 GB of 5.0 GB · 12.3 MB/s · 4 min left"
+function dlLine(d) {
+  if (d.state === "done") return dlDone(d) + (d.total ? ` · ${fmtSize(d.total)}` : "") + ` · took ${fmtDur(d.seconds)}`;
+  if (d.state === "failed") return "Failed";
+  const parts = [];
+  if (d.percent > 0) parts.push(`${d.percent.toFixed(1)}%`);
+  if (d.total) parts.push(`${fmtSize(d.downloaded || 0) || "0 MB"} of ${fmtSize(d.total)}`);
+  const r = fmtRate(d.speed);
+  if (r) parts.push(r);
+  const left = fmtLeft(d.eta);
+  if (left) parts.push(left);
+  if (!parts.length || (d.percent <= 0 && !d.total)) parts.push(esc(d.detail || "Starting…"));
+  return parts.join(" · ");
+}
+function dlCard(d, big) {
+  const art = dlArt(d, "hero");
+  const s = store(d.store);
+  const btn = d.state === "downloading" && d.kind !== "install" ? "" : `<button class="dl-x" title="${d.state === "downloading" ? "Cancel" : "Dismiss"}" data-dl="${esc(d.id)}" data-dl-state="${d.state}">✕</button>`;
+  if (!big) {
+    return `<div class="dl ${d.state}">
+      <div class="dl-banner" ${art ? `style="background-image:url('${esc(art)}')"` : `style="${placeholder({ title: d.title })}"`}></div>
+      <div class="dl-body">
+        <div class="dl-top"><span class="grow dl-title">${esc(d.title)}</span>${btn}</div>
+        <div class="dl-meta"><span class="dot" style="background:${s.color}"></span>${esc(s.label)} · ${dlKind(d.kind)}</div>
+        <div class="bar"><span style="width:${Math.max(2, d.percent)}%"></span></div>
+        <div class="dl-line">${dlLine(d)}</div>
+        ${d.state === "failed" ? `<small class="err-text">${esc(d.detail)}</small>` : ""}
+      </div>
+    </div>`;
+  }
+  const stat = (k, v) => (v ? `<div><small>${k}</small><span>${v}</span></div>` : "");
+  const samples = dlSamples.get(d.id) || [];
+  return `<div class="dlv-card ${d.state}">
+    <div class="dlv-banner" ${art ? `style="background-image:url('${esc(art)}')"` : `style="${placeholder({ title: d.title })}"`}>
+      <div class="dlv-over">
+        <div class="dl-meta"><span class="dot" style="background:${s.color}"></span>${esc(s.label)} · ${dlKind(d.kind)}</div>
+        <h3>${esc(d.title)}</h3>
+      </div>
+      ${btn.replace('class="dl-x"', 'class="dl-x big"')}
+    </div>
+    <div class="dlv-main">
+      <div class="dlv-progress"><div class="bar big"><span style="width:${Math.max(2, d.percent)}%"></span></div><b>${d.state === "downloading" ? `${d.percent.toFixed(1)}%` : d.state === "done" ? dlDone(d) : "Failed"}</b></div>
+      ${d.state === "downloading" && samples.some((x) => x > 0) ? sparkline(samples) : ""}
+      <div class="dlv-stats">
+        ${d.state === "downloading" ? stat("Downloaded", d.total ? `${fmtSize(d.downloaded || 0) || "0 MB"} of ${fmtSize(d.total)}` : fmtSize(d.downloaded)) : stat("Size", fmtSize(d.total || d.downloaded))}
+        ${stat("Speed", d.state === "downloading" ? fmtRate(d.speed) : null)}
+        ${stat("Disk writes", d.state === "downloading" ? fmtRate(d.disk) : null)}
+        ${stat("Time left", d.state === "downloading" ? fmtLeft(d.eta)?.replace(" left", "") : null)}
+        ${stat(d.state === "downloading" ? "Running for" : "Took", fmtDur(d.seconds))}
+        ${stat("Size installed", fmtSize(d.install_size))}
+        ${stat("Status", d.state === "downloading" ? esc(d.detail || "") : null)}
+      </div>
+      ${d.path ? `<div class="dlv-path"><small>Install folder</small><code>${esc(d.path)}</code></div>` : ""}
+      ${d.state === "failed" ? `<div class="err-text">${esc(d.detail)}</div>` : ""}
+    </div>
+  </div>`;
+}
+function sparkline(v) {
+  const w = 300, h = 44, max = Math.max(...v, 1);
+  const pts = v.map((x, i) => `${(i / Math.max(1, v.length - 1)) * w},${h - (x / max) * (h - 4) - 2}`).join(" ");
+  return `<div class="dlv-spark" title="Download speed (peak ${fmtRate(max)})"><svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="0,${h} ${pts} ${w},${h}" class="area"/><polyline points="${pts}" class="line"/></svg><small>Speed · peak ${fmtRate(max)}</small></div>`;
+}
+let dlHistory = null;
+async function renderDlView() {
+  const list = state.dl || [];
+  const active = list.filter((d) => d.state === "downloading");
+  const speed = active.reduce((a, d) => a + (d.speed || 0), 0);
+  const left = active.reduce((a, d) => a + (d.total ? Math.max(0, d.total - (d.downloaded || 0)) : 0), 0);
+  $("#dlv-summary").innerHTML = active.length
+    ? `<span><b>${active.length}</b> downloading</span>${speed ? `<span><b>${fmtRate(speed)}</b> total</span>` : ""}${left ? `<span><b>${fmtSize(left)}</b> to go</span>` : ""}`
+    : `<span class="muted">Nothing downloading right now.</span>`;
+  $("#dlv-active").innerHTML = list.length ? list.map((d) => dlCard(d, true)).join("") : `<div class="dlv-empty muted">Installs, updates and uninstalls from every store show up here while they run: Steam, Epic, GOG and Battle.net.</div>`;
+  const upd = state.games.filter((g) => g.installed && g.update === "available" && !g.hidden && !list.some((d) => d.game_id === g.id && d.state === "downloading"));
+  $("#dlv-updates-wrap").classList.toggle("hidden", !upd.length);
+  $("#dlv-updates").innerHTML = upd.map((g) => `<div class="dlv-row">
+      <img src="${esc(imgSrc(g.cover || g.hero, 80) || "")}" alt="" onerror="this.style.visibility='hidden'">
+      <div class="grow"><b>${esc(g.title)}</b><small class="muted">${esc(store(g.store).label)}${g.update_size ? ` · ${fmtSize(g.update_size)}` : ""}</small></div>
+      <button class="ghost small" data-dlv-update="${esc(g.id)}">⟳ Update</button></div>`).join("");
+  if (dlHistory === null) { try { dlHistory = await invoke("downloads_history"); } catch { dlHistory = []; } }
+  const hist = dlHistory.filter((p) => !list.some((d) => d.id === p.id && d.state !== "downloading"));
+  $("#dlv-history").innerHTML = hist.length ? hist.map((p) => {
+    const g = state.games.find((x) => x.id === p.game_id);
+    const art = g && (g.cover || g.hero);
+    return `<div class="dlv-row ${p.state}">
+      <img src="${esc(art ? imgSrc(art, 80) : "")}" alt="" onerror="this.style.visibility='hidden'">
+      <div class="grow"><b>${esc(p.title)}</b><small class="muted">${esc(store(p.store).label)} · ${dlKind(p.kind)}${p.total ? ` · ${fmtSize(p.total)}` : ""} · took ${fmtDur(p.seconds)}</small>${p.state === "failed" && p.detail ? `<small class="err-text">${esc(p.detail)}</small>` : ""}</div>
+      <span class="dlv-res ${p.state}">${p.state === "done" ? "✓ " + dlDone(p) : "✕ Failed"}</span>
+      <small class="muted dlv-when" title="${new Date(p.finished * 1000).toLocaleString()}">${fmtAgo(p.finished)}</small></div>`;
+  }).join("") : `<div class="muted">Finished downloads are listed here.</div>`;
+}
+$("#dlv").addEventListener("click", async (e) => {
+  const u = e.target.closest("[data-dlv-update]");
+  if (u) { u.disabled = true; return homeUpdate(u.dataset.dlvUpdate); }
+  if (e.target.id === "dlv-clear") {
+    await invoke("downloads_history_clear");
+    dlHistory = [];
+    return renderDlView();
+  }
+  const b = e.target.closest("[data-dl]");
+  if (b) dlAction(b);
+});
+async function dlAction(b) {
+  if (b.dataset.dlState === "downloading") {
+    if (!confirm("Cancel this download? You can resume it later by installing again.")) return;
+    try { await invoke("download_cancel", { id: b.dataset.dl }); } catch (err) { toast(String(err), true); }
+  } else await invoke("download_dismiss", { id: b.dataset.dl });
+  dlHistory = null;
+  pollDownloads();
+}
+
 async function pollDownloads() {
   clearTimeout(dlTimer);
   let list = [];
@@ -826,28 +971,29 @@ async function pollDownloads() {
       load(true);
     }
     if (prev === "downloading" && d.state === "failed") toast(`${d.title} failed: ${d.detail}`, true);
+    if (prev === "downloading" && d.state !== "downloading") dlHistory = null;
     dlSeen.set(d.id, d.state);
   }
-  $("#downloads").innerHTML = list.map((d) => `<div class="dl ${d.state}">
-      <div class="dl-top"><span class="grow">${esc(d.title)}</span>
-        <small class="muted">${d.state === "downloading" ? (d.percent > 0 ? `${d.percent.toFixed(1)}%` : esc(d.detail || "")) : d.state === "done" ? ({ update: "Up to date", uninstall: "Uninstalled" }[d.kind] || "Installed") : "Failed"}</small>
-        ${d.state === "downloading" && d.kind !== "install" ? "" : `<button title="${d.state === "downloading" ? "Cancel" : "Dismiss"}" data-dl="${esc(d.id)}" data-dl-state="${d.state}">✕</button>`}</div>
-      <div class="bar"><span style="width:${Math.max(2, d.percent)}%"></span></div>
-      ${d.state === "failed" ? `<small class="err-text">${esc(d.detail)}</small>` : ""}
-    </div>`).join("");
+  const before = (state.dl || []).filter((d) => d.state === "downloading").length;
+  state.dl = list;
+  for (const d of list) {
+    if (d.state !== "downloading") continue;
+    const s = dlSamples.get(d.id) || [];
+    s.push(d.speed || 0);
+    if (s.length > 120) s.shift();
+    dlSamples.set(d.id, s);
+  }
+  $("#downloads").innerHTML = list.map((d) => dlCard(d, false)).join("") + (list.length ? `<button class="dl-open ghost small" data-view="downloads">Open Downloads</button>` : "");
+  if (state.view === "downloads") renderDlView();
+  if (before !== list.filter((d) => d.state === "downloading").length) renderNav();
   // Fast while something's downloading; otherwise look now and then for updates Steam starts by itself.
   dlTimer = setTimeout(pollDownloads, list.some((d) => d.state === "downloading") ? 1500 : 20000);
 }
 if (T) T.event.listen("downloads-changed", ({ payload }) => { toast(`Installing ${payload.title} in the background…`); pollDownloads(); });
 if (T) T.event.listen("shop-error", ({ payload }) => toast(String(payload), true));
-$("#downloads").addEventListener("click", async (e) => {
+$("#downloads").addEventListener("click", (e) => {
   const b = e.target.closest("[data-dl]");
-  if (!b) return;
-  if (b.dataset.dlState === "downloading") {
-    if (!confirm("Cancel this download? You can resume it later by installing again.")) return;
-    try { await invoke("download_cancel", { id: b.dataset.dl }); } catch (err) { toast(String(err), true); }
-  } else await invoke("download_dismiss", { id: b.dataset.dl });
-  pollDownloads();
+  if (b) dlAction(b);
 });
 pollDownloads();
 
@@ -1404,7 +1550,7 @@ function newsHTML(n, withGame) {
 }
 async function renderAbout(g) {
   const el = $("#about");
-  if (!g || ["home", "minecraft"].includes(state.view) || state.view.startsWith("shop:")) return el.classList.add("hidden");
+  if (!g || ["home", "minecraft", "downloads"].includes(state.view) || state.view.startsWith("shop:")) return el.classList.add("hidden");
   el.classList.remove("hidden");
   const id = g.id;
   const facts = (d) => {

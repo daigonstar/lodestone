@@ -3,7 +3,9 @@
 //! - Steam: localconfig.vdf (minutes and last played per game), and the Web API owned list when a key is set;
 //! - Epic: Epic's play-time service, through Lodestone's Epic sign-in (cached, refreshed with Rescan);
 //! - Lutris: its game database; Heroic: its own play-time file (Epic, GOG and Amazon games it ran).
-//! Battle.net, EA, Ubisoft and GOG Galaxy don't keep play time anywhere Lodestone can read.
+//! - Battle.net: only when each game was last played (Battle.net.config). Battle.net keeps no play time on
+//!   disk (its own "last played" list is in an encrypted database) and Blizzard has no play-time service.
+//! EA, Ubisoft and GOG Galaxy don't keep play time anywhere Lodestone can read.
 //!
 //! Lodestone shows the larger of the store's figure and its own, so time isn't counted twice when
 //! the store also saw the game run.
@@ -48,6 +50,7 @@ pub fn all() -> HashMap<String, Played> {
     epic_cached(&mut out);
     lutris(&mut out);
     heroic(&mut out);
+    battlenet(&mut out);
     *CACHE.lock().unwrap() = Some((Instant::now(), out.clone()));
     out
 }
@@ -114,6 +117,27 @@ fn parse_epic(v: &Value) -> HashMap<String, Played> {
         .flatten()
         .filter_map(|g| Some((g["artifactId"].as_str()?.to_string(), Played { seconds: g["totalTime"].as_u64().unwrap_or(0), last: 0 })))
         .collect()
+}
+
+// ---------------- Battle.net ----------------
+
+fn battlenet(out: &mut HashMap<String, Played>) {
+    let Ok(app) = crate::stores::winapps::find("battlenet") else { return };
+    let users = crate::proton::drive_c(&app.prefix()).join("users");
+    for u in fs::read_dir(users).into_iter().flatten().flatten() {
+        if let Some(v) = fs::read_to_string(u.path().join("AppData/Roaming/Battle.net/Battle.net.config")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
+            bnet_config(&v, out);
+        }
+    }
+}
+
+/// Battle.net.config: Games.<install uid>.LastPlayed (unix time, as text).
+fn bnet_config(v: &Value, out: &mut HashMap<String, Played>) {
+    for (uid, g) in v["Games"].as_object().into_iter().flatten() {
+        let Some(last) = g["LastPlayed"].as_str().and_then(|s| s.parse::<u64>().ok()) else { continue };
+        let code = crate::stores::bnet_agent::code_for_uid(uid);
+        merge(out, format!("battlenet:{}", code.to_ascii_lowercase()), Played { seconds: 0, last });
+    }
 }
 
 // ---------------- Lutris and Heroic ----------------
@@ -186,6 +210,11 @@ mod tests {
 
         let epic = serde_json::json!([{ "accountId": "a", "artifactId": "Fortnite", "totalTime": 7200 }]);
         assert_eq!(parse_epic(&epic)["Fortnite"].seconds, 7200);
+
+        let cfg = serde_json::json!({ "Games": { "battle_net": {}, "osi": { "LastPlayed": "1795292815" }, "prometheus": { "LastPlayed": "1700000000" } } });
+        bnet_config(&cfg, &mut out);
+        assert_eq!(out["battlenet:osi"].last, 1795292815);
+        assert_eq!(out["battlenet:pro"].last, 1700000000);
 
         let h = serde_json::json!({ "1207664593": { "lastPlayed": "2026-11-21T10:26:36.522Z", "totalPlayed": 90 } });
         heroic_timestamps(&h, &mut out);

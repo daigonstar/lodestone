@@ -803,10 +803,22 @@ async fn downloads_status() -> Vec<downloads::Status> {
         let mut v = downloads::statuses();
         v.extend(steam_bg::statuses());
         v.extend(stores::bnet_agent::statuses());
+        downloads::finish(&mut v);
+        downloads::record(&v);
         v
     })
     .await
     .unwrap_or_default()
+}
+
+#[tauri::command]
+fn downloads_history() -> Vec<downloads::Past> {
+    downloads::history()
+}
+
+#[tauri::command]
+fn downloads_history_clear() {
+    downloads::clear_history()
 }
 
 fn is_steam_job(id: &str) -> bool {
@@ -1239,6 +1251,8 @@ fn main() {
             startup_view,
             refresh_series,
             proton_info,
+            downloads_history,
+            downloads_history_clear,
             mangohud_info,
             setup_mangohud,
             set_mangohud,

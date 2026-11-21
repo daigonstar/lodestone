@@ -521,14 +521,20 @@ pub fn statuses() -> Vec<Status> {
                     None => ("downloading", percent(tr.appid, &seen), "Steam is downloading".to_string()),
                 };
                 if !state.is_empty() {
-                    out.push(Status { id: key.clone(), title: tr.title.clone(), state, percent: pct, detail, seconds: tr.started.elapsed().as_secs(), kind: tr.kind });
+                    // Steam's manifest has the bytes; Lodestone works out the speed from them.
+                    let (downloaded, total) = match manifest_info(tr.appid) {
+                        Some((_, _, d, t)) if t > 0 && seen.running => (Some(d), Some(t)),
+                        _ => (None, None),
+                    };
+                    let path = steam::manifest_path(tr.appid).and_then(|m| m.parent().map(|p| p.join("common").to_string_lossy().into_owned()));
+                    out.push(Status { id: key.clone(), title: tr.title.clone(), state, percent: pct, detail, seconds: tr.started.elapsed().as_secs(), kind: tr.kind, downloaded, total, path, ..Default::default() });
                     continue;
                 }
             }
             match &tr.result {
-                Some((_, Ok(()))) => out.push(Status { id: key.clone(), title: tr.title.clone(), state: "done", percent: 100.0, detail: String::new(), seconds: tr.started.elapsed().as_secs(), kind: tr.kind }),
-                Some((_, Err(e))) => out.push(Status { id: key.clone(), title: tr.title.clone(), state: "failed", percent: 0.0, detail: e.clone(), seconds: tr.started.elapsed().as_secs(), kind: tr.kind }),
-                None => out.push(Status { id: key.clone(), title: tr.title.clone(), state: "downloading", percent: 0.0, detail: "Uninstalling…".into(), seconds: tr.started.elapsed().as_secs(), kind: tr.kind }),
+                Some((_, Ok(()))) => out.push(Status { id: key.clone(), title: tr.title.clone(), state: "done", percent: 100.0, detail: String::new(), seconds: tr.started.elapsed().as_secs(), kind: tr.kind, ..Default::default() }),
+                Some((_, Err(e))) => out.push(Status { id: key.clone(), title: tr.title.clone(), state: "failed", percent: 0.0, detail: e.clone(), seconds: tr.started.elapsed().as_secs(), kind: tr.kind, ..Default::default() }),
+                None => out.push(Status { id: key.clone(), title: tr.title.clone(), state: "downloading", percent: 0.0, detail: "Uninstalling…".into(), seconds: tr.started.elapsed().as_secs(), kind: tr.kind, ..Default::default() }),
             }
         }
         // Steam's own updates leave the panel shortly after they finish.

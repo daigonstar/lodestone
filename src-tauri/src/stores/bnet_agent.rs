@@ -47,6 +47,11 @@ const UIDS: &[(&str, &str)] = &[
     ("WLBY", "wlby"),
 ];
 
+/// The launch code (Lodestone's id) for an install uid: "prometheus" -> "PRO", "wow_classic" -> "WOW_CLASSIC".
+pub fn code_for_uid(uid: &str) -> String {
+    UIDS.iter().find(|(_, u)| u.eq_ignore_ascii_case(uid)).map(|(c, _)| c.to_string()).unwrap_or_else(|| uid.to_string())
+}
+
 pub fn uid_for(code: &str, tact: &str) -> String {
     UIDS.iter().find(|(c, _)| c.eq_ignore_ascii_case(code)).map(|(_, u)| u.to_string()).unwrap_or_else(|| tact.to_ascii_lowercase())
 }
@@ -311,6 +316,11 @@ fn status_from(key: &str, job: &Job, v: &Value) -> Status {
         detail: if installed { "Installed".into() } else if detail.is_empty() { "Starting…".into() } else { detail },
         seconds: job.started.elapsed().as_secs(),
         kind: "install",
+        downloaded: (total > 0.0).then_some(cur as u64),
+        total: (total > 0.0).then_some(total as u64),
+        speed: (rate > 0.0).then_some(rate),
+        path: v["game_dir"].as_str().or_else(|| v["install_dir"].as_str()).map(String::from),
+        ..Default::default()
     }
 }
 
@@ -348,6 +358,7 @@ pub fn statuses() -> Vec<Status> {
                 detail: if agent.is_some() { "Starting…".into() } else { "Waiting for Battle.net…".into() },
                 seconds: job.started.elapsed().as_secs(),
                 kind: "install",
+                ..Default::default()
             }));
         }
         out
