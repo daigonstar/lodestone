@@ -15,8 +15,13 @@ pub fn prefix(name: &str) -> PathBuf {
 }
 
 /// A Windows path inside a prefix, e.g. `C:\Program Files (x86)\Battle.net\Battle.net.exe`.
+/// Steam's Proton prefixes (compatdata/<id>) keep the Wine prefix one level down, in pfx/.
 pub fn drive_c(prefix: &Path) -> PathBuf {
-    prefix.join("drive_c")
+    let d = prefix.join("drive_c");
+    if !d.is_dir() && prefix.join("pfx/drive_c").is_dir() {
+        return prefix.join("pfx/drive_c");
+    }
+    d
 }
 
 pub struct Run<'a> {

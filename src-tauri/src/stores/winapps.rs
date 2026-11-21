@@ -84,9 +84,89 @@ pub fn find(id: &str) -> Result<&'static WinApp, String> {
     APPS.iter().find(|a| a.id == id).ok_or_else(|| format!("unknown app {id}"))
 }
 
+/// Wine prefixes other launchers made, where a store app may already be installed:
+/// Lutris games' prefixes, Lutris's usual ~/Games folders, and Steam's Proton prefixes (non-Steam games).
+fn foreign_prefixes() -> Vec<(PathBuf, &'static str)> {
+    let h = home();
+    let mut out: Vec<(PathBuf, &'static str)> = Vec::new();
+    let lutris_cfg = [
+        h.join(".config/lutris/games"),
+        h.join(".local/share/lutris/games"),
+        h.join(".var/app/net.lutris.Lutris/config/lutris/games"),
+        h.join(".var/app/net.lutris.Lutris/data/lutris/games"),
+    ];
+    for dir in lutris_cfg {
+        for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let Ok(text) = fs::read_to_string(e.path()) else { continue };
+            for line in text.lines() {
+                let Some(v) = line.trim().strip_prefix("prefix:") else { continue };
+                let v = v.trim().trim_matches(|c| c == '\'' || c == '"');
+                let p = match v.strip_prefix("~/") {
+                    Some(rest) => h.join(rest),
+                    None => PathBuf::from(v),
+                };
+                if p.is_absolute() {
+                    out.push((p, "Lutris"));
+                }
+            }
+        }
+    }
+    for e in fs::read_dir(h.join("Games")).into_iter().flatten().flatten() {
+        out.push((e.path(), "Lutris"));
+    }
+    for lib in super::steam::library_dirs() {
+        for e in fs::read_dir(lib.join("steamapps/compatdata")).into_iter().flatten().flatten() {
+            out.push((e.path(), "Steam"));
+        }
+    }
+    out
+}
+
+/// Where another launcher already installed this app, if Lodestone hasn't set it up itself.
+/// Checked at most every 30 seconds.
+fn foreign(app: &WinApp) -> Option<(PathBuf, &'static str)> {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    type Found = Option<(PathBuf, &'static str)>;
+    static CACHE: Mutex<Option<std::collections::HashMap<&'static str, (Instant, Found)>>> = Mutex::new(None);
+    if let Some((at, f)) = CACHE.lock().unwrap().get_or_insert_with(Default::default).get(app.id) {
+        if at.elapsed() < Duration::from_secs(30) {
+            return f.clone();
+        }
+    }
+    let found = foreign_prefixes().into_iter().find(|(p, _)| app_in(app, &proton::drive_c(p)));
+    CACHE.lock().unwrap().get_or_insert_with(Default::default).insert(app.id, (Instant::now(), found.clone()));
+    found
+}
+
+/// The app's executable is in this drive_c (the EA app after fixing its version link).
+fn app_in(app: &WinApp, drive_c: &Path) -> bool {
+    if drive_c.join(app.exe).is_file() {
+        return true;
+    }
+    if app.id == "ea" && drive_c.join("Program Files/Electronic Arts/EA Desktop").is_dir() {
+        ea_fix_link(drive_c);
+        return drive_c.join(app.exe).is_file();
+    }
+    false
+}
+
 impl WinApp {
+    /// Lodestone's own prefix, or one where Lutris or Steam already has this app installed.
     pub fn prefix(&self) -> PathBuf {
-        proton::prefix(self.id)
+        let own = proton::prefix(self.id);
+        if proton::drive_c(&own).join(self.exe).is_file() {
+            return own;
+        }
+        foreign(self).map(|f| f.0).unwrap_or(own)
+    }
+    /// "Lutris" or "Steam" when the app is used from another launcher's prefix.
+    pub fn found_in(&self) -> Option<&'static str> {
+        let own = proton::prefix(self.id);
+        if proton::drive_c(&own).join(self.exe).is_file() {
+            return None;
+        }
+        foreign(self).map(|f| f.1)
     }
     pub fn exe_path(&self) -> PathBuf {
         proton::drive_c(&self.prefix()).join(self.exe)
@@ -123,11 +203,13 @@ pub struct Status {
     pub store: &'static str,
     pub installed: bool,
     pub prefix: String,
+    /// Installed by another launcher ("Lutris", "Steam") and used from its prefix.
+    pub found_in: Option<&'static str>,
 }
 
 pub fn status() -> Vec<Status> {
     APPS.iter()
-        .map(|a| Status { id: a.id, name: a.name, store: a.store, installed: a.installed(), prefix: a.prefix().to_string_lossy().into_owned() })
+        .map(|a| Status { id: a.id, name: a.name, store: a.store, installed: a.installed(), prefix: a.prefix().to_string_lossy().into_owned(), found_in: a.found_in() })
         .collect()
 }
 
@@ -174,6 +256,9 @@ pub fn bnet_start_minimized(drive_c: &Path) {
 
 /// Launch code ("OSI") and download product ("osi") of a catalog game, for background installs.
 pub fn bnet_product(code: &str) -> Option<(String, String)> {
+    if let Some((uid, _, tact, _)) = bnet_catalog::WOW.iter().find(|w| w.0.eq_ignore_ascii_case(code)) {
+        return Some((uid.to_string(), tact.to_string()));
+    }
     let app = find("battlenet").ok()?;
     let cat = bnet_catalog::catalog(&proton::drive_c(&app.prefix()));
     let p = cat.values().find(|p| p.code.eq_ignore_ascii_case(code))?;
@@ -224,6 +309,25 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
     let mut out = Vec::new();
     let mut installed_codes = std::collections::HashSet::new();
     let aggregate = bnet_catalog::aggregate_products(&c);
+    let wow = bnet_catalog::wow_versions(&c);
+    let mut wow_installed = std::collections::HashSet::new();
+    // Retail by its product code (Battle.net's usual Play); the others by install id.
+    let wow_exec = |v: &bnet_catalog::WowVersion| if v.uid == "wow" { "--exec=launch WoW".to_string() } else { format!("--exec=launch_uid {}", v.uid) };
+    let wow_game = |v: &bnet_catalog::WowVersion, installed: bool, launch: Option<LaunchSpec>| Game {
+        id: format!("battlenet:{}", v.uid),
+        store: "battlenet".into(),
+        via: "Battle.net · Proton".into(),
+        title: v.name.clone(),
+        installed,
+        cover: art(&v.cover),
+        hero: art(&v.hero),
+        launch,
+        detect: installed.then(|| Detect::Contains(v.folder.clone())),
+        prefix: installed.then(|| path_str(&app.prefix())),
+        genres: vec!["RPG".into(), "MMO".into()],
+        series: Some("World of Warcraft".into()),
+        ..Default::default()
+    };
 
     for base in ["Program Files (x86)", "Program Files"] {
         let Ok(rd) = fs::read_dir(c.join(base)) else { continue };
@@ -234,6 +338,17 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
                 continue;
             }
             if !dir.join(".build.info").is_file() {
+                continue;
+            }
+            // World of Warcraft: one folder, one row per installed version.
+            let rows = bnet_catalog::build_info_products(&dir.join(".build.info"));
+            let versions: Vec<&bnet_catalog::WowVersion> = wow.iter().filter(|v| rows.iter().any(|r| r.eq_ignore_ascii_case(&v.tact)) && dir.join(&v.folder).is_dir()).collect();
+            if !versions.is_empty() {
+                for v in versions {
+                    wow_installed.insert(v.uid.clone());
+                    out.push(wow_game(v, true, bnet_play(app, &client, wow_exec(v)).ok()));
+                }
+                installed_codes.extend(["WoW".to_string(), "WoWC".to_string()]);
                 continue;
             }
             let Some(tact) = bnet_catalog::build_info_product(&dir.join(".build.info")).or_else(|| aggregate.get(&folder.to_ascii_lowercase()).cloned()) else { continue };
@@ -265,8 +380,17 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
 
     // Owned but not installed. Only when someone is signed in (otherwise we can't know what's owned).
     if let Some(licenses) = bnet_catalog::account_licenses(&c) {
+        let owned_wow = bnet_catalog::wow_owned(&c);
+        for v in wow.iter().filter(|v| !wow_installed.contains(&v.uid) && owned_wow.contains(bnet_catalog::WOW[v.order].1)) {
+            let install = app.run(&client, vec!["battlenet://WoW".into()]).ok();
+            let mut g = wow_game(v, false, bnet_play(app, &client, wow_exec(v)).ok());
+            g.can_install = install.is_some();
+            g.install = install;
+            out.push(g);
+        }
         for p in catalog.values() {
-            if installed_codes.contains(&p.code) {
+            // Listed per version above.
+            if installed_codes.contains(&p.code) || p.code.starts_with("WoW") {
                 continue;
             }
             let owned = !p.licenses.is_disjoint(&licenses);
@@ -657,5 +781,25 @@ mod tests {
         fs::write(&f, "Branch!STRING:0|Active!DEC:1|Build Key!HEX:16|Product!STRING:0|Version!STRING:0\nus|1|abc|pro|2.13.0\n").unwrap();
         assert_eq!(build_info_product(&f).as_deref(), Some("pro"));
         let _ = fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod foreign_tests {
+    /// A Battle.net installed by Lutris (plain prefix) or Steam (compatdata with pfx/) is found.
+    #[test]
+    fn finds_store_apps_in_other_launchers_prefixes() {
+        let root = std::env::temp_dir().join(format!("lodestone-foreign-{}", std::process::id()));
+        let app = super::find("battlenet").unwrap();
+        let lutris = root.join("battlenet");
+        let steam = root.join("compatdata/123");
+        for (p, dc) in [(&lutris, lutris.join("drive_c")), (&steam, steam.join("pfx/drive_c"))] {
+            let exe = dc.join(app.exe);
+            std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+            std::fs::write(&exe, b"MZ").unwrap();
+            assert!(super::app_in(app, &crate::proton::drive_c(p)), "{}", p.display());
+        }
+        assert!(!super::app_in(super::find("ubisoft").unwrap(), &crate::proton::drive_c(&lutris)));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

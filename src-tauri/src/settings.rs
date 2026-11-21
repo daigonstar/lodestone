@@ -30,6 +30,9 @@ pub struct Settings {
     /// Keep Steam running silently and install/update/uninstall Steam games without its windows.
     #[serde(default = "yes")]
     pub steam_background: bool,
+    /// Show MangoHud (performance overlay) in every game Lodestone starts, unless a game turns it off.
+    #[serde(default)]
+    pub mangohud: bool,
 }
 
 fn yes() -> bool {

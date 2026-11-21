@@ -139,6 +139,8 @@ dialog code { background: var(--bg-3); padding: 1px 5px; border-radius: 4px; }
 dialog label { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; font-size: 13px; color: var(--muted); }
 dialog input { background: var(--bg-3); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; color: var(--text); outline: none; }
 dialog input:focus { border-color: var(--accent); }
+.form-err { margin: 0 0 10px; padding: 9px 11px; border-radius: 8px; background: #e5484d22; border: 1px solid #e5484d88; color: #ff9592; font-size: 13px; user-select: text; }
+.form-err[hidden] { display: none; }
 .dlg-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 #dlg-log { width: min(900px, 94vw); }
 #log-text { background: #07080b; border-radius: 8px; padding: 12px; max-height: 60vh; overflow: auto; font-size: 12px; white-space: pre-wrap; user-select: text; }

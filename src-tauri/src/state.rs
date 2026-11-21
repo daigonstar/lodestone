@@ -16,6 +16,9 @@ pub struct Entry {
     pub favorite: bool,
     #[serde(default)]
     pub hidden: bool,
+    /// MangoHud for this game: on/off, or None to follow Settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mangohud: Option<bool>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

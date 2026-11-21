@@ -79,7 +79,13 @@ function toast(msg, err = false) {
   const t = document.createElement("div");
   t.className = "toast" + (err ? " err" : "");
   t.textContent = msg;
-  $("#toasts").append(t);
+  // A modal dialog sits above the page, so show the message inside the open one.
+  const dlg = [...document.querySelectorAll("dialog[open]")].pop();
+  let host = $("#toasts");
+  if (dlg) {
+    host = dlg.querySelector(":scope > .toasts") || dlg.appendChild(Object.assign(document.createElement("div"), { className: "toasts" }));
+  }
+  host.append(t);
   setTimeout(() => t.remove(), err ? 6000 : 3000);
 }
 const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -167,7 +173,7 @@ async function load(quiet = false) {
   try {
     state.games = await invoke("list_games");
     keyCache.clear();
-    try { const st = await invoke("get_settings"); state.kilnPlay = st.kiln_play !== false; state.steamBg = st.steam_background !== false; } catch { state.kilnPlay = true; state.steamBg = true; }
+    try { const st = await invoke("get_settings"); state.kilnPlay = st.kiln_play !== false; state.steamBg = st.steam_background !== false; state.mangohudAll = !!st.mangohud; } catch { state.kilnPlay = true; state.steamBg = true; }
   } catch (e) {
     toast(String(e), true);
     state.games = [];
@@ -387,7 +393,8 @@ function renderSetup() {
       : `<div><h2>Guild Wars 2 on Proton</h2><p class="muted">Lodestone downloads ArenaNet's official installer and runs it in its own Proton prefix. Sign in with your ArenaNet account in the game's launcher.</p></div>
          <button class="play" data-winsetup="gw2" ${busy ? "disabled" : ""}>${busy ? "Setting up…" : "Install Guild Wars 2"}</button>`;
   } else {
-    el.innerHTML = `<div><h2>${c.name} is set up</h2><p class="muted">${c.owned} ${c.tip}</p></div>
+    const from = app.found_in ? ` <b>Using the ${c.name} you installed with ${app.found_in}</b>, and the games installed there.` : "";
+    el.innerHTML = `<div><h2>${c.name} is set up</h2><p class="muted">${c.owned}${from} ${c.tip}</p></div>
       <div class="row-btns"><button class="ghost" data-winopen="${app.id}">Open ${c.name}</button><button class="play" onclick="document.getElementById('btn-refresh').click()">Rescan</button></div>`;
   }
 }
@@ -542,6 +549,9 @@ function renderHero() {
   fav.classList.toggle("on", g.favorite);
   $('#menu [data-act="remove"]').classList.toggle("hidden", !g.id.startsWith("custom:"));
   $('#menu [data-act="hide"]').textContent = g.hidden ? "Unhide" : "Hide from library";
+  const hud = $('#menu [data-act="mangohud"]');
+  hud.textContent = `MangoHud overlay: ${hudOn(g) ? "on" : "off"}`;
+  hud.classList.toggle("hidden", !g.installed || g.store === "steam");
   $('#menu [data-act="client"]').textContent = g.installed ? `Open ${s.label === "Custom" ? "Lutris" : g.via.split(" ")[0]}` : `Install with ${g.via.split(" ")[0]}`;
   renderMini(g);
 }
@@ -910,6 +920,30 @@ const onStoreOrderClick = (e) => {
 };
 document.querySelectorAll(".store-order").forEach((el) => (el.onclick = onStoreOrderClick));
 $("#steam-bg").onchange = async (e) => { await invoke("set_steam_background", { on: e.target.checked }); state.steamBg = e.target.checked; };
+async function renderMangohud() {
+  const m = await invoke("mangohud_info");
+  $("#mh-status").textContent = m.installed === "system" ? "MangoHud is installed on your system" : m.installed ? `MangoHud ${m.installed} is set up` : "MangoHud isn't set up yet";
+  $("#mh-setup").textContent = m.installed === "system" ? "Installed" : m.installed ? "Update" : "Set up MangoHud";
+  $("#mh-setup").disabled = m.installed === "system";
+  $("#mh-all").checked = m.all_games;
+  return m;
+}
+$("#mh-setup").onclick = async () => {
+  $("#mh-status").textContent = "Downloading MangoHud…";
+  $("#mh-setup").disabled = true;
+  try { const v = await invoke("setup_mangohud"); toast(`MangoHud ${v} is set up`); } catch (e) { toast(String(e), true); }
+  renderMangohud();
+};
+$("#mh-all").onchange = async (e) => {
+  const on = e.target.checked;
+  try {
+    if (on && !(await invoke("mangohud_info")).installed) { $("#mh-status").textContent = "Downloading MangoHud…"; await invoke("setup_mangohud"); }
+    await invoke("set_mangohud", { on });
+    state.mangohudAll = on;
+    renderHero();
+  } catch (err) { e.target.checked = !on; toast(String(err), true); }
+  renderMangohud();
+};
 $("#kiln-play").onchange = async (e) => { await invoke("set_kiln_play", { on: e.target.checked }); state.kilnPlay = e.target.checked; renderHero(); };
 $("#merge-dupes").onchange = (e) => { ls.set("mergeDupes", e.target.checked); render(); };
 $("#btn-settings").onclick = async () => {
@@ -922,6 +956,7 @@ $("#btn-settings").onclick = async () => {
   $("#form-settings").steamkey.value = s.steam_api_key || "";
   $("#form-settings").sgdb.value = s.steamgriddb_key || "";
   renderProton().catch((e) => toast(String(e), true));
+  renderMangohud().catch((e) => toast(String(e), true));
   $("#dlg-settings").showModal();
 };
 $("#form-settings").onsubmit = async (e) => {
@@ -999,6 +1034,7 @@ async function install(g) {
   }
 }
 
+const hudOn = (g) => (g.mangohud ?? state.mangohudAll) === true;
 async function setFlag(id, flag, value) {
   const g = state.games.find((x) => x.id === id);
   await invoke("set_flag", { id, flag, value });
@@ -1012,6 +1048,15 @@ async function menuAction(act) {
   if (!g) return;
   try {
     if (act === "hide") await setFlag(g.id, "hidden", !g.hidden);
+    if (act === "mangohud") {
+      const on = !hudOn(g);
+      if (on && !(await invoke("mangohud_info")).installed) {
+        toast("Setting up MangoHud…");
+        await invoke("setup_mangohud");
+      }
+      await setFlag(g.id, "mangohud", on);
+      toast(`MangoHud ${on ? "on" : "off"} for ${g.title}${on ? " from its next launch" : ""}`);
+    }
     if (act === "edit") await openMeta(g);
     if (act === "log") {
       $("#log-text").textContent = await invoke("read_log", { id: g.id });
@@ -1130,7 +1175,7 @@ $("#minimize").checked = state.minimize;
 $("#minimize").onchange = (e) => { state.minimize = e.target.checked; ls.set("minimize", state.minimize); };
 
 // Add game dialog
-$("#btn-add").onclick = () => $("#dlg-add").showModal();
+$("#btn-add").onclick = () => { $("#add-err").hidden = true; $("#dlg-add").showModal(); };
 $("#add-cancel").onclick = () => $("#dlg-add").close();
 $("#form-add").proton.onchange = (e) => {
   $("#cmd-label").textContent = e.target.checked ? "Path to the game's .exe" : "Command";
@@ -1139,14 +1184,19 @@ $("#form-add").proton.onchange = (e) => {
 $("#form-add").onsubmit = async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
+  const err = $("#add-err");
+  err.hidden = true;
+  const fail = (msg) => { err.textContent = msg; err.hidden = false; };
+  const cmd = String(f.get("command") || "").trim().replace(/^"|"$/g, "");
+  if (f.get("proton") === "on" && !/\.exe$/i.test(cmd)) return fail("Point this at the game's .exe file, e.g. /home/you/Games/MyGame/Game.exe");
   try {
     await invoke("add_custom_game", { title: f.get("title"), command: f.get("command"), store: f.get("store"), cover: f.get("cover") || null, proton: f.get("proton") === "on" });
     $("#dlg-add").close();
     e.target.reset();
     await load(true);
     toast("Game added");
-  } catch (err) {
-    toast(String(err), true);
+  } catch (e2) {
+    fail(String(e2));
   }
 };
 

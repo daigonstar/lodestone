@@ -4,6 +4,7 @@ mod downloads;
 mod friends;
 mod gog_setup;
 mod host;
+mod mangohud;
 mod gamesdb;
 mod kiln;
 mod launcher;
@@ -53,6 +54,8 @@ struct GameDto {
     art_missing: bool,
     /// You edited this game's details.
     edited: bool,
+    /// MangoHud for this game: on/off, or null to follow Settings.
+    mangohud: Option<bool>,
 }
 
 fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> impl std::future::Future<Output = Result<T, String>> {
@@ -72,7 +75,7 @@ async fn list_games(inner: State<'_, Shared>) -> Result<Vec<GameDto>, String> {
             .iter()
             .map(|g| {
                 let e = store.games.get(&g.id).cloned().unwrap_or_default();
-                GameDto { game: g.clone(), playtime: e.playtime, last_played: e.last_played, favorite: e.favorite, hidden: e.hidden, art_missing: meta::art_missing(g), edited: meta::edited(&g.id) }
+                GameDto { game: g.clone(), playtime: e.playtime, last_played: e.last_played, favorite: e.favorite, hidden: e.hidden, art_missing: meta::art_missing(g), edited: meta::edited(&g.id), mangohud: e.mangohud }
             })
             .collect();
         *inner.games.lock().unwrap() = games.into_iter().map(|g| (g.id.clone(), g)).collect();
@@ -164,6 +167,14 @@ fn launch_game(id: String, mode: Option<String>, inner: State<'_, Shared>, app: 
         _ => None,
     };
     let spec = kiln_spec.as_ref().or(game.launch.as_ref()).ok_or("No launch method for this game")?;
+    let hud = inner.store.lock().unwrap().games.get(&id).and_then(|e| e.mangohud).unwrap_or_else(|| settings::load().mangohud);
+    let with_hud;
+    let spec = if hud {
+        with_hud = mangohud::apply(spec.clone());
+        &with_hud
+    } else {
+        spec
+    };
     let child = launcher::spawn(spec, launcher::log_path(&id)).map_err(|e| format!("Couldn't start {}: {e}", spec.program))?;
     // Kiln's window can stay open after the game closes, so track the game by its own process only.
     let child = if kiln_spec.is_some() { None } else { Some(child) };
@@ -191,6 +202,7 @@ fn set_flag(id: String, flag: String, value: bool, inner: State<'_, Shared>) -> 
     match flag.as_str() {
         "favorite" => e.favorite = value,
         "hidden" => e.hidden = value,
+        "mangohud" => e.mangohud = Some(value),
         _ => return Err("unknown flag".into()),
     }
     s.save();
@@ -1056,6 +1068,23 @@ async fn setup_proton() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn mangohud_info() -> mangohud::Info {
+    mangohud::info()
+}
+
+#[tauri::command]
+async fn setup_mangohud() -> Result<String, String> {
+    mangohud::install().await
+}
+
+#[tauri::command]
+fn set_mangohud(on: bool) -> Result<(), String> {
+    let mut s = settings::load();
+    s.mangohud = on;
+    settings::save(&s)
+}
+
+#[tauri::command]
 fn set_proton(path: String) -> Result<(), String> {
     let mut s = settings::load();
     s.proton = path;
@@ -1204,6 +1233,9 @@ fn main() {
             startup_view,
             refresh_series,
             proton_info,
+            mangohud_info,
+            setup_mangohud,
+            set_mangohud,
             setup_proton,
             set_proton,
             winapp_status,
