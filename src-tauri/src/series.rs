@@ -72,6 +72,11 @@ async fn steam_tags(appids: Vec<String>) -> HashMap<String, std::collections::Ha
     out
 }
 
+/// Non-Steam games matched to a Steam app by title ("epic:abc" -> "1174180").
+pub fn cached_steam() -> HashMap<String, String> {
+    load().games.into_iter().filter_map(|(k, e)| e.steam.and_then(|v| v.into_iter().next()).map(|a| (k, a))).collect()
+}
+
 /// Cached series by Lodestone game id ("steam:220" -> "Half-Life").
 pub fn cached() -> HashMap<String, String> {
     load().games.into_iter().filter_map(|(k, e)| e.series.map(|s| (k, s))).collect()
@@ -177,7 +182,7 @@ pub fn title_key(t: &str) -> String {
 }
 
 /// Steam app ids whose store name matches this title exactly (after normalization).
-async fn steam_ids_for(title: &str) -> Option<Vec<String>> {
+pub async fn steam_ids_for(title: &str) -> Option<Vec<String>> {
     let url = format!("https://store.steampowered.com/api/storesearch/?term={}&cc=us&l=en", urlencoding::encode(title));
     let v = net::get_json(&url, &[]).await.ok()?;
     let want = title_key(title);

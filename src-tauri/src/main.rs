@@ -1,9 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod downloads;
+mod friends;
+mod gog_setup;
 mod gamesdb;
 mod kiln;
 mod launcher;
+mod meta;
 mod mc;
 mod model;
 mod net;
@@ -13,6 +16,7 @@ mod settings;
 mod shop;
 mod state;
 mod steam_appinfo;
+mod steam_bg;
 mod tools;
 mod stores;
 mod vdf;
@@ -44,6 +48,10 @@ struct GameDto {
     last_played: u64,
     favorite: bool,
     hidden: bool,
+    /// No cover, or its cover image doesn't exist.
+    art_missing: bool,
+    /// You edited this game's details.
+    edited: bool,
 }
 
 fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> impl std::future::Future<Output = Result<T, String>> {
@@ -57,12 +65,13 @@ async fn list_games(inner: State<'_, Shared>) -> Result<Vec<GameDto>, String> {
         let mut games = stores::scan_all();
         apply_series(&mut games);
         apply_kiln(&mut games);
+        meta::apply(&mut games);
         let store = inner.store.lock().unwrap();
         let out = games
             .iter()
             .map(|g| {
                 let e = store.games.get(&g.id).cloned().unwrap_or_default();
-                GameDto { game: g.clone(), playtime: e.playtime, last_played: e.last_played, favorite: e.favorite, hidden: e.hidden }
+                GameDto { game: g.clone(), playtime: e.playtime, last_played: e.last_played, favorite: e.favorite, hidden: e.hidden, art_missing: meta::art_missing(g), edited: meta::edited(&g.id) }
             })
             .collect();
         *inner.games.lock().unwrap() = games.into_iter().map(|g| (g.id.clone(), g)).collect();
@@ -299,8 +308,16 @@ async fn install_game(id: String, inner: State<'_, Shared>) -> Result<String, St
         downloads::start(&id, &game.title, &stores::gog::install_cmd(gid)?, Some(Box::new(move || stores::gog::finish_install(&g2, &t2))))?;
         return Ok("download".into());
     }
+    let mut how = "client";
+    if let Some(appid) = id.strip_prefix("steam:").and_then(|a| a.parse::<u32>().ok()).filter(|_| steam_bg::enabled()) {
+        match steam_bg::install(appid, &game.title) {
+            Ok(()) => return Ok("download".into()),
+            Err(e) if e == steam_bg::BUSY => how = "client-busy",
+            Err(e) => return Err(e),
+        }
+    }
     store_action(&inner, &id, |g| g.install.as_ref(), "installed")?;
-    Ok("client".into())
+    Ok(how.into())
 }
 
 /// Update a game: Epic/GOG games installed by Lodestone download here; Steam games go to Steam's
@@ -317,6 +334,13 @@ async fn update_game(id: String, inner: State<'_, Shared>) -> Result<String, Str
         tools::GOGDL.ensure().await?;
         downloads::start(&format!("update-{id}"), &format!("Updating {}", game.title), &stores::gog::update_cmd(gid)?, None)?;
         return Ok("download".into());
+    }
+    if let Some(appid) = id.strip_prefix("steam:").and_then(|a| a.parse::<u32>().ok()).filter(|_| steam_bg::enabled()) {
+        match steam_bg::update(appid, &game.title) {
+            Ok(()) => return Ok("download".into()),
+            Err(e) if e == steam_bg::BUSY => {}
+            Err(e) => return Err(e),
+        }
     }
     if id.starts_with("steam:") {
         let spec = stores::steam::open_url("steam://open/downloads").ok_or("Steam isn't installed")?;
@@ -339,8 +363,17 @@ async fn uninstall_game(id: String, inner: State<'_, Shared>) -> Result<String, 
         stores::gog::uninstall(gid)?;
         return Ok("done".into());
     }
+    let mut how = "client";
+    if let Some(appid) = id.strip_prefix("steam:").and_then(|a| a.parse::<u32>().ok()).filter(|_| steam_bg::enabled()) {
+        let title = inner.games.lock().unwrap().get(&id).map(|g| g.title.clone()).unwrap_or_default();
+        match steam_bg::uninstall(appid, &title) {
+            Ok(()) => return Ok("background".into()),
+            Err(e) if e == steam_bg::BUSY => how = "client-busy",
+            Err(e) => return Err(e),
+        }
+    }
     store_action(&inner, &id, |g| g.uninstall.as_ref(), "uninstalled")?;
-    Ok("client".into())
+    Ok(how.into())
 }
 
 // ---------------- accounts (Epic, GOG) ----------------
@@ -594,17 +627,41 @@ fn shop_open_external(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn downloads_status() -> Vec<downloads::Status> {
-    downloads::statuses()
+    let mut v = downloads::statuses();
+    v.extend(steam_bg::statuses());
+    v
+}
+
+fn is_steam_job(id: &str) -> bool {
+    id.starts_with("steam:") || id.starts_with("update-steam:") || id.starts_with("uninstall-steam:")
 }
 
 #[tauri::command]
-fn download_cancel(id: String) {
-    downloads::cancel(&id)
+fn download_cancel(id: String) -> Result<(), String> {
+    if is_steam_job(&id) {
+        return steam_bg::cancel(&id);
+    }
+    downloads::cancel(&id);
+    Ok(())
 }
 
 #[tauri::command]
 fn download_dismiss(id: String) {
+    if is_steam_job(&id) {
+        steam_bg::dismiss(&id);
+    }
     downloads::dismiss(&id)
+}
+
+#[tauri::command]
+fn set_steam_background(on: bool) -> Result<(), String> {
+    let mut s = settings::load();
+    s.steam_background = on;
+    settings::save(&s)?;
+    if on {
+        std::thread::spawn(steam_bg::start_silent);
+    }
+    Ok(())
 }
 
 /// Open a web page in the user's default browser.
@@ -614,6 +671,114 @@ fn open_url(url: String) -> Result<(), String> {
         return Err("only web links can be opened".into());
     }
     launcher::spawn(&LaunchSpec::new("xdg-open", &[&url]), launcher::log_path("xdg-open")).map(|_| ()).map_err(|e| e.to_string())
+}
+
+// ---------------- metadata ----------------
+
+fn game_title(inner: &Inner, id: &str) -> Result<String, String> {
+    inner.games.lock().unwrap().get(id).map(|g| g.title.clone()).ok_or_else(|| "Unknown game".into())
+}
+
+#[tauri::command]
+fn meta_get(id: String) -> meta::Override {
+    meta::get(&id)
+}
+
+#[tauri::command]
+async fn meta_save(id: String, edit: meta::Override) -> Result<(), String> {
+    meta::save_edit(&id, edit).await
+}
+
+#[tauri::command]
+fn meta_reset(id: String) {
+    meta::reset(&id)
+}
+
+#[tauri::command]
+async fn art_search(query: String) -> Result<Vec<meta::Art>, String> {
+    meta::search(&query).await
+}
+
+/// Check covers, then fill in missing ones. Returns (missing before, fixed).
+#[tauri::command]
+async fn art_fix(inner: State<'_, Shared>) -> Result<(usize, usize), String> {
+    let games: Vec<Game> = inner.games.lock().unwrap().values().cloned().collect();
+    let missing = meta::check(games.clone()).await;
+    let fixed = meta::autofix(games).await;
+    Ok((missing, fixed))
+}
+
+/// Just check which covers are missing (fast after the first time).
+#[tauri::command]
+async fn art_check(inner: State<'_, Shared>) -> Result<usize, String> {
+    let games: Vec<Game> = inner.games.lock().unwrap().values().cloned().collect();
+    Ok(meta::check(games).await)
+}
+
+#[tauri::command]
+async fn game_details(id: String, inner: State<'_, Shared>) -> Result<meta::Details, String> {
+    let title = game_title(&inner, &id)?;
+    meta::details(&id, &title).await
+}
+
+#[tauri::command]
+async fn game_protondb(id: String, inner: State<'_, Shared>) -> Result<Option<meta::ProtonDb>, String> {
+    let title = game_title(&inner, &id)?;
+    Ok(meta::protondb(&id, &title).await)
+}
+
+#[tauri::command]
+async fn games_compat(ids: Vec<String>) -> Vec<meta::Compat> {
+    meta::compat(ids).await
+}
+
+#[tauri::command]
+async fn game_news(ids: Vec<String>, inner: State<'_, Shared>) -> Result<Vec<meta::News>, String> {
+    let games: Vec<(String, String)> = {
+        let g = inner.games.lock().unwrap();
+        ids.into_iter().filter_map(|id| g.get(&id).map(|x| (id.clone(), x.title.clone()))).collect()
+    };
+    Ok(meta::news(games).await)
+}
+
+/// Show a web page (patch notes, store page) in a Lodestone window.
+#[tauri::command]
+async fn open_page(app: AppHandle, url: String, title: Option<String>) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("only https pages can be opened".into());
+    }
+    let parsed: tauri::Url = url.parse().map_err(|_| format!("bad url {url}"))?;
+    let title = title.unwrap_or_else(|| "Lodestone".into());
+    if let Some(w) = app.get_webview_window("page") {
+        w.navigate(parsed).map_err(|e| e.to_string())?;
+        let _ = w.set_title(&title);
+        let _ = w.set_focus();
+    } else {
+        WebviewWindowBuilder::new(&app, "page", WebviewUrl::External(parsed)).title(&title).inner_size(1100.0, 860.0).build().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+// ---------------- friends ----------------
+
+#[derive(Serialize)]
+struct FriendsDto {
+    friends: Vec<friends::Friend>,
+    notes: Vec<String>,
+}
+
+#[tauri::command]
+async fn friends_list(force: Option<bool>) -> Result<FriendsDto, String> {
+    let (friends, notes) = friends::list(force.unwrap_or(false)).await;
+    Ok(FriendsDto { friends, notes })
+}
+
+/// Steam friends who own this game (non-Steam games use the matching Steam game).
+#[tauri::command]
+async fn friends_owning(id: String, inner: State<'_, Shared>) -> Result<Vec<friends::Owner>, String> {
+    let title = game_title(&inner, &id)?;
+    let Some(appid) = meta::steam_appid(&id, &title).await else { return Ok(vec![]) };
+    Ok(friends::owners(appid).await)
 }
 
 // ---------------- Steam Workshop ----------------
@@ -773,8 +938,11 @@ fn get_settings() -> settings::Settings {
 }
 
 #[tauri::command]
-fn save_settings(curseforge_api_key: String, games_dir: Option<String>, steam_api_key: Option<String>) -> Result<(), String> {
+fn save_settings(curseforge_api_key: String, games_dir: Option<String>, steam_api_key: Option<String>, steamgriddb_key: Option<String>) -> Result<(), String> {
     let mut s = settings::load();
+    if let Some(k) = steamgriddb_key {
+        s.steamgriddb_key = k.trim().to_string();
+    }
     if let Some(k) = steam_api_key {
         s.steam_api_key = k.trim().to_string();
     }
@@ -825,6 +993,7 @@ fn tracker(app: AppHandle, inner: Shared) {
 }
 
 fn main() {
+    gog_setup::main_hook();
     launcher::ORIGINAL_ENV.get_or_init(|| std::env::vars().collect());
     // WebKitGTK's DMA-BUF renderer shows a blank window with NVIDIA's proprietary driver. Everywhere else
     // it's the fast GPU path, so only turn it off there.
@@ -836,6 +1005,10 @@ fn main() {
         .manage(inner.clone())
         .setup(move |app| {
             tracker(app.handle().clone(), inner.clone());
+            // Steam in the tray from the start, so playing or installing never pops its window up.
+            if steam_bg::enabled() {
+                std::thread::spawn(steam_bg::start_silent);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -886,6 +1059,20 @@ fn main() {
             kiln_status,
             kiln_open,
             set_kiln_play,
+            set_steam_background,
+            meta_get,
+            meta_save,
+            meta_reset,
+            art_search,
+            art_fix,
+            art_check,
+            game_details,
+            game_protondb,
+            games_compat,
+            game_news,
+            open_page,
+            friends_list,
+            friends_owning,
             setup_overview,
             set_onboarded,
             install_runtimes,

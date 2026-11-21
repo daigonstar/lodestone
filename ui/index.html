@@ -34,6 +34,7 @@
       </select>
       <label class="toggle"><input id="show-uninstalled" type="checkbox" /> Not installed</label>
       <label class="toggle" title="Minimize Lodestone when a game starts"><input id="minimize" type="checkbox" /> Minimize on play</label>
+      <button id="btn-friends" class="ghost friends-btn" title="Friends">👥 Friends <span id="friends-count" class="fcount hidden"></span></button>
       <div id="mini" class="mini hidden">
         <div class="mini-art"></div>
         <div class="grow"><div class="mini-title"></div><div class="mini-store"></div></div>
@@ -68,6 +69,7 @@
             <div class="menu-wrap">
               <button id="btn-more" class="icon" title="More">⋯</button>
               <div id="menu" class="menu hidden">
+                <button data-act="edit">Edit details &amp; artwork…</button>
                 <button data-act="hide">Hide from library</button>
                 <button data-act="log">View launch log</button>
                 <button data-act="runtimes">Install DirectX &amp; VC++ runtimes</button>
@@ -81,8 +83,63 @@
       </div>
     </section>
 
+    <section id="about" class="about hidden">
+      <div class="about-main">
+        <div id="about-compat" class="compat"></div>
+        <p id="about-desc" class="about-desc"></p>
+        <div id="about-facts" class="about-facts"></div>
+        <div id="about-features" class="chips"></div>
+        <div id="about-shots" class="shots"></div>
+      </div>
+      <div class="about-side">
+        <div class="about-links" id="about-links"></div>
+        <div id="about-friends-wrap" class="hidden"><h4 id="about-friends-title">Friends who own this</h4><div id="about-friends" class="owners"></div></div>
+        <h4>Latest news</h4>
+        <div id="about-news" class="about-news"><span class="muted">Loading…</span></div>
+      </div>
+    </section>
+
+    <section id="home" class="home hidden">
+      <div class="home-stats" id="home-stats"></div>
+      <div class="home-cols">
+        <div class="home-col">
+          <div class="panel">
+            <div class="panel-head"><h3>Updates</h3><button id="home-update-all" class="ghost small hidden">Update all</button></div>
+            <div id="home-updates" class="upd-list"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Continue playing</h3></div>
+            <div id="home-recent" class="recent-row"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Friends</h3><button class="ghost small" id="home-friends-all">All friends</button></div>
+            <div id="home-friends"><span class="muted">Loading…</span></div>
+          </div>
+          <div class="panel" id="home-art-panel">
+            <div class="panel-head"><h3>Artwork</h3></div>
+            <div id="home-art"></div>
+          </div>
+        </div>
+        <div class="home-col wide">
+          <div class="panel">
+            <div class="panel-head"><h3>News &amp; patch notes</h3>
+              <div class="seg small" id="news-filter"><button data-news="all" class="on">All</button><button data-news="patch">Patch notes</button></div>
+            </div>
+            <div id="home-news" class="news-list"><span class="muted">Loading…</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <div id="setup" class="setup hidden"></div>
-    <div class="grid-head"><span id="grid-title">All games</span><span id="grid-count"></span></div>
+    <div class="grid-head"><span id="grid-title">All games</span><span class="grow"></span>
+      <div class="seg small" id="layout" title="How games are shown">
+        <button data-layout="grid" title="Covers">▦ Covers</button>
+        <button data-layout="compact" title="Small covers">▪ Compact</button>
+        <button data-layout="banner" title="Wide banners">▬ Banners</button>
+        <button data-layout="list" title="List with details">☰ List</button>
+      </div>
+      <span id="grid-count"></span></div>
     <div id="filters" class="filters">
       <select id="f-genre" title="Genre"></select>
       <select id="f-series" title="Series"></select>
@@ -183,6 +240,57 @@
     </form>
   </dialog>
 
+  <aside id="friends" class="friends hidden">
+    <div class="friends-head">
+      <h3>Friends</h3>
+      <button class="icon sm" id="friends-refresh" title="Refresh">⟳</button>
+      <button class="icon sm" id="friends-close" title="Close">✕</button>
+    </div>
+    <input id="friends-q" type="search" placeholder="Find a friend" autocomplete="off" spellcheck="false" />
+    <div id="friends-notes" class="friends-notes"></div>
+    <div id="friends-list" class="friends-list"></div>
+    <div class="friends-foot">
+      <button class="ghost small" data-page="https://steamcommunity.com/chat/" data-page-title="Steam Chat">💬 Steam chat</button>
+    </div>
+  </aside>
+
+  <dialog id="dlg-meta" class="wide">
+    <form method="dialog" id="form-meta">
+      <h2>Edit details</h2>
+      <p class="hint" id="meta-hint">Changes stay in Lodestone; the store's own data isn't touched.</p>
+      <div class="meta-grid">
+        <div class="meta-fields">
+          <label>Title<input name="title" /></label>
+          <label><span>Genres <small>(comma separated)</small></span><input name="genres" placeholder="Action, RPG" /></label>
+          <label>Series<input name="series" placeholder="e.g. Final Fantasy" /></label>
+          <label><span>Steam game used for details, news and art <small>(app id or store link)</small></span><input name="steam" placeholder="automatic" /></label>
+          <label><span>Cover image <small>(link or file path)</small></span><input name="cover" /></label>
+          <label><span>Banner image <small>(link or file path)</small></span><input name="hero" /></label>
+        </div>
+        <div class="meta-preview">
+          <div class="mp-cover" id="mp-cover"></div>
+          <div class="mp-hero" id="mp-hero"></div>
+        </div>
+      </div>
+      <h3>Find artwork</h3>
+      <div class="art-search">
+        <input id="art-q" placeholder="Search by game name" />
+        <div class="seg small" id="art-kind"><button type="button" data-kind="cover" class="on">Covers</button><button type="button" data-kind="hero">Banners</button></div>
+        <button type="button" class="ghost" id="art-go">Search</button>
+      </div>
+      <p class="hint" id="art-source"></p>
+      <div id="art-results" class="art-results"></div>
+      <div class="dlg-actions">
+        <button type="button" class="ghost danger-text" id="meta-reset">Reset to store data</button>
+        <span class="grow"></span>
+        <button type="button" class="ghost" id="meta-cancel">Cancel</button>
+        <button type="submit" class="play">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-shot" class="shot-dlg"><img id="shot-img" alt="" /><button class="icon shot-close" onclick="this.closest('dialog').close()">✕</button></dialog>
+
   <dialog id="dlg-log">
     <h2>Launch log</h2>
     <pre id="log-text"></pre>
@@ -224,6 +332,11 @@
         <input name="steamkey" type="password" autocomplete="off" placeholder="Paste your key" />
       </label>
       <p class="hint">Without a key, Lodestone guesses your Steam library from Steam's local files, which also keep games you refunded. With your own free key (<a href="#" data-href="https://steamcommunity.com/dev/apikey">steamcommunity.com/dev/apikey</a>, any domain name works) it uses Steam's exact owned-games list. Your profile's <i>Game details</i> must be Public for Steam to answer.</p>
+      <h3>Steam</h3>
+      <label class="check"><input type="checkbox" id="steam-bg" /> Keep Steam in the background: Lodestone installs, updates and uninstalls Steam games itself (Steam restarts silently for a few seconds) and Steam's window stays out of the way</label>
+      <h3>Artwork</h3>
+      <label><span>SteamGridDB API key <small>(optional)</small></span><input name="sgdb" autocomplete="off" spellcheck="false" placeholder="paste key" /></label>
+      <p class="hint">Without a key, Lodestone finds artwork from Steam's store. A free SteamGridDB key (<a href="#" data-href="https://www.steamgriddb.com/profile/preferences/api">steamgriddb.com → Preferences → API</a>) adds thousands of community covers and banners, including for games that aren't on Steam.</p>
       <h3>Mods</h3>
       <label class="check"><input type="checkbox" id="kiln-play" /> Play modded games through Kiln (checks mods are deployed and loaders set up first)</label>
       <h3>Games</h3>

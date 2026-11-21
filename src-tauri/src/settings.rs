@@ -18,12 +18,18 @@ pub struct Settings {
     /// Optional Steam Web API key: exact owned-games list (refunds drop off). steamcommunity.com/dev/apikey
     #[serde(default)]
     pub steam_api_key: String,
+    /// Optional SteamGridDB API key (free at steamgriddb.com/profile/preferences/api) for artwork search.
+    #[serde(default)]
+    pub steamgriddb_key: String,
     /// The first-run setup guide has been completed or skipped.
     #[serde(default)]
     pub onboarded: bool,
     /// Play Kiln-managed games through Kiln's Guarded Play (checks mods before launching).
     #[serde(default = "yes")]
     pub kiln_play: bool,
+    /// Keep Steam running silently and install/update/uninstall Steam games without its windows.
+    #[serde(default = "yes")]
+    pub steam_background: bool,
 }
 
 fn yes() -> bool {
@@ -47,7 +53,7 @@ fn file() -> PathBuf {
 }
 
 pub fn load() -> Settings {
-    fs::read_to_string(file()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| Settings { kiln_play: true, ..Default::default() })
+    fs::read_to_string(file()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| Settings { kiln_play: true, steam_background: true, ..Default::default() })
 }
 
 pub fn save(s: &Settings) -> Result<(), String> {

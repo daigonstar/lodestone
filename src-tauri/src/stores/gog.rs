@@ -197,7 +197,7 @@ fn launch_spec(i: &Installed) -> Option<LaunchSpec> {
     s.env.insert("GAMEID".into(), "umu-default".into());
     s.env.insert("PROTONPATH".into(), tools::proton_path());
     s.env.insert("STORE".into(), "gog".into());
-    Some(s)
+    Some(crate::gog_setup::wrap(s, &pfx, Path::new(&i.path), &i.id))
 }
 
 pub fn scan() -> Vec<Game> {

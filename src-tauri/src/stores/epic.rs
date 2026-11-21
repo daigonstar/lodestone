@@ -138,6 +138,12 @@ pub fn scan() -> Vec<Game> {
         .filter_map(|g| {
             let app = g["app_name"].as_str()?;
             let meta = &g["metadata"];
+            // Epic libraries also hold Unreal Engine assets/plugins and tools (FM21 Editor, itch.io):
+            // keep only what Epic files under games.
+            let cats: Vec<&str> = meta["categories"].as_array().into_iter().flatten().filter_map(|c| c["path"].as_str()).collect();
+            if !cats.is_empty() && !cats.contains(&"games") {
+                return None;
+            }
             let i = inst.get(app);
             let path = i.and_then(|i| i["install_path"].as_str());
             // Installed build vs the newest build in the library data (refreshed on Rescan / every 30 min).

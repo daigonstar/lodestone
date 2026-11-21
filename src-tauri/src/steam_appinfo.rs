@@ -12,6 +12,10 @@ pub struct AppInfo {
     pub genres: Vec<u32>,
     pub franchise: Option<String>,
     pub tags: std::collections::HashSet<u32>,
+    /// Folder name under steamapps/common.
+    pub installdir: String,
+    /// Platforms Steam lists ("windows,macos,linux").
+    pub oslist: String,
 }
 
 struct Reader<'a> {
@@ -107,12 +111,17 @@ pub fn load(steam_root: &Path) -> HashMap<u32, AppInfo> {
         // associations: {"0": {"type": "franchise", "name": "..."}, ...} arrive as separate leaves.
         let mut assoc: Vec<(String, String, String)> = Vec::new();
         r.walk(body + 60, &mut path, &mut |path, v| {
+            if path.len() == 3 && path[1] == "config" && path[2] == "installdir" {
+                info.installdir = v;
+                return;
+            }
             if path.len() < 3 || path[1] != "common" {
                 return;
             }
             match (path.len(), path[2].to_ascii_lowercase().as_str()) {
                 (3, "name") => info.name = v,
                 (3, "type") => info.kind = v.to_ascii_lowercase(),
+                (3, "oslist") => info.oslist = v.to_ascii_lowercase(),
                 (3, "workshop_visible") => info.workshop = v == "1",
                 (4, "genres") => info.genres.extend(v.parse::<u32>().ok()),
                 (4, "store_tags") => info.tags.extend(v.parse::<u32>().ok()),

@@ -19,10 +19,46 @@ pub fn home(store: &str) -> Option<&'static str> {
     })
 }
 
+/// steam://install/ID (the store's Install button) and steam://run/ID (Play) → app id.
+fn steam_action(url: &Url) -> Option<(&'static str, u32)> {
+    let rest = url.as_str().strip_prefix("steam://")?;
+    let (verb, id) = rest.split_once('/')?;
+    let id: u32 = id.trim_end_matches('/').split(['/', '?']).next()?.parse().ok()?;
+    match verb {
+        "install" => Some(("install", id)),
+        "run" | "rungameid" => Some(("run", id)),
+        _ => None,
+    }
+}
+
 /// Links a store page hands to its desktop client (e.g. Steam's "Install" button).
-fn hand_off(url: &Url) -> bool {
+fn hand_off(app: &AppHandle, url: &Url) -> bool {
     match url.scheme() {
         "steam" => {
+            // Installs happen in the background (Steam's window stays hidden); play starts silently.
+            match steam_action(url) {
+                Some(("install", id)) if crate::steam_bg::enabled() => {
+                    let title = stores::steam::app_meta(id).map(|m| m.0).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Steam app {id}"));
+                    match crate::steam_bg::install(id, &title) {
+                        Ok(()) => {
+                            let _ = app.emit("downloads-changed", serde_json::json!({ "title": title }));
+                            return true;
+                        }
+                        Err(e) if e != crate::steam_bg::BUSY => {
+                            let _ = app.emit("shop-error", e);
+                            return true;
+                        }
+                        Err(_) => {}
+                    }
+                }
+                Some(("run", id)) => {
+                    if let Some(spec) = stores::steam::client_cmd(&["-silent", &format!("steam://rungameid/{id}")]) {
+                        let _ = launcher::spawn(&spec, launcher::log_path("steam-url"));
+                    }
+                    return true;
+                }
+                _ => {}
+            }
             if let Some(spec) = stores::steam::open_url(url.as_str()) {
                 let _ = launcher::spawn(&spec, launcher::log_path("steam-url"));
             }
@@ -107,8 +143,9 @@ pub fn show(app: &AppHandle, store: &str, x: f64, y: f64, w: f64, h: f64) -> Res
     }
     let window = app.get_window("main").ok_or("main window not found")?;
     let handle = app.clone();
+    let nav_app = app.clone();
     let builder = WebviewBuilder::new(LABEL, WebviewUrl::External(Url::parse(url).map_err(|e| e.to_string())?))
-        .on_navigation(|u| !hand_off(u))
+        .on_navigation(move |u| !hand_off(&nav_app, u))
         .on_page_load(move |wv, p| {
             if matches!(p.event(), PageLoadEvent::Finished) {
                 let _ = handle.emit("shop-page", serde_json::json!({ "url": wv.url().map(|u| u.to_string()).unwrap_or_default() }));
@@ -142,6 +179,17 @@ pub fn nav(app: &AppHandle, store: &str, action: &str) -> Result<(), String> {
         _ => return Err("unknown action".into()),
     }
     .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn reads_steam_store_links() {
+        let u = |s: &str| super::steam_action(&s.parse().unwrap());
+        assert_eq!(u("steam://install/3483"), Some(("install", 3483)));
+        assert_eq!(u("steam://run/620/"), Some(("run", 620)));
+        assert_eq!(u("steam://open/downloads"), None);
+    }
 }
 
 /// The page currently shown (for "Open in browser").

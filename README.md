@@ -19,9 +19,46 @@ All launches run in their own process group with stdin/stdout detached; output g
 ## Steam: install, uninstall, Workshop
 
 - Turn on **Not installed** to see every game you own on Steam (read offline from Steam's own `appinfo.vdf`
-  cache and `localconfig.vdf`, no API key). **⤓ Install** opens Steam's install dialog; ⋯ → **Uninstall…** asks Steam too.
+  cache and `localconfig.vdf`, no API key).
+- **Steam stays in the background.** Lodestone starts Steam silently (tray only) and installs, updates and
+  uninstalls Steam games itself, with progress in Lodestone's downloads panel, including updates Steam starts on its own.
+  Steam only reads its app manifests at startup, so Lodestone stops Steam for a few seconds, writes the change
+  (a new manifest marked "update required" to install, a cleared update schedule to update now, the game's files
+  removed to uninstall; the Proton prefix with saves is kept) and restarts it with `-silent`. Progress comes from
+  Steam's `logs/content_log.txt` and the manifests. The store browser's **Install** buttons work the same way.
+  While a Steam game is running Lodestone never restarts Steam and uses Steam's own dialogs instead.
+  Turn it off in Settings → Steam to always use Steam's dialogs.
 - Games with Workshop support get a **Workshop** button: your installed items (titles and previews from Steam's
   public API), **Browse Workshop** in a Lodestone window (sign in to Steam Community once to subscribe), or open it in Steam.
+
+## Home, details and artwork
+
+- **Home** dashboard: what's installed, pending updates (with each game's latest patch notes and an Update
+  button), games you played recently, and a news feed from your games (Steam announcements, filterable to
+  patch notes). News and patch notes open in a Lodestone window.
+- Selecting a game shows its **description, developer, publisher, release date, Metacritic score, features,
+  screenshots and latest news** under the header. Data comes from Steam's public store API. Epic, GOG and
+  other games use the Steam game with the same title, or the one you pick.
+- **ProtonDB ratings** (Platinum to Borked) show on covers, in the list view and in the details panel, which links
+  to the game's ProtonDB page. Steam games with a Linux version show **Native** instead. Ratings are cached for a day.
+- **Library layouts:** covers, compact covers, wide banners, or a list with genres, time played, last played and size.
+- **Edit details & artwork** (⋯ menu or the details panel): change the title, genres or series, pick which Steam
+  game it is, and choose covers and banners from Steam's store art or SteamGridDB. SteamGridDB needs a free
+  API key, set in Settings → Artwork. Chosen images are saved in `~/.local/share/lodestone/art`; your edits are kept in `meta.json`.
+- **Missing artwork:** Lodestone checks which covers don't exist and lists those games. **Find artwork** fills in
+  what it can. Steam games with no portrait cover get one built from their wide store header.
+- Epic's library also lists Unreal Engine assets and tools you own. Lodestone only shows the ones Epic files under games.
+
+## Friends
+
+- **👥 Friends** (top bar) opens your friends from Steam and Epic, with Steam friends grouped by in game, online
+  and offline. The top-bar count shows how many are online. If a friend is playing a game in your library, click it to open that game.
+  Profiles and **Steam chat** open in a Lodestone window (sign in to Steam Community once).
+- The **Home** dashboard shows who's playing now. A game's details list **friends who own it** and their hours,
+  and the heading changes to **Friends playing now** while any of them are playing it.
+- **Steam** uses your Web API key: friends list, status, current game, and each friend's library (cached for a day).
+  Your Friends List must be public in Steam's privacy settings. **Epic** uses Lodestone's Epic sign-in and lists names only,
+  because Epic shares online status only over its chat connection. GOG and Battle.net have no public friends API.
 
 ## Minecraft hub
 
@@ -60,6 +97,9 @@ sign-in code and hands it to its own copies of [legendary](https://github.com/de
 - **Install** downloads with progress at the bottom of the window, into `~/Games/Epic` / `~/Games/GOG`
   (change in ⚙ Settings → Games). Cancel and re-install resumes.
 - Games launch through Proton (umu) in their own prefix, with GE-Proton's per-store fixes.
+- Before a GOG game first starts, Lodestone does what GOG Galaxy does after an install: runs the game's
+  `goggame-<id>.script` (registry keys, save folders, first-run files, small fix-up tools) and puts GOG's
+  support files in the game folder. Older games such as SimCity 4 don't start without this.
 - **Uninstall**: Epic deletes the files (legendary); GOG moves the folder to the trash.
 - When Heroic is still installed, a game installed there keeps launching through Heroic until you install it via Lodestone.
 

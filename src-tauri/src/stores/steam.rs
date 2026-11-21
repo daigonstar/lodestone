@@ -293,3 +293,26 @@ pub async fn refresh_owned() -> Result<usize, String> {
 pub fn open_url(url: &str) -> Option<LaunchSpec> {
     roots().first().map(|r| client(r, &[url]))
 }
+
+/// The main Steam install: (root folder, is Flatpak).
+pub fn primary_root() -> Option<(PathBuf, bool)> {
+    roots().into_iter().next().map(|r| (r.path, r.flatpak))
+}
+
+/// Run the Steam client with these arguments (e.g. ["-silent"], ["-shutdown"]).
+pub fn client_cmd(args: &[&str]) -> Option<LaunchSpec> {
+    roots().first().map(|r| client(r, args))
+}
+
+/// The app manifest for an app, in whichever library has it.
+pub fn manifest_path(appid: u32) -> Option<PathBuf> {
+    library_dirs().into_iter().map(|l| l.join(format!("steamapps/appmanifest_{appid}.acf"))).find(|p| p.is_file())
+}
+
+/// Name and install folder from Steam's app cache.
+pub fn app_meta(appid: u32) -> Option<(String, String)> {
+    let (root, _) = primary_root()?;
+    let info = steam_appinfo::load(&root);
+    let i = info.get(&appid)?;
+    Some((i.name.clone(), i.installdir.clone()))
+}

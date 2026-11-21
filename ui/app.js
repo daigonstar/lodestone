@@ -26,7 +26,8 @@ const ls = {
 
 const state = {
   games: [],
-  view: ls.get("view", "all"),
+  view: ls.get("view", "home"),
+  layout: ls.get("layout", "grid"),
   sort: ls.get("sort", "recent"),
   search: "",
   showUninstalled: ls.get("showUninstalled", false),
@@ -153,7 +154,7 @@ async function load(quiet = false) {
   try {
     state.games = await invoke("list_games");
     keyCache.clear();
-    try { state.kilnPlay = (await invoke("get_settings")).kiln_play !== false; } catch { state.kilnPlay = true; }
+    try { const st = await invoke("get_settings"); state.kilnPlay = st.kiln_play !== false; state.steamBg = st.steam_background !== false; } catch { state.kilnPlay = true; state.steamBg = true; }
   } catch (e) {
     toast(String(e), true);
     state.games = [];
@@ -162,6 +163,7 @@ async function load(quiet = false) {
   computeSeries();
   render();
   announceUpdates();
+  loadCompat();
   // Look up series for games not checked yet (no-op when everything is cached).
   if (state.games.length) invoke("refresh_series").catch(() => {});
   if (!quiet) {
@@ -231,6 +233,7 @@ function filtered() {
   let list = state.games.filter((g) => {
     if (state.view === "hidden") return g.hidden;
     if (g.hidden) return false;
+    if (state.view === "missing" && !g.art_missing) return false;
     if (!state.showUninstalled && !g.installed && state.view !== "favorites" && !(WINAPP_FOR[state.view] && !anyInstalled)) return false;
     if (state.view === "favorites" && !g.favorite) return false;
     if (state.view === "recent" && !g.last_played) return false;
@@ -261,6 +264,7 @@ function renderNav() {
   const visible = state.games.filter((g) => !g.hidden);
   const inst = (g) => g.installed || state.showUninstalled;
   const lib = [
+    ["home", "Home", ""],
     ["all", "All games", ls.get("mergeDupes", true) ? mergeList(visible.filter(inst)).length : visible.filter(inst).length],
     ["favorites", "Favorites", visible.filter((g) => g.favorite).length],
     ["recent", "Recently played", visible.filter((g) => g.last_played && inst(g)).length],
@@ -269,6 +273,8 @@ function renderNav() {
   if (updN) lib.splice(1, 0, ["updates", "Updates", updN]);
   const kilnN = visible.filter((g) => g.kiln && (g.installed || g.kiln_managed)).length;
   if (kilnN) lib.push(["modded", "Modded (Kiln)", kilnN]);
+  const missN = visible.filter((g) => g.art_missing && inst(g)).length;
+  if (missN) lib.push(["missing", "Missing artwork", missN]);
   const hiddenN = state.games.filter((g) => g.hidden).length;
   if (hiddenN) lib.push(["hidden", "Hidden", hiddenN]);
   $("#nav-library").innerHTML = lib
@@ -284,9 +290,12 @@ function renderNav() {
 }
 
 function cardHTML(g) {
+  if (state.layout === "list") return rowHTML(g);
   const s = store(g.store);
   const others = mergeOn() ? (state.copies.get(titleKey(g.title)) || []).filter((c) => c.id !== g.id) : [];
-  const src = imgSrc(g.cover, 360);
+  const wide = state.layout === "banner";
+  const fb = !wide && g.art_missing ? fallbackArt(g) : null;
+  const src = fb ? null : wide ? imgSrc(g.hero || g.cover, 640) : imgSrc(g.cover, state.layout === "compact" ? 220 : 360);
   const run = state.running.get(g.id);
   const isSel = g.id === state.selected || (others.length && state.selKey === titleKey(g.title));
   const cls = ["card", g.installed ? "" : "uninstalled", isSel ? "selected" : "", run ? "running" : ""].join(" ");
@@ -295,14 +304,45 @@ function cardHTML(g) {
     <div class="art" style="${placeholder(g)}">
       <div class="ph">${esc(g.title)}</div>
       ${src ? `<img loading="lazy" decoding="async" src="${esc(src)}" alt="" onerror="this.remove()">` : ""}
+      ${fb ? `<div class="fb-art"><div class="fb-blur" style="background-image:url('${esc(fb)}')"></div><img loading="lazy" src="${esc(fb)}" alt="" onerror="this.parentElement.remove()"><div class="fb-title">${esc(g.title)}</div></div>` : ""}
       <span class="badges">${dots.map((d) => `<span class="badge" style="background:${d.color}" title="${d.label}"></span>`).join("")}</span>
       ${g.favorite ? '<span class="fav">★</span>' : ""}
-      ${g.kiln_managed ? '<span class="modded" title="Modded with Kiln">MODDED</span>' : ""}
+      <span class="corner-br">${g.kiln_managed ? '<span class="modded" title="Modded with Kiln">MODDED</span>' : ""}${compatBadge(g)}</span>
       ${g.installed && g.update ? `<span class="upd-badge" title="${g.update === "updating" ? "Updating" : "Update available"}">${g.update === "updating" ? "UPDATING" : "UPDATE"}</span>` : ""}
       ${run ? `<div class="state">${run.state === "launching" ? "Launching…" : "Running"}</div>` : ""}
     </div>
     <div class="title" title="${esc(g.title)}">${esc(g.title)}</div>
     <div class="sub">${g.installed ? (g.playtime ? fmtTime(g.playtime) : s.label) : "Not installed"}${others.length ? ` · +${others.length} store${others.length > 1 ? "s" : ""}` : ""}</div>
+  </div>`;
+}
+
+/** A wide image to build a cover from when a game has no portrait art (old Steam apps often don't). */
+function fallbackArt(g) {
+  const m = g.id.match(/^steam:(\d+)$/);
+  if (m) return `https://shared.steamstatic.com/store_item_assets/steam/apps/${m[1]}/header.jpg`;
+  return g.hero ? imgSrc(g.hero, 640) : null;
+}
+
+function rowHTML(g) {
+  const others = mergeOn() ? (state.copies.get(titleKey(g.title)) || []).filter((c) => c.id !== g.id) : [];
+  const src = imgSrc(g.cover, 120);
+  const run = state.running.get(g.id);
+  const isSel = g.id === state.selected || (others.length && state.selKey === titleKey(g.title));
+  const cls = ["card", "row", g.installed ? "" : "uninstalled", isSel ? "selected" : "", run ? "running" : ""].join(" ");
+  const stores = [g, ...others].map((c) => store(c.store)).filter((v, i, a) => a.findIndex((x) => x.label === v.label) === i);
+  const status = run ? `<span class="ok-text">${run.state === "launching" ? "Launching…" : "Running"}</span>`
+    : g.installed && g.update ? `<span class="upd-text">${g.update === "updating" ? "Updating" : "Update"}</span>`
+    : g.kiln_managed ? `<span class="mod-text">Modded</span>` : !g.installed ? `<span class="muted">Not installed</span>` : "";
+  return `<div class="${cls}" data-id="${esc(g.id)}" data-key="${esc(titleKey(g.title))}">
+    <div class="row-art" style="${placeholder(g)}">${src ? `<img loading="lazy" decoding="async" src="${esc(src)}" alt="" onerror="this.remove()">` : ""}</div>
+    <div class="row-main"><div class="title">${g.favorite ? '<span class="fav-s">★</span> ' : ""}${esc(g.title)}</div>
+      <div class="sub">${stores.map((d) => `<span class="dot" style="background:${d.color}"></span>${d.label}`).join(" ")}</div></div>
+    <div class="row-genres muted">${esc([...genresOf(g)].slice(0, 3).join(", "))}</div>
+    <div class="row-num" title="Time played">${g.playtime ? fmtTime(g.playtime) : "—"}</div>
+    <div class="row-num" title="Last played">${g.last_played ? fmtAgo(g.last_played) : "—"}</div>
+    <div class="row-num" title="Size on disk">${fmtSize(g.size) || "—"}</div>
+    <div class="row-pdb">${compatBadge(g) || '<span class="muted">—</span>'}</div>
+    <div class="row-status">${status}</div>
   </div>`;
 }
 
@@ -337,8 +377,10 @@ function renderGrid() {
   const list = filtered();
   state.visible = list;
   renderFilters(state.preLetter);
-  $("#grid").innerHTML = list.map(cardHTML).join("");
-  const title = { all: "All games", favorites: "Favorites", recent: "Recently played", hidden: "Hidden", modded: "Modded with Kiln", updates: "Updates available" }[state.view] || store(state.view).label;
+  $("#grid").className = `grid layout-${state.layout}`;
+  document.querySelectorAll("#layout [data-layout]").forEach((b) => b.classList.toggle("on", b.dataset.layout === state.layout));
+  $("#grid").innerHTML = (state.layout === "list" && list.length ? `<div class="row-head"><span></span><span>Game</span><span>Genres</span><span>Played</span><span>Last played</span><span>Size</span><span>ProtonDB</span><span></span></div>` : "") + list.map(cardHTML).join("");
+  const title = { missing: "Missing artwork", all: "All games", favorites: "Favorites", recent: "Recently played", hidden: "Hidden", modded: "Modded with Kiln", updates: "Updates available" }[state.view] || store(state.view).label;
   $("#grid-title").textContent = title;
   $("#grid-count").textContent = `${list.length} game${list.length === 1 ? "" : "s"}`;
   const empty = $("#empty");
@@ -361,6 +403,7 @@ function renderGrid() {
 function renderHero() {
   const g = state.games.find((x) => x.id === state.selected);
   const hero = $("#hero");
+  renderAbout(g);
   if (!g) return hero.classList.add("empty");
   hero.classList.remove("empty");
   const s = store(g.store);
@@ -529,8 +572,19 @@ function render() {
   renderNav();
   $("#nav-shop").innerHTML = SHOPS.map(([k, l]) => `<button data-view="shop:${k}" class="${state.view === "shop:" + k ? "active" : ""}"><span class="dot" style="background:${store(k).color}"></span>${l}</button>`).join("");
   const shopView = state.view.startsWith("shop:");
-  const mc = state.view === "minecraft" || shopView;
+  const home = state.view === "home";
+  const mc = state.view === "minecraft" || shopView || home;
   for (const el of ["#hero", ".grid-head", "#grid", "#setup", "#filters"]) $(el).classList.toggle("hidden", mc);
+  $("#home").classList.toggle("hidden", !home);
+  if (mc) $("#about").classList.add("hidden");
+  if (home) {
+    $("#empty").classList.add("hidden");
+    $("#mini").classList.add("hidden");
+    shopHide();
+    renderHome();
+    renderRunning();
+    return;
+  }
   $("#mc").classList.toggle("hidden", state.view !== "minecraft");
   $("#shop").classList.toggle("hidden", !shopView);
   document.querySelector("main").classList.toggle("no-scroll", shopView);
@@ -659,25 +713,31 @@ async function pollDownloads() {
   try { list = (await invoke("downloads_status")) || []; } catch {}
   for (const d of list) {
     const prev = dlSeen.get(d.id);
-    if (prev === "downloading" && d.state === "done") { toast(`${d.title} is installed`); load(true); }
+    if (prev === "downloading" && d.state === "done") {
+      toast(d.kind === "update" ? `${d.title.replace(/^Updating /, "")} is up to date` : d.kind === "uninstall" ? `${d.title.replace(/^Uninstalling /, "")} is uninstalled` : `${d.title} is installed`);
+      load(true);
+    }
     if (prev === "downloading" && d.state === "failed") toast(`${d.title} failed: ${d.detail}`, true);
     dlSeen.set(d.id, d.state);
   }
   $("#downloads").innerHTML = list.map((d) => `<div class="dl ${d.state}">
       <div class="dl-top"><span class="grow">${esc(d.title)}</span>
-        <small class="muted">${d.state === "downloading" ? `${d.percent.toFixed(1)}%` : d.state === "done" ? "Installed" : "Failed"}</small>
-        <button title="${d.state === "downloading" ? "Cancel" : "Dismiss"}" data-dl="${esc(d.id)}" data-dl-state="${d.state}">✕</button></div>
+        <small class="muted">${d.state === "downloading" ? (d.percent > 0 ? `${d.percent.toFixed(1)}%` : esc(d.detail || "")) : d.state === "done" ? ({ update: "Up to date", uninstall: "Uninstalled" }[d.kind] || "Installed") : "Failed"}</small>
+        ${d.state === "downloading" && d.kind !== "install" ? "" : `<button title="${d.state === "downloading" ? "Cancel" : "Dismiss"}" data-dl="${esc(d.id)}" data-dl-state="${d.state}">✕</button>`}</div>
       <div class="bar"><span style="width:${Math.max(2, d.percent)}%"></span></div>
       ${d.state === "failed" ? `<small class="err-text">${esc(d.detail)}</small>` : ""}
     </div>`).join("");
-  if (list.some((d) => d.state === "downloading")) dlTimer = setTimeout(pollDownloads, 1500);
+  // Fast while something's downloading; otherwise look now and then for updates Steam starts by itself.
+  dlTimer = setTimeout(pollDownloads, list.some((d) => d.state === "downloading") ? 1500 : 20000);
 }
+if (T) T.event.listen("downloads-changed", ({ payload }) => { toast(`Installing ${payload.title} in the background…`); pollDownloads(); });
+if (T) T.event.listen("shop-error", ({ payload }) => toast(String(payload), true));
 $("#downloads").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-dl]");
   if (!b) return;
   if (b.dataset.dlState === "downloading") {
     if (!confirm("Cancel this download? You can resume it later by installing again.")) return;
-    await invoke("download_cancel", { id: b.dataset.dl });
+    try { await invoke("download_cancel", { id: b.dataset.dl }); } catch (err) { toast(String(err), true); }
   } else await invoke("download_dismiss", { id: b.dataset.dl });
   pollDownloads();
 });
@@ -751,15 +811,18 @@ const onStoreOrderClick = (e) => {
   render();
 };
 document.querySelectorAll(".store-order").forEach((el) => (el.onclick = onStoreOrderClick));
+$("#steam-bg").onchange = async (e) => { await invoke("set_steam_background", { on: e.target.checked }); state.steamBg = e.target.checked; };
 $("#kiln-play").onchange = async (e) => { await invoke("set_kiln_play", { on: e.target.checked }); state.kilnPlay = e.target.checked; renderHero(); };
 $("#merge-dupes").onchange = (e) => { ls.set("mergeDupes", e.target.checked); render(); };
 $("#btn-settings").onclick = async () => {
   renderStoreOrder();
   const s = await invoke("get_settings");
   $("#kiln-play").checked = s.kiln_play !== false;
+  $("#steam-bg").checked = s.steam_background !== false;
   $("#form-settings").cf.value = s.curseforge_api_key || "";
   $("#form-settings").gamesdir.value = s.games_dir || "";
   $("#form-settings").steamkey.value = s.steam_api_key || "";
+  $("#form-settings").sgdb.value = s.steamgriddb_key || "";
   renderProton().catch((e) => toast(String(e), true));
   $("#dlg-settings").showModal();
 };
@@ -767,7 +830,7 @@ $("#form-settings").onsubmit = async (e) => {
   e.preventDefault();
   try {
     const keyChanged = e.target.steamkey.value.trim() !== ((await invoke("get_settings")).steam_api_key || "");
-    await invoke("save_settings", { curseforgeApiKey: e.target.cf.value, gamesDir: e.target.gamesdir.value, steamApiKey: e.target.steamkey.value });
+    await invoke("save_settings", { curseforgeApiKey: e.target.cf.value, gamesDir: e.target.gamesdir.value, steamApiKey: e.target.steamkey.value, steamgriddbKey: e.target.sgdb.value });
     await invoke("set_proton", { path: e.target.proton.value });
     $("#dlg-settings").close();
     toast("Settings saved");
@@ -823,6 +886,8 @@ async function install(g) {
     if (how === "download") {
       toast(`Downloading ${g.title}…`);
       pollDownloads();
+    } else if (how === "client-busy") {
+      toast(`A Steam game is running, so Steam's own install dialog opened for ${g.title}.`);
     } else {
       toast(g.store === "steam" ? `Steam's install dialog is opening for ${g.title}. Rescan when it's done.` : `Opening ${g.via.split(" ·")[0]} to install ${g.title}…`);
     }
@@ -844,6 +909,7 @@ async function menuAction(act) {
   if (!g) return;
   try {
     if (act === "hide") await setFlag(g.id, "hidden", !g.hidden);
+    if (act === "edit") await openMeta(g);
     if (act === "log") {
       $("#log-text").textContent = await invoke("read_log", { id: g.id });
       $("#dlg-log").showModal();
@@ -858,10 +924,15 @@ async function menuAction(act) {
       pollDownloads();
     }
     if (act === "uninstall") {
-      const own = g.via.startsWith("Lodestone");
-      if (own && !confirm(g.store === "gog" ? `Uninstall ${g.title}? Its folder goes to the trash.` : `Uninstall ${g.title}? Its files are deleted.`)) return;
+      const own = g.via.startsWith("Lodestone") || (g.store === "steam" && state.steamBg);
+      const msg = g.store === "gog" ? `Uninstall ${g.title}? Its folder goes to the trash.`
+        : g.store === "steam" ? `Uninstall ${g.title}? Its game files are deleted. Saves in Steam Cloud and its Proton prefix are kept.`
+        : `Uninstall ${g.title}? Its files are deleted.`;
+      if (own && !confirm(msg)) return;
       const how = await invoke("uninstall_game", { id: g.id });
       if (how === "done") { toast(`Uninstalled ${g.title}`); await load(true); }
+      else if (how === "background") { toast(`Uninstalling ${g.title}…`); pollDownloads(); }
+      else if (how === "client-busy") toast(`A Steam game is running, so Steam will ask to confirm uninstalling ${g.title}.`);
       else toast(`${g.via.split(" ·")[0]} will ask to confirm uninstalling ${g.title}.`);
     }
     if (act === "remove" && confirm(`Remove “${g.title}” from Lodestone? (Doesn't delete any files.)`)) {
@@ -925,7 +996,7 @@ $("#btn-update").onclick = async () => {
   try {
     const how = await invoke("update_game", { id: g.id });
     if (how === "download") { toast(`Updating ${g.title}…`); pollDownloads(); }
-    else toast(`Steam's Downloads page is opening. Steam updates ${g.title} there (or right before you play).`);
+    else toast(`A Steam game is running, so Steam's Downloads page opened. Steam updates ${g.title} there (or right before you play).`);
   } catch (e) { toast(String(e), true); }
 };
 $("#btn-fav").onclick = () => {
@@ -1134,3 +1205,449 @@ invoke("startup_view")
   });
 
 window.L = { invoke, state, toast, esc, fmtSize, fmtTime, imgSrc, play, $ };
+
+
+// ---------- layouts ----------
+$("#layout").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-layout]");
+  if (!b) return;
+  state.layout = b.dataset.layout;
+  ls.set("layout", state.layout);
+  renderGrid();
+});
+
+// ---------- details panel (below the hero) ----------
+const detailsCache = new Map();
+const gameNewsCache = new Map();
+function fmtDate(ts) { return ts ? new Date(ts * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : ""; }
+function newsHTML(n, withGame) {
+  const g = withGame && state.games.find((x) => x.id === n.game);
+  const src = g && imgSrc(g.cover, 120);
+  return `<div class="news" data-page="${esc(n.url)}" data-page-title="${esc(n.title)}" title="Open in Lodestone">
+    ${withGame ? `<div class="news-art" style="${g ? placeholder(g) : ""}">${src ? `<img loading="lazy" src="${esc(src)}" alt="" onerror="this.remove()">` : ""}</div>` : ""}
+    <div class="news-body">
+      <div class="news-meta">${g ? `<b>${esc(g.title)}</b> · ` : ""}${fmtDate(n.date)}${n.patch ? ' <span class="patch">Patch notes</span>' : ""}</div>
+      <div class="news-title">${esc(n.title)}</div>
+      ${n.summary ? `<div class="news-sum">${esc(n.summary)}</div>` : ""}
+    </div></div>`;
+}
+async function renderAbout(g) {
+  const el = $("#about");
+  if (!g || ["home", "minecraft"].includes(state.view) || state.view.startsWith("shop:")) return el.classList.add("hidden");
+  el.classList.remove("hidden");
+  const id = g.id;
+  const facts = (d) => {
+    const rows = [];
+    if (d && d.developers && d.developers.length) rows.push(["Developer", d.developers.join(", ")]);
+    if (d && d.publishers && d.publishers.length) rows.push(["Publisher", d.publishers.join(", ")]);
+    if (d && d.release) rows.push(["Released", d.release]);
+    if (d && d.metacritic) rows.push(["Metacritic", `<span class="mc-score">${d.metacritic}</span>`]);
+    rows.push(["Played", fmtTime(g.playtime)]);
+    if (g.size) rows.push(["Size", fmtSize(g.size)]);
+    const copies = (state.copies.get(titleKey(g.title)) || [g]).map((c) => store(c.store).label);
+    rows.push(["Owned on", [...new Set(copies)].join(", ")]);
+    return rows.map(([k, v]) => `<div><small>${k}</small><span>${k === "Metacritic" ? v : esc(String(v))}</span></div>`).join("");
+  };
+  const fill = (d) => {
+    if (state.selected !== id) return;
+    $("#about-desc").textContent = d && d.description ? d.description : "No description found for this game.";
+    $("#about-facts").innerHTML = facts(d);
+    $("#about-features").innerHTML = ((d && d.features) || []).map((f) => `<span class="chip">${esc(f)}</span>`).join("");
+    $("#about-shots").innerHTML = ((d && d.screenshots) || []).map(([t, f]) => `<button class="shot" data-shot="${esc(f)}"><img loading="lazy" src="${esc(t)}" alt=""></button>`).join("");
+    const links = [];
+    if (d && d.store_url) links.push(`<button class="ghost small" data-page="${esc(d.store_url)}" data-page-title="${esc(g.title)}">Store page</button>`);
+    if (d && d.website) links.push(`<button class="ghost small" data-href="${esc(d.website)}">Website ↗</button>`);
+    links.push(`<button class="ghost small" data-edit-meta="${esc(g.id)}">✎ Edit details</button>`);
+    $("#about-links").innerHTML = links.join("");
+    if (d && !d.steam_appid) $("#about-desc").innerHTML = `No details found. <a href="#" data-edit-meta="${esc(g.id)}">Edit details</a> to link it to the matching Steam game.`;
+  };
+  const cached = detailsCache.get(id);
+  fill(cached || null);
+  renderCompat(g, cached);
+  if (!cached) {
+    $("#about-desc").innerHTML = '<span class="muted">Loading details…</span>';
+    invoke("game_details", { id }).then((d) => { detailsCache.set(id, d); fill(d); renderCompat(g, d); }).catch(() => fill({}));
+  }
+  renderOwners(g);
+  const nc = gameNewsCache.get(id);
+  const showNews = (list) => { if (state.selected === id) $("#about-news").innerHTML = list.length ? list.slice(0, 3).map((n) => newsHTML(n, false)).join("") : '<span class="muted">No recent news.</span>'; };
+  if (nc) showNews(nc);
+  else {
+    $("#about-news").innerHTML = '<span class="muted">Loading…</span>';
+    invoke("game_news", { ids: [id] }).then((n) => { gameNewsCache.set(id, n); showNews(n); }).catch(() => showNews([]));
+  }
+}
+// ProtonDB rating (how well it runs through Proton), plus a Native badge for Linux versions.
+const protonCache = new Map();
+const TIERS = { platinum: "Platinum", gold: "Gold", silver: "Silver", bronze: "Bronze", borked: "Borked", pending: "Pending" };
+// ProtonDB ratings for the whole library: id -> "native" | tier.
+state.compat = new Map();
+let compatBusy = false;
+async function loadCompat() {
+  if (compatBusy) return;
+  const ids = state.games.filter((g) => !["minecraft", "custom"].includes(g.store) && !state.compat.has(g.id)).map((g) => g.id);
+  if (!ids.length) return;
+  compatBusy = true;
+  try {
+    for (const c of await invoke("games_compat", { ids })) {
+      state.compat.set(c.id, c.tier);
+      if (c.protondb && !protonCache.has(c.id)) protonCache.set(c.id, c.protondb);
+    }
+    // Remember checked games without a rating so they aren't asked for again this session.
+    ids.forEach((id) => { if (!state.compat.has(id)) state.compat.set(id, ""); });
+    render();
+  } catch {} finally { compatBusy = false; }
+}
+function compatOf(g) {
+  const copies = mergeOn() ? (state.copies.get(titleKey(g.title)) || []) : [];
+  for (const c of [g, ...copies]) { const t = state.compat.get(c.id); if (t) return t; }
+  return "";
+}
+function compatBadge(g, cls = "") {
+  const t = compatOf(g);
+  if (!t || t === "pending") return "";
+  const label = t === "native" ? "Native" : TIERS[t] || t;
+  const tip = t === "native" ? "Has a Linux version" : `ProtonDB: ${label}`;
+  return `<span class="pdb ${cls} tier-${esc(t)}" title="${esc(tip)}">${esc(label)}</span>`;
+}
+
+function renderCompat(g, d) {
+  const el = $("#about-compat");
+  const id = g.id;
+  const draw = (p) => {
+    if (state.selected !== id) return;
+    const parts = [];
+    if (d && d.linux) parts.push('<span class="compat-badge tier-native" title="This game has a Linux version">Native Linux</span>');
+    if (p && p.tier) {
+      const t = TIERS[p.tier] || p.tier;
+      const trend = p.trending && p.trending !== p.tier ? ` · trending ${TIERS[p.trending] || p.trending}` : "";
+      parts.push(`<button class="compat-badge tier-${esc(p.tier)}" data-page="${esc(p.url)}" data-page-title="ProtonDB · ${esc(g.title)}" title="ProtonDB community rating for running it through Proton. Click for reports and tweaks.">
+        <span class="compat-src">ProtonDB</span><b>${esc(t)}</b></button><small class="muted">${p.reports} report${p.reports === 1 ? "" : "s"}${esc(trend)}</small>`);
+    } else if (p === null && !(d && d.linux) && d && d.steam_appid) {
+      parts.push('<small class="muted">No ProtonDB reports yet</small>');
+    }
+    el.innerHTML = parts.join("");
+  };
+  if (protonCache.has(id)) return draw(protonCache.get(id));
+  el.innerHTML = "";
+  invoke("game_protondb", { id }).then((p) => { protonCache.set(id, p); draw(p); }).catch(() => draw(undefined));
+}
+
+document.addEventListener("click", (e) => {
+  const sh = e.target.closest("[data-shot]");
+  if (sh) { $("#shot-img").src = sh.dataset.shot; $("#dlg-shot").showModal(); return; }
+  const pg = e.target.closest("[data-page]");
+  if (pg) { invoke("open_page", { url: pg.dataset.page, title: pg.dataset.pageTitle || "Lodestone" }).catch((err) => toast(String(err), true)); return; }
+  const ed = e.target.closest("[data-edit-meta]");
+  if (ed) { e.preventDefault(); const g = state.games.find((x) => x.id === ed.dataset.editMeta); if (g) openMeta(g); return; }
+  const op = e.target.closest("[data-open-game]");
+  if (op) { state.view = "all"; ls.set("view", "all"); state.selected = op.dataset.openGame; ls.set("selected", state.selected); render(); document.querySelector("main").scrollTop = 0; return; }
+});
+$("#dlg-shot").addEventListener("click", (e) => { if (e.target.id === "dlg-shot" || e.target.id === "shot-img") $("#dlg-shot").close(); });
+
+// ---------- home dashboard ----------
+let homeNews = null, homeNewsAt = 0, newsFilter = "all", artChecked = false;
+function homeGames() { return state.games.filter((g) => !g.hidden); }
+async function renderHome() {
+  const vis = homeGames();
+  const inst = vis.filter((g) => g.installed);
+  const played = vis.reduce((a, g) => a + (g.playtime || 0), 0);
+  const updates = inst.filter((g) => g.update).sort((a, b) => (a.update === "updating" ? -1 : 0) - (b.update === "updating" ? -1 : 0) || a.title.localeCompare(b.title));
+  const owned = mergeList(vis).length;
+  const stat = (n, l) => `<div class="stat"><b>${n}</b><small>${l}</small></div>`;
+  $("#home-stats").innerHTML = stat(inst.length, "installed") + stat(owned, "games owned") + stat(new Set(vis.map((g) => g.store)).size, "stores") + stat(Math.round(played / 3600) + "h", "played in Lodestone") + stat(updates.length, updates.length === 1 ? "update" : "updates");
+
+  const patchFor = (g) => (homeNews || []).find((n) => n.game === g.id && n.patch);
+  $("#home-updates").innerHTML = updates.length ? updates.map((g) => {
+    const src = imgSrc(g.cover, 120);
+    const p = patchFor(g);
+    return `<div class="upd-row">
+      <div class="row-art" style="${placeholder(g)}">${src ? `<img src="${esc(src)}" alt="" onerror="this.remove()">` : ""}</div>
+      <div class="grow"><div class="title" data-open-game="${esc(g.id)}">${esc(g.title)}</div>
+        <div class="sub"><span class="dot" style="background:${store(g.store).color}"></span>${store(g.store).label} · ${g.update === "updating" ? "updating now" : `update ready${g.update_size ? ` · ${fmtSize(g.update_size)}` : ""}`}</div>
+        ${p ? `<a href="#" class="patch-link" data-page="${esc(p.url)}" data-page-title="${esc(p.title)}">${esc(p.title)}</a>` : ""}</div>
+      ${g.update === "available" ? `<button class="ghost small" data-home-update="${esc(g.id)}">Update</button>` : '<span class="spinner"></span>'}
+    </div>`;
+  }).join("") : '<div class="muted pad-s">Everything is up to date.</div>';
+  $("#home-update-all").classList.toggle("hidden", updates.filter((g) => g.update === "available").length < 2);
+
+  const recent = vis.filter((g) => g.last_played).sort((a, b) => b.last_played - a.last_played).slice(0, 8);
+  $("#home-recent").innerHTML = recent.length ? recent.map((g) => {
+    const src = imgSrc(g.cover, 220);
+    return `<button class="recent" data-open-game="${esc(g.id)}" title="${esc(g.title)}"><div class="art" style="${placeholder(g)}">${src ? `<img src="${esc(src)}" alt="" onerror="this.remove()">` : ""}</div>
+      <div class="title">${esc(g.title)}</div><div class="sub">${fmtAgo(g.last_played)}</div></button>`;
+  }).join("") : '<div class="muted pad-s">Games you play from Lodestone show up here.</div>';
+
+  const missing = vis.filter((g) => g.art_missing && (g.installed || state.showUninstalled));
+  const missingAll = vis.filter((g) => g.art_missing);
+  $("#home-art").innerHTML = missingAll.length
+    ? `<p>${missingAll.length} game${missingAll.length === 1 ? " has" : "s have"} no cover art${missing.length !== missingAll.length ? ` (${missing.length} installed)` : ""}.</p>
+       <div class="row-btns"><button class="play small" id="art-fix">Find artwork</button><button class="ghost small" data-view="missing">Show them</button></div>`
+    : `<p class="muted">${artChecked ? "Every game has cover art." : "Checking covers…"}</p>`;
+
+  renderHomeFriends();
+  if (!artChecked) {
+    artChecked = true;
+    invoke("art_check").then(() => load(true)).catch(() => {});
+  }
+  if (!homeNews || Date.now() - homeNewsAt > 30 * 60e3) {
+    homeNewsAt = Date.now();
+    // Updates and recent games first, then favorites and everything else installed (one copy per game).
+    const ids = [...new Set([...updates, ...recent, ...vis.filter((g) => g.favorite && g.installed), ...mergeList(inst)].map((g) => g.id))].slice(0, 60);
+    invoke("game_news", { ids }).then((n) => { homeNews = n; if (state.view === "home") renderHome(); }).catch(() => { homeNews = []; renderNews(); });
+  }
+  renderNews();
+}
+function renderNews() {
+  const el = $("#home-news");
+  if (!homeNews) return (el.innerHTML = '<span class="muted">Loading news from your games…</span>');
+  // At most two posts per game so one busy game doesn't fill the feed.
+  const per = new Map();
+  const list = homeNews.filter((n) => newsFilter === "all" || n.patch).filter((n) => { const c = (per.get(n.game) || 0) + 1; per.set(n.game, c); return c <= 2; }).slice(0, 30);
+  el.innerHTML = list.length ? list.map((n) => newsHTML(n, true)).join("") : '<span class="muted">No news from your games yet.</span>';
+}
+$("#news-filter").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-news]");
+  if (!b) return;
+  newsFilter = b.dataset.news;
+  document.querySelectorAll("#news-filter button").forEach((x) => x.classList.toggle("on", x === b));
+  renderNews();
+});
+async function homeUpdate(id) {
+  const g = state.games.find((x) => x.id === id);
+  try {
+    const how = await invoke("update_game", { id });
+    if (how === "download") { toast(`Updating ${g.title}…`); pollDownloads(); }
+    else toast(`Steam's Downloads page opened for ${g.title}.`);
+  } catch (e) { toast(String(e), true); }
+}
+$("#home").addEventListener("click", async (e) => {
+  const u = e.target.closest("[data-home-update]");
+  if (u) { u.disabled = true; return homeUpdate(u.dataset.homeUpdate); }
+  if (e.target.id === "art-fix") {
+    e.target.disabled = true;
+    e.target.textContent = "Searching…";
+    try {
+      const [missing, fixed] = await invoke("art_fix");
+      toast(fixed ? `Found covers for ${fixed} of ${missing} games` : `No covers found automatically. ${missing ? "Edit a game's details to search by hand" : ""}`);
+      await load(true);
+    } catch (err) { toast(String(err), true); }
+  }
+});
+$("#home-update-all").onclick = async () => {
+  for (const g of homeGames().filter((g) => g.installed && g.update === "available")) await homeUpdate(g.id);
+};
+
+// ---------- edit details & artwork ----------
+let metaGame = null, metaInit = null, artKind = "cover", artHits = [];
+function metaPreview() {
+  const f = $("#form-meta");
+  const c = f.cover.value.trim() || (metaGame && metaGame.cover) || "";
+  const h = f.hero.value.trim() || (metaGame && metaGame.hero) || "";
+  $("#mp-cover").style.backgroundImage = c ? `url("${imgSrc(c, 320)}")` : "";
+  $("#mp-hero").style.backgroundImage = h ? `url("${imgSrc(h, 640)}")` : "";
+}
+async function openMeta(g) {
+  metaGame = g;
+  let o = {};
+  try { o = await invoke("meta_get", { id: g.id }); } catch {}
+  const f = $("#form-meta");
+  f.title.value = o.title || g.title;
+  f.genres.value = (o.genres || g.genres || []).join(", ");
+  f.series.value = o.series != null ? o.series : (g.series || "");
+  f.steam.value = o.steam_appid || "";
+  f.cover.value = o.auto ? "" : (o.cover || "");
+  f.hero.value = o.hero || "";
+  metaInit = { o, title: f.title.value, genres: f.genres.value, series: f.series.value, steam: f.steam.value, cover: f.cover.value, hero: f.hero.value };
+  $("#meta-hint").textContent = `${store(g.store).label} · ${g.id}. Changes stay in Lodestone; the store's own data isn't touched.`;
+  $("#art-q").value = g.title;
+  metaPreview();
+  $("#dlg-meta").showModal();
+  artSearch();
+}
+async function artSearch() {
+  const q = $("#art-q").value.trim();
+  $("#art-results").innerHTML = '<span class="muted">Searching…</span>';
+  try {
+    artHits = await invoke("art_search", { query: q });
+    const st = await invoke("get_settings");
+    $("#art-source").textContent = st.steamgriddb_key ? "From SteamGridDB and Steam." : "From Steam's store. Add a free SteamGridDB key in Settings → Artwork for many more.";
+  } catch (e) { artHits = []; toast(String(e), true); }
+  renderArt();
+}
+function renderArt() {
+  const f = $("#form-meta");
+  const cur = artKind === "cover" ? f.cover.value : f.hero.value;
+  const list = artHits.filter((a) => a.kind === artKind);
+  $("#art-results").className = `art-results ${artKind}`;
+  $("#art-results").innerHTML = list.length ? list.map((a) => `<button type="button" class="art-hit ${a.url === cur ? "on" : ""}" data-art="${esc(a.url)}" title="${esc(a.source)} · ${esc(a.name)}">
+      <img loading="lazy" src="${esc(a.thumb)}" alt="" onerror="this.parentElement.remove()"><small>${esc(a.source)}</small></button>`).join("")
+    : '<span class="muted">Nothing found. Try a shorter name.</span>';
+}
+$("#art-go").onclick = artSearch;
+$("#art-q").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); artSearch(); } });
+$("#art-kind").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-kind]");
+  if (!b) return;
+  artKind = b.dataset.kind;
+  document.querySelectorAll("#art-kind button").forEach((x) => x.classList.toggle("on", x === b));
+  renderArt();
+});
+$("#art-results").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-art]");
+  if (!b) return;
+  $("#form-meta")[artKind === "cover" ? "cover" : "hero"].value = b.dataset.art;
+  metaPreview();
+  renderArt();
+});
+["cover", "hero"].forEach((n) => $("#form-meta")[n].addEventListener("input", metaPreview));
+$("#meta-cancel").onclick = () => $("#dlg-meta").close();
+$("#meta-reset").onclick = async () => {
+  if (!confirm(`Go back to ${store(metaGame.store).label}'s own title, artwork and genres for ${metaGame.title}?`)) return;
+  await invoke("meta_reset", { id: metaGame.id });
+  detailsCache.delete(metaGame.id);
+  $("#dlg-meta").close();
+  toast("Back to the store's details");
+  load(true);
+};
+$("#form-meta").onsubmit = async (e) => {
+  e.preventDefault();
+  const f = e.target, i = metaInit, o = i.o || {};
+  const changed = (k) => f[k].value.trim() !== String(i[k]).trim();
+  const steamNum = (f.steam.value.match(/app\/(\d+)/) || f.steam.value.match(/^\s*(\d+)\s*$/) || [])[1];
+  const edit = {
+    title: changed("title") || o.title ? f.title.value.trim() || null : null,
+    genres: changed("genres") || o.genres ? f.genres.value.split(",").map((x) => x.trim()).filter(Boolean) : null,
+    series: changed("series") || o.series != null ? f.series.value.trim() : null,
+    steam_appid: steamNum ? Number(steamNum) : null,
+    cover: f.cover.value.trim() || (o.auto ? o.cover : null) || null,
+    hero: f.hero.value.trim() || null,
+  };
+  const btn = f.querySelector('button[type="submit"]');
+  btn.disabled = true;
+  btn.textContent = "Saving…";
+  try {
+    await invoke("meta_save", { id: metaGame.id, edit });
+    detailsCache.delete(metaGame.id);
+    gameNewsCache.delete(metaGame.id);
+    $("#dlg-meta").close();
+    toast(`Saved ${edit.title || metaGame.title}`);
+    await load(true);
+  } catch (err) { toast(String(err), true); }
+  btn.disabled = false;
+  btn.textContent = "Save";
+};
+
+
+// ---------- friends ----------
+const friends = { list: [], notes: [], at: 0, open: false, owners: new Map() };
+const STATUS_TEXT = { ingame: "In game", online: "Online", away: "Away", offline: "Offline", unknown: "" };
+function avatarHTML(f, size = 34) {
+  const h = hue(f.name);
+  return f.avatar
+    ? `<img class="av" style="width:${size}px;height:${size}px" src="${esc(f.avatar)}" alt="" onerror="this.style.visibility='hidden'">`
+    : `<span class="av ph" style="width:${size}px;height:${size}px;background:hsl(${h} 45% 30%)">${esc((f.name[0] || "?").toUpperCase())}</span>`;
+}
+function inLibrary(gid) { return gid && state.games.some((g) => g.id === gid); }
+function friendLine(f) {
+  if (f.status === "ingame" && f.game) {
+    return inLibrary(f.game_id) ? `Playing <a href="#" data-open-game="${esc(f.game_id)}">${esc(f.game)}</a>` : `Playing ${esc(f.game)}`;
+  }
+  if (f.status === "offline" && f.last_online) return `Last online ${fmtAgo(f.last_online)}`;
+  return f.store === "epic" ? "Epic Games friend" : STATUS_TEXT[f.status];
+}
+function friendRow(f) {
+  return `<div class="friend ${f.status}">
+    <div class="av-wrap">${avatarHTML(f)}<span class="pres"></span></div>
+    <div class="grow"><div class="fname">${esc(f.name)} <span class="dot" style="background:${store(f.store).color}" title="${store(f.store).label}"></span></div>
+      <div class="fline">${friendLine(f)}</div></div>
+    ${f.profile ? `<button class="icon sm" title="Profile" data-page="${esc(f.profile)}" data-page-title="${esc(f.name)}">↗</button>` : ""}
+  </div>`;
+}
+async function loadFriends(force = false) {
+  try {
+    const r = await invoke("friends_list", { force });
+    friends.list = r.friends || [];
+    friends.notes = r.notes || [];
+    friends.at = Date.now();
+  } catch (e) { friends.notes = [String(e)]; }
+  const on = friends.list.filter((f) => ["ingame", "online", "away"].includes(f.status)).length;
+  const c = $("#friends-count");
+  c.textContent = on;
+  c.classList.toggle("hidden", !on);
+  if (friends.open) renderFriends();
+  if (state.view === "home") renderHomeFriends();
+}
+function renderFriends() {
+  const q = $("#friends-q").value.trim().toLowerCase();
+  const list = friends.list.filter((f) => !q || f.name.toLowerCase().includes(q));
+  const groups = [
+    ["In game", list.filter((f) => f.status === "ingame")],
+    ["Online", list.filter((f) => f.status === "online" || f.status === "away")],
+    ["Offline", list.filter((f) => f.status === "offline")],
+    ["Epic Games", list.filter((f) => f.store === "epic")],
+  ].filter(([, l]) => l.length);
+  $("#friends-notes").innerHTML = friends.notes.map((n) => `<div class="err-text">${esc(n)}</div>`).join("")
+    + (!friends.list.length && !friends.notes.length ? `<p class="muted">No friends to show. Add a Steam Web API key in Settings for Steam friends, and sign in to Epic in Accounts for Epic friends.</p>` : "");
+  $("#friends-list").innerHTML = groups.map(([name, l]) => `<div class="fgroup"><div class="fgroup-h">${name} <span>${l.length}</span></div>${l.map(friendRow).join("")}</div>`).join("");
+}
+function toggleFriends(on = !friends.open) {
+  friends.open = on;
+  $("#friends").classList.toggle("hidden", !on);
+  shopSuspend(on);
+  if (on) {
+    renderFriends();
+    if (Date.now() - friends.at > 30e3) loadFriends();
+    $("#friends-q").focus();
+  }
+}
+$("#btn-friends").onclick = () => toggleFriends();
+$("#friends-close").onclick = () => toggleFriends(false);
+$("#friends-refresh").onclick = () => loadFriends(true);
+$("#friends-q").addEventListener("input", renderFriends);
+$("#home-friends-all").onclick = () => toggleFriends(true);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && friends.open && !document.querySelector("dialog[open]")) toggleFriends(false); });
+// Opening a friend's game from the panel: close it so the details are visible.
+$("#friends").addEventListener("click", (e) => { if (e.target.closest("[data-open-game]")) toggleFriends(false); });
+
+function renderHomeFriends() {
+  const el = $("#home-friends");
+  if (!el) return;
+  if (!friends.at) return (el.innerHTML = '<span class="muted">Loading…</span>');
+  const playing = friends.list.filter((f) => f.status === "ingame");
+  const online = friends.list.filter((f) => f.status === "online" || f.status === "away");
+  if (!friends.list.length) {
+    el.innerHTML = `<p class="muted">${friends.notes.length ? esc(friends.notes[0]) : "Add a Steam Web API key in Settings to see your Steam friends here."}</p>`;
+    return;
+  }
+  el.innerHTML = (playing.length ? playing.slice(0, 6).map(friendRow).join("") : "")
+    + (online.length ? `<div class="avatars">${online.slice(0, 12).map((f) => `<span title="${esc(f.name)} · ${STATUS_TEXT[f.status]}">${avatarHTML(f, 30)}</span>`).join("")}</div>` : "")
+    + `<p class="muted small-p">${playing.length} playing · ${online.length} online · ${friends.list.length} friends</p>`;
+}
+
+async function renderOwners(g) {
+  const wrap = $("#about-friends-wrap");
+  const id = g.id;
+  const show = (list) => {
+    if (state.selected !== id) return;
+    wrap.classList.toggle("hidden", !list.length);
+    if (!list.length) return;
+    const now = list.filter((o) => o.friend.game_id === id || (o.friend.status === "ingame" && o.friend.game && titleKey(o.friend.game) === titleKey(g.title)));
+    $("#about-friends-title").textContent = now.length ? `Friends playing now: ${now.length}` : `Friends who own this: ${list.length}`;
+    $("#about-friends").innerHTML = list.slice(0, 8).map((o) => `<div class="owner ${o.friend.status}" title="${esc(o.friend.name)}">
+        <div class="av-wrap">${avatarHTML(o.friend, 28)}<span class="pres"></span></div>
+        <span class="grow">${esc(o.friend.name)}</span><small class="muted">${o.hours >= 1 ? `${Math.round(o.hours)} h` : o.hours > 0 ? "<1 h" : "not played"}</small></div>`).join("")
+      + (list.length > 8 ? `<small class="muted">+${list.length - 8} more</small>` : "");
+  };
+  const c = friends.owners.get(id);
+  if (c) return show(c);
+  wrap.classList.add("hidden");
+  try {
+    const list = await invoke("friends_owning", { id });
+    friends.owners.set(id, list);
+    show(list);
+  } catch { show([]); }
+}
+
+loadFriends();
+setInterval(() => loadFriends(), 90e3);

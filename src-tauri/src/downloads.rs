@@ -29,6 +29,8 @@ pub struct Status {
     pub percent: f32,
     pub detail: String,
     pub seconds: u64,
+    /// install, update, uninstall
+    pub kind: &'static str,
 }
 
 pub fn start(id: &str, title: &str, spec: &LaunchSpec, finish: Option<Box<dyn FnOnce() -> Result<(), String> + Send>>) -> Result<(), String> {
@@ -91,7 +93,8 @@ pub fn statuses() -> Vec<Status> {
             Some(Ok(())) => ("done", 100.0, String::new()),
             Some(Err(e)) => ("failed", pct, e.clone()),
         };
-        out.push(Status { id: id.clone(), title: j.title.clone(), state, percent, detail, seconds: j.started.elapsed().as_secs() });
+        let kind = if id.starts_with("update-") { "update" } else { "install" };
+        out.push(Status { id: id.clone(), title: j.title.clone(), state, percent, detail, seconds: j.started.elapsed().as_secs(), kind });
     }
     out.sort_by(|a, b| a.title.cmp(&b.title));
     out
