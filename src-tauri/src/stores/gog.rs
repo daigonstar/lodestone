@@ -257,6 +257,15 @@ pub fn finish_install(id: &str, title: &str) -> Result<(), String> {
     write("installed.json", &list)
 }
 
+/// Use a game folder you picked (detection missed it, or you moved the game).
+pub fn set_path(id: &str, path: &str) -> Result<(), String> {
+    let title = read::<Vec<Entry>>("library.json").into_iter().find(|e| e.id == id).map(|e| e.title).unwrap_or_default();
+    let mut list = installed();
+    list.retain(|i| i.id != id);
+    list.push(Installed { id: id.into(), title, path: path.into() });
+    write("installed.json", &list)
+}
+
 /// Move the game folder to the trash and forget it.
 pub fn uninstall(id: &str) -> Result<(), String> {
     let mut list = installed();

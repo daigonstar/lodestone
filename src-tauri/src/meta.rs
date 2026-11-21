@@ -3,7 +3,8 @@
 //! - artwork search: Steam's store art (no key needed) and SteamGridDB when you add a free key;
 //! - finding games whose cover is missing and filling them in automatically;
 //! - details (description, developer, release date, screenshots) and news / patch notes from
-//!   Steam's public store APIs. Non-Steam games use the Steam game with the same title.
+//!   Steam's public store APIs. Non-Steam games use the Steam game with the same title, or else
+//!   GOG's public catalog, Epic's game metadata, or Wikipedia/Wikidata (Battle.net, EA, Ubisoft...).
 
 use crate::model::Game;
 use crate::{net, series, settings, state};
@@ -28,9 +29,56 @@ pub struct Override {
     /// Use this Steam game's details, news and art.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steam_appid: Option<u32>,
+    /// Where the game is installed, when Lodestone's detection missed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_dir: Option<String>,
+    /// The program to run for it (optional; .exe files run through Proton).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exe: Option<String>,
     /// Filled in by "Fix missing artwork" rather than by you (your own edits always win).
     #[serde(default)]
     pub auto: bool,
+}
+
+/// Run a program you picked for a game: .exe through Proton (in the store's prefix when the game
+/// has one), anything else directly, from its own folder.
+fn exe_spec(g: &Game, exe: &std::path::Path) -> Option<crate::model::LaunchSpec> {
+    let cwd = exe.parent().map(|p| p.to_path_buf());
+    let mut s = if exe.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe")) {
+        let prefix = g.prefix.as_ref().map(PathBuf::from).unwrap_or_else(|| {
+            let safe: String = g.id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect();
+            crate::proton::prefix(&format!("game-{safe}"))
+        });
+        crate::proton::spec(crate::proton::Run { prefix: &prefix, exe, args: vec![], store: None, game_id: "umu-default" }).ok()?
+    } else {
+        crate::model::LaunchSpec::new(exe.to_string_lossy(), &[])
+    };
+    s.cwd = cwd;
+    Some(s)
+}
+
+/// Your install location: the game counts as installed there, and runs your program if you picked one.
+fn apply_location(g: &mut Game, o: &Override) {
+    let Some(dir) = o.install_dir.as_ref().map(std::path::Path::new).filter(|d| d.is_dir()) else { return };
+    // Epic and GOG games were handed to their store's records when you saved.
+    if !g.installed {
+        g.installed = true;
+        g.can_install = false;
+    }
+    let exe = o.exe.as_ref().map(std::path::Path::new).filter(|e| e.is_file());
+    if let Some(e) = exe {
+        if let Some(s) = exe_spec(g, e) {
+            g.launch = Some(s);
+            if g.prefix.is_none() && e.extension().is_some_and(|x| x.eq_ignore_ascii_case("exe")) {
+                let safe: String = g.id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect();
+                g.prefix = Some(crate::proton::prefix(&format!("game-{safe}")).to_string_lossy().into_owned());
+            }
+        }
+    }
+    let name = exe.and_then(|e| e.file_name()).or_else(|| dir.file_name()).map(|n| n.to_string_lossy().into_owned());
+    if let Some(n) = name {
+        g.detect = Some(crate::model::Detect::Contains(n));
+    }
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -92,6 +140,7 @@ pub fn apply(games: &mut [Game]) {
             if let Some(s) = &o.series {
                 g.series = (!s.trim().is_empty()).then(|| s.clone());
             }
+            apply_location(g, o);
         }
     })
 }
@@ -157,6 +206,32 @@ fn remove_old_art(old: &Override, new: &Override) {
 }
 
 pub async fn save_edit(id: &str, mut o: Override) -> Result<(), String> {
+    let clean = |s: Option<String>| s.map(|x| x.trim().trim_matches('"').to_string()).filter(|x| !x.is_empty());
+    o.install_dir = clean(o.install_dir.take());
+    o.exe = clean(o.exe.take());
+    if let Some(d) = &o.install_dir {
+        if !std::path::Path::new(d).is_dir() {
+            return Err(format!("Install folder not found: {d}"));
+        }
+    }
+    if let Some(e) = &o.exe {
+        if !std::path::Path::new(e).is_file() {
+            return Err(format!("Program not found: {e}"));
+        }
+        if o.install_dir.is_none() {
+            o.install_dir = std::path::Path::new(e).parent().map(|p| p.to_string_lossy().into_owned());
+        }
+    }
+    // Epic and GOG games: tell the store's own records, so Play, updates and uninstall work as usual.
+    if let Some(d) = o.install_dir.clone().filter(|d| Some(d) != get(id).install_dir.as_ref()) {
+        if let Some(app) = id.strip_prefix("epic:") {
+            crate::stores::epic::run(vec!["-y".into(), "import".into(), "--skip-dlcs".into(), app.into(), d.clone()])
+                .await
+                .map_err(|e| format!("Epic (legendary) couldn't use that folder: {e}"))?;
+        } else if let Some(gid) = id.strip_prefix("gog:") {
+            crate::stores::gog::set_path(gid, &d)?;
+        }
+    }
     if let Some(u) = o.cover.clone().filter(|u| !u.is_empty()) {
         o.cover = Some(keep(id, "cover", &u).await?);
     } else {
@@ -402,6 +477,9 @@ pub struct Details {
     /// Has a Linux version on Steam.
     #[serde(default)]
     pub linux: bool,
+    /// Where the details came from: Steam, GOG, Epic or Wikipedia.
+    #[serde(default)]
+    pub source: String,
 }
 
 fn cache_path(kind: &str, appid: u32) -> PathBuf {
@@ -443,7 +521,7 @@ pub fn plain(s: &str) -> String {
 }
 
 pub async fn details(id: &str, title: &str) -> Result<Details, String> {
-    let Some(appid) = steam_appid(id, title).await else { return Ok(Details::default()) };
+    let Some(appid) = steam_appid(id, title).await else { return Ok(other_details(id, title).await) };
     if let Some(d) = read_cache::<Details>("details", appid, 7 * 86400) {
         return Ok(d);
     }
@@ -462,9 +540,204 @@ pub async fn details(id: &str, title: &str) -> Result<Details, String> {
         screenshots: d["screenshots"].as_array().into_iter().flatten().filter_map(|s| Some((s["path_thumbnail"].as_str()?.to_string(), s["path_full"].as_str()?.to_string()))).take(8).collect(),
         store_url: format!("https://store.steampowered.com/app/{appid}/"),
         linux: d["platforms"]["linux"].as_bool().unwrap_or(false),
+        source: "Steam".into(),
     };
     write_cache("details", appid, &out);
     Ok(out)
+}
+
+fn other_cache(id: &str) -> PathBuf {
+    let safe: String = id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+    state::data_dir().join("cache/details-other").join(format!("{safe}.json"))
+}
+
+/// Details for games without a Steam match: the store's own catalog first, then Wikipedia.
+/// Cached a week (also when nothing was found).
+async fn other_details(id: &str, title: &str) -> Details {
+    let cache = other_cache(id);
+    if let Some(d) = fs::metadata(&cache)
+        .ok()
+        .and_then(|m| m.modified().ok()?.elapsed().ok())
+        .filter(|age| age.as_secs() < 7 * 86400)
+        .and_then(|_| serde_json::from_str::<Details>(&fs::read_to_string(&cache).ok()?).ok())
+    {
+        return d;
+    }
+    let mut d = match id.split_once(':') {
+        Some(("gog", gid)) => gog_details(gid).await.unwrap_or_default(),
+        Some(("epic", app)) => epic_details(app).unwrap_or_default(),
+        _ => Details::default(),
+    };
+    // Fill in what the store didn't say (or everything, for stores without a public catalog).
+    if d.description.is_empty() || d.developers.is_empty() || d.release.is_empty() {
+        if let Some(w) = wikipedia_details(title).await {
+            if d.description.is_empty() {
+                d.description = w.description;
+                d.store_url = w.store_url;
+                d.source = w.source;
+            }
+            if d.developers.is_empty() {
+                d.developers = w.developers;
+            }
+            if d.publishers.is_empty() {
+                d.publishers = w.publishers;
+            }
+            if d.release.is_empty() {
+                d.release = w.release;
+            }
+            if d.website.is_empty() {
+                d.website = w.website;
+            }
+        }
+    }
+    let _ = fs::create_dir_all(cache.parent().unwrap());
+    let _ = fs::write(&cache, serde_json::to_string(&d).unwrap_or_default());
+    d
+}
+
+/// "2005-11-03T00:00:00+01:00" -> "Nov 3, 2005" (the format Steam uses).
+fn pretty_date(iso: &str) -> String {
+    let d = iso.trim_start_matches('+');
+    let mut it = d.get(..10).unwrap_or("").split('-');
+    let (Some(y), Some(m), Some(day)) = (it.next(), it.next().and_then(|m| m.parse::<usize>().ok()), it.next().and_then(|d| d.parse::<u32>().ok())) else { return String::new() };
+    const M: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    match (M.get(m.wrapping_sub(1)), day) {
+        (Some(mn), 1..=31) => format!("{mn} {day}, {y}"),
+        (Some(mn), _) => format!("{mn} {y}"),
+        _ => y.to_string(),
+    }
+}
+
+/// GOG's public catalog: description, developers, publisher, release date, screenshots.
+async fn gog_details(gid: &str) -> Option<Details> {
+    let v = net::get_json(&format!("https://api.gog.com/v2/games/{gid}?locale=en-US"), &[]).await.ok()?;
+    let e = &v["_embedded"];
+    let names = |a: &serde_json::Value| a.as_array().into_iter().flatten().filter_map(|x| x["name"].as_str().map(String::from)).collect::<Vec<_>>();
+    let mut publishers = names(&e["publishers"]);
+    if publishers.is_empty() {
+        publishers.extend(e["publisher"]["name"].as_str().map(String::from));
+    }
+    let shots = e["screenshots"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| s["_links"]["self"]["href"].as_str())
+        .map(|h| (h.replace("{formatter}", "product_card_v2_thumbnail_271"), h.replace("{formatter}", "ggvgl")))
+        .take(8)
+        .collect();
+    let desc = plain(v["description"].as_str().unwrap_or(""));
+    Some(Details {
+        description: first_sentences(&desc, 600),
+        developers: names(&e["developers"]),
+        publishers,
+        release: pretty_date(e["product"]["globalReleaseDate"].as_str().unwrap_or("")),
+        features: e["features"].as_array().into_iter().flatten().filter_map(|f| f["name"].as_str().map(String::from)).take(8).collect(),
+        screenshots: shots,
+        store_url: v["_links"]["store"]["href"].as_str().unwrap_or("").to_string(),
+        source: "GOG".into(),
+        ..Default::default()
+    })
+}
+
+/// Epic's game metadata, which legendary keeps on disk.
+fn epic_details(app: &str) -> Option<Details> {
+    let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(crate::stores::epic::config_dir().join("metadata").join(format!("{app}.json"))).ok()?).ok()?;
+    let m = &v["metadata"];
+    let desc = plain(m["description"].as_str().unwrap_or(""));
+    Some(Details {
+        description: first_sentences(&desc, 600),
+        developers: m["developer"].as_str().filter(|s| !s.is_empty()).map(|s| vec![s.to_string()]).unwrap_or_default(),
+        release: m["releaseInfo"][0]["dateAdded"].as_str().map(pretty_date).unwrap_or_default(),
+        source: "Epic".into(),
+        ..Default::default()
+    })
+}
+
+/// Keep descriptions to a readable length, cut at a sentence end.
+fn first_sentences(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max).collect();
+    match cut.rfind(". ") {
+        Some(i) if i > max / 3 => cut[..=i].to_string(),
+        _ => format!("{}…", cut.trim_end()),
+    }
+}
+
+/// "World of Warcraft: Mists of Pandaria (video game)" -> "world of warcraft mists of pandaria".
+fn norm_title(s: &str) -> String {
+    let s = s.split(" (").next().unwrap_or(s).to_lowercase();
+    s.chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Pick the Wikipedia article for a game: the same title, or else the longest title the game's
+/// name starts with ("…: Mists of Pandaria Classic" -> "…: Mists of Pandaria"). None rather than a guess.
+fn pick_article<'a>(title: &str, results: &'a [String]) -> Option<&'a String> {
+    let want = norm_title(title);
+    if let Some(r) = results.iter().find(|r| norm_title(r) == want) {
+        return Some(r);
+    }
+    results
+        .iter()
+        .filter(|r| {
+            let n = norm_title(r);
+            n.split(' ').count() >= 2 && (want.starts_with(&format!("{n} ")) || n.starts_with(&format!("{want} ")))
+        })
+        .max_by_key(|r| norm_title(r).len())
+}
+
+/// The game's Wikipedia summary, plus developer, publisher, release date and website from Wikidata.
+async fn wikipedia_details(title: &str) -> Option<Details> {
+    let q = urlencoding::encode(&format!("{title} video game")).into_owned();
+    let s = net::get_json(&format!("https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={q}&srlimit=6&format=json"), &[]).await.ok()?;
+    let results: Vec<String> = s["query"]["search"].as_array().into_iter().flatten().filter_map(|r| r["title"].as_str().map(String::from)).collect();
+    let page = pick_article(title, &results)?;
+    let sum = net::get_json(&format!("https://en.wikipedia.org/api/rest_v1/page/summary/{}", urlencoding::encode(&page.replace(' ', "_"))), &[]).await.ok()?;
+    // Only articles about games or their expansions (not a film or a novel with the same name).
+    let what = sum["description"].as_str().unwrap_or("").to_lowercase();
+    if !what.contains("game") && !what.contains("expansion") {
+        return None;
+    }
+    let mut d = Details {
+        description: first_sentences(sum["extract"].as_str().unwrap_or(""), 600),
+        store_url: sum["content_urls"]["desktop"]["page"].as_str().unwrap_or("").to_string(),
+        source: "Wikipedia".into(),
+        ..Default::default()
+    };
+    if let Some(q) = sum["wikibase_item"].as_str() {
+        if let Ok(w) = net::get_json(&format!("https://www.wikidata.org/wiki/Special:EntityData/{q}.json"), &[]).await {
+            let claims = &w["entities"][q]["claims"];
+            let ids = |p: &str| claims[p].as_array().into_iter().flatten().filter_map(|c| c["mainsnak"]["datavalue"]["value"]["id"].as_str().map(String::from)).collect::<Vec<_>>();
+            let (devs, pubs) = (ids("P178"), ids("P123"));
+            let all: Vec<String> = devs.iter().chain(pubs.iter()).cloned().collect();
+            let mut labels: HashMap<String, String> = HashMap::new();
+            if !all.is_empty() {
+                let url = format!("https://www.wikidata.org/w/api.php?action=wbgetentities&ids={}&props=labels&languages=en&format=json", all.join("|"));
+                if let Ok(l) = net::get_json(&url, &[]).await {
+                    for id in &all {
+                        if let Some(n) = l["entities"][id]["labels"]["en"]["value"].as_str() {
+                            labels.insert(id.clone(), n.to_string());
+                        }
+                    }
+                }
+            }
+            let named = |v: &[String]| v.iter().filter_map(|i| labels.get(i).cloned()).collect::<Vec<_>>();
+            d.developers = named(&devs);
+            d.publishers = named(&pubs);
+            // The earliest publication date.
+            d.release = claims["P577"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c["mainsnak"]["datavalue"]["value"]["time"].as_str())
+                .min()
+                .map(pretty_date)
+                .unwrap_or_default();
+            d.website = claims["P856"][0]["mainsnak"]["datavalue"]["value"].as_str().unwrap_or("").to_string();
+        }
+    }
+    Some(d)
 }
 
 /// ProtonDB's community rating for how a game runs through Proton.
@@ -591,6 +864,52 @@ pub async fn news(games: Vec<(String, String)>) -> Vec<News> {
     all.sort_by(|a, b| b.date.cmp(&a.date));
     all.dedup_by(|a, b| a.url == b.url);
     all
+}
+
+#[cfg(test)]
+mod other_tests {
+    #[test]
+    fn picks_the_right_wikipedia_article() {
+        let r = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let wow = r(&["World of Warcraft: Forever", "World of Warcraft", "World of Warcraft: Midnight"]);
+        assert_eq!(super::pick_article("World of Warcraft", &wow).unwrap(), "World of Warcraft");
+        let mop = r(&["World of Warcraft: Mists of Pandaria", "World of Warcraft", "World of Warcraft: Warlords of Draenor"]);
+        assert_eq!(super::pick_article("World of Warcraft: Mists of Pandaria Classic", &mop).unwrap(), "World of Warcraft: Mists of Pandaria");
+        let sc = r(&["StarCraft (video game)", "StarCraft II", "StarCraft II: Wings of Liberty"]);
+        assert_eq!(super::pick_article("StarCraft II", &sc).unwrap(), "StarCraft II");
+        assert!(super::pick_article("Hot Wheels Unleashed", &r(&["Mattel", "Hot Toys"])).is_none());
+        assert_eq!(super::pretty_date("+2004-11-23T00:00:00Z"), "Nov 23, 2004");
+    }
+
+    #[test]
+    fn your_install_folder_marks_the_game_installed() {
+        let dir = std::env::temp_dir().join(format!("lodestone-loc-{}", std::process::id()));
+        let game_dir = dir.join("My Game");
+        std::fs::create_dir_all(&game_dir).unwrap();
+        std::fs::write(game_dir.join("run.sh"), "#!/bin/sh\n").unwrap();
+        let mut g = crate::model::Game { id: "battlenet:s1".into(), store: "battlenet".into(), title: "StarCraft".into(), can_install: true, ..Default::default() };
+        let o = super::Override { install_dir: Some(game_dir.to_string_lossy().into()), exe: Some(game_dir.join("run.sh").to_string_lossy().into()), ..Default::default() };
+        super::apply_location(&mut g, &o);
+        assert!(g.installed && !g.can_install);
+        let l = g.launch.unwrap();
+        assert!(l.program.ends_with("run.sh"));
+        assert_eq!(l.cwd.as_deref(), Some(game_dir.as_path()));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// `cargo test live_other_details -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn live_other_details() {
+        tauri::async_runtime::block_on(async {
+            for t in ["World of Warcraft", "Diablo II: Resurrected", "StarCraft II", "World of Warcraft: Mists of Pandaria Classic"] {
+                let d = super::wikipedia_details(t).await.unwrap_or_default();
+                println!("{t}: {} | dev {:?} pub {:?} rel {} web {} | {}", d.source, d.developers, d.publishers, d.release, d.website, d.description.chars().take(80).collect::<String>());
+            }
+            let g = super::gog_details("1207658890").await.unwrap_or_default();
+            println!("GOG: dev {:?} pub {:?} rel {} shots {} | {}", g.developers, g.publishers, g.release, g.screenshots.len(), g.description.chars().take(80).collect::<String>());
+        });
+    }
 }
 
 #[cfg(test)]

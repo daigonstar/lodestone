@@ -1410,11 +1410,12 @@ async function renderAbout(g) {
     $("#about-features").innerHTML = ((d && d.features) || []).map((f) => `<span class="chip">${esc(f)}</span>`).join("");
     $("#about-shots").innerHTML = ((d && d.screenshots) || []).map(([t, f]) => `<button class="shot" data-shot="${esc(f)}"><img loading="lazy" src="${esc(t)}" alt=""></button>`).join("");
     const links = [];
-    if (d && d.store_url) links.push(`<button class="ghost small" data-page="${esc(d.store_url)}" data-page-title="${esc(g.title)}">Store page</button>`);
+    if (d && d.store_url) links.push(`<button class="ghost small" data-page="${esc(d.store_url)}" data-page-title="${esc(g.title)}">${d.source === "Wikipedia" ? "Wikipedia" : "Store page"}</button>`);
     if (d && d.website) links.push(`<button class="ghost small" data-href="${esc(d.website)}">Website ↗</button>`);
     links.push(`<button class="ghost small" data-edit-meta="${esc(g.id)}">✎ Edit details</button>`);
     $("#about-links").innerHTML = links.join("");
-    if (d && !d.steam_appid) $("#about-desc").innerHTML = `No details found. <a href="#" data-edit-meta="${esc(g.id)}">Edit details</a> to link it to the matching Steam game.`;
+    if (d && !d.description) $("#about-desc").innerHTML = `No details found. <a href="#" data-edit-meta="${esc(g.id)}">Edit details</a> to link it to the matching Steam game.`;
+    else if (d && d.source && d.source !== "Steam") $("#about-desc").insertAdjacentHTML("beforeend", ` <small class="muted">(from ${esc(d.source)})</small>`);
   };
   const cached = detailsCache.get(id);
   fill(cached || null);
@@ -1613,6 +1614,13 @@ async function openMeta(g) {
   f.steam.value = o.steam_appid || "";
   f.cover.value = o.auto ? "" : (o.cover || "");
   f.hero.value = o.hero || "";
+  f.installdir.value = o.install_dir || "";
+  f.exe.value = o.exe || "";
+  $("#loc-hint").textContent = g.store === "steam"
+    ? "Only if Lodestone didn't find the game. For Steam games it's better to add the drive as a library folder in Steam (Settings → Storage)."
+    : g.store === "epic" || g.store === "gog"
+      ? `Only if Lodestone didn't find the game. The folder is handed to ${g.store === "epic" ? "Epic" : "GOG"}'s records, so Play, updates and uninstall work as usual.`
+      : "Only if Lodestone didn't find the game. It then counts as installed there; Play still goes through the store app unless you pick a program to run.";
   metaInit = { o, title: f.title.value, genres: f.genres.value, series: f.series.value, steam: f.steam.value, cover: f.cover.value, hero: f.hero.value };
   $("#meta-hint").textContent = `${store(g.store).label} · ${g.id}. Changes stay in Lodestone; the store's own data isn't touched.`;
   $("#art-q").value = g.title;
@@ -1677,6 +1685,8 @@ $("#form-meta").onsubmit = async (e) => {
     steam_appid: steamNum ? Number(steamNum) : null,
     cover: f.cover.value.trim() || (o.auto ? o.cover : null) || null,
     hero: f.hero.value.trim() || null,
+    install_dir: f.installdir.value.trim() || null,
+    exe: f.exe.value.trim() || null,
   };
   const btn = f.querySelector('button[type="submit"]');
   btn.disabled = true;
