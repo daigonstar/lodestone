@@ -141,11 +141,24 @@ function renderFilters(preLetter) {
   const series = [...scount].filter(([, n]) => n >= 2 || false).map(([k, n]) => [k, state.seriesNames.get(k) || k, n]).sort((a, b) => a[1].localeCompare(b[1]));
   if (state.series && !scount.has(state.series)) series.push([state.series, state.seriesNames.get(state.series) || state.series, 0]);
   $("#f-series").innerHTML = `<option value="">All series</option>` + series.map(([k, name, n]) => `<option value="${esc(k)}" ${k === state.series ? "selected" : ""}>${esc(name)} (${n})</option>`).join("");
+  const cc = COMPAT_FILTERS.map(([k, label]) => [k, label, pool.filter((g) => compatMatch(g, k)).length]);
+  $("#f-compat").innerHTML = `<option value="">All ratings</option>` + cc.map(([k, label, n]) => `<option value="${k}" ${k === state.compatF ? "selected" : ""}>${label} (${n})</option>`).join("");
   const lc = new Map();
   for (const g of pool) { const l = letterOf(g.title); lc.set(l, (lc.get(l) || 0) + 1); }
   $("#f-letters").innerHTML = ["", "#", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"].map((l) =>
     `<button data-letter="${l}" class="${state.letter === l ? "on" : ""}" ${l && !lc.get(l) ? "disabled" : ""}>${l || "All"}</button>`).join("");
-  $("#f-clear").classList.toggle("hidden", !(state.genre || state.series || state.letter));
+  $("#f-clear").classList.toggle("hidden", !(state.genre || state.series || state.compatF || state.letter));
+}
+
+// ProtonDB filter: "or better" options include Native games (they need no Proton at all).
+const COMPAT_RANK = { native: 0, platinum: 1, gold: 2, silver: 3, bronze: 4, borked: 5 };
+const COMPAT_FILTERS = [["native", "Native Linux"], ["platinum", "Platinum or Native"], ["gold", "Gold or better"], ["silver", "Silver or better"], ["bronze", "Bronze or better"], ["borked", "Borked"], ["none", "No rating"]];
+function compatMatch(g, f) {
+  const t = compatOf(g);
+  if (f === "none") return !(t in COMPAT_RANK);
+  if (!(t in COMPAT_RANK)) return false;
+  if (f === "native" || f === "borked") return t === f;
+  return COMPAT_RANK[t] <= COMPAT_RANK[f];
 }
 
 if (T) T.event.listen("series-updated", () => load(true));
@@ -252,6 +265,7 @@ function filtered() {
   if (mergeOn()) list = mergeList(list);
   if (state.genre) list = list.filter((g) => genresOf(g).has(state.genre));
   if (state.series) list = list.filter((g) => seriesOfGame(g) === state.series);
+  if (state.compatF) list = list.filter((g) => compatMatch(g, state.compatF));
   state.preLetter = list;
   if (state.letter) list = list.filter((g) => letterOf(g.title) === state.letter);
   if (state.view === "modded") list.sort((a, b) => (b.kiln_managed - a.kiln_managed) || (b.installed - a.installed) || by(a, b));
@@ -388,7 +402,7 @@ function renderGrid() {
     empty.classList.add("hidden");
   } else if (!list.length) {
     empty.classList.remove("hidden");
-    empty.textContent = state.search ? `Nothing matches “${state.search}”.` : (state.genre || state.series || state.letter) ? "No games match these filters." : state.view === "favorites" ? "Star a game to pin it here." : "No games here yet.";
+    empty.textContent = state.search ? `Nothing matches “${state.search}”.` : (state.genre || state.series || state.compatF || state.letter) ? "No games match these filters." : state.view === "favorites" ? "Star a game to pin it here." : "No games here yet.";
   } else empty.classList.add("hidden");
   const selGame = state.games.find((g) => g.id === state.selected);
   const selShown = list.find((g) => g.id === state.selected) || (selGame && mergeOn() && list.find((g) => titleKey(g.title) === titleKey(selGame.title)));
@@ -1011,7 +1025,8 @@ $("#btn-refresh").onclick = async () => {
 };
 $("#f-genre").onchange = (e) => { state.genre = e.target.value; state.letter = ""; renderGrid(); };
 $("#f-series").onchange = (e) => { state.series = e.target.value; state.letter = ""; renderGrid(); };
-$("#f-clear").onclick = () => { state.genre = state.series = state.letter = ""; renderGrid(); };
+$("#f-compat").onchange = (e) => { state.compatF = e.target.value; state.letter = ""; renderGrid(); };
+$("#f-clear").onclick = () => { state.genre = state.series = state.compatF = state.letter = ""; renderGrid(); };
 let searchTimer;
 $("#search").oninput = (e) => {
   state.search = e.target.value;
