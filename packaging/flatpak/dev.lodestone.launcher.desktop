@@ -1,0 +1,21 @@
+[Desktop Entry]
+Type=Application
+Name=Lodestone
+GenericName=Game Launcher
+Comment=All your games in one library: Steam, Epic, GOG, Battle.net, Minecraft and more
+Exec=lodestone
+Icon=dev.lodestone.launcher
+Terminal=false
+Categories=Game;
+Keywords=games;launcher;steam;epic;gog;battle.net;minecraft;proton;mods;
+StartupNotify=true
+StartupWMClass=lodestone
+Actions=minecraft;modded;
+
+[Desktop Action minecraft]
+Name=Minecraft
+Exec=lodestone --view minecraft
+
+[Desktop Action modded]
+Name=Modded games
+Exec=lodestone --view modded

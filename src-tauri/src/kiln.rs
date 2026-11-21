@@ -53,7 +53,9 @@ fn spec(args: &[&str]) -> Option<LaunchSpec> {
 
 fn run_json(args: &[&str]) -> Option<serde_json::Value> {
     let s = spec(args)?;
-    let out = std::process::Command::new(&s.program).args(&s.args).current_dir(home()).stdin(std::process::Stdio::null()).output().ok()?;
+    let mut c = std::process::Command::new(&s.program);
+    c.args(&s.args).current_dir(home());
+    let out = crate::host::wrap(c).stdin(std::process::Stdio::null()).output().ok()?;
     if !out.status.success() {
         return None;
     }

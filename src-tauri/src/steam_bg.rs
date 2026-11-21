@@ -25,8 +25,7 @@ use std::time::{Duration, Instant};
 pub const BUSY: &str = "steam-busy";
 
 pub fn steam_running() -> bool {
-    let Ok(rd) = fs::read_dir("/proc") else { return false };
-    rd.flatten().any(|e| fs::read_to_string(e.path().join("comm")).is_ok_and(|c| c.trim() == "steam"))
+    crate::host::procs().iter().any(|p| p.comm == "steam")
 }
 
 /// Steam starts every game through its "reaper" with `SteamLaunch AppId=N`.

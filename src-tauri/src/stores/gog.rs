@@ -60,7 +60,9 @@ async fn run(args: Vec<String>) -> Result<String, String> {
     fs::create_dir_all(dir()).map_err(|e| e.to_string())?;
     let spec = gogdl(&args.iter().map(String::as_str).collect::<Vec<_>>())?;
     tauri::async_runtime::spawn_blocking(move || {
-        let out = std::process::Command::new(&spec.program).args(&spec.args).stdin(std::process::Stdio::null()).output().map_err(|e| e.to_string())?;
+        let mut c = std::process::Command::new(&spec.program);
+        c.args(&spec.args);
+        let out = crate::host::wrap(c).stdin(std::process::Stdio::null()).output().map_err(|e| e.to_string())?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         if out.status.success() {
             Ok(stdout)

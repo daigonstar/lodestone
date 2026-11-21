@@ -88,9 +88,7 @@ pub fn first_existing(paths: &[PathBuf]) -> Option<PathBuf> {
 }
 
 pub fn which(bin: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths).map(|p| p.join(bin)).find(|p| p.is_file())
-    })
+    crate::host::which(bin)
 }
 
 /// Map genre names from different sources onto one shared vocabulary.

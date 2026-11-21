@@ -39,7 +39,9 @@ pub async fn run(args: Vec<String>) -> Result<String, String> {
     tools::LEGENDARY.ensure().await?;
     let spec = cmd(&args.iter().map(String::as_str).collect::<Vec<_>>())?;
     tauri::async_runtime::spawn_blocking(move || {
-        let out = std::process::Command::new(&spec.program).args(&spec.args).envs(&spec.env).stdin(std::process::Stdio::null()).output().map_err(|e| e.to_string())?;
+        let mut c = std::process::Command::new(&spec.program);
+        c.args(&spec.args).envs(&spec.env);
+        let out = crate::host::wrap(c).stdin(std::process::Stdio::null()).output().map_err(|e| e.to_string())?;
         if out.status.success() {
             Ok(String::from_utf8_lossy(&out.stdout).into_owned())
         } else {

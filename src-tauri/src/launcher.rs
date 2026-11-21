@@ -1,4 +1,5 @@
-//! Spawns games fully detached (no terminal, output to a log file) and tracks them via /proc.
+//! Spawns games fully detached (no terminal, output to a log file) and tracks them via /proc
+//! (on the host when Lodestone is a Flatpak, see host.rs).
 
 use crate::model::{Detect, Game, LaunchSpec};
 use crate::state;
@@ -47,16 +48,16 @@ pub fn spawn(spec: &LaunchSpec, log: PathBuf) -> std::io::Result<Child> {
     let out = File::create(&log)?;
     let mut cmd = Command::new(&spec.program);
     scrub(&mut cmd);
-    cmd.args(&spec.args)
-        .envs(&spec.env)
-        .stdin(Stdio::null())
+    cmd.args(&spec.args).envs(&spec.env);
+    if let Some(d) = spec.cwd.as_ref().filter(|d| d.is_dir()) {
+        cmd.current_dir(d);
+    }
+    let mut cmd = crate::host::wrap(cmd);
+    cmd.stdin(Stdio::null())
         .stdout(out.try_clone()?)
         .stderr(out)
         // Own process group: keeps running if Lodestone closes, and no terminal signals reach it.
         .process_group(0);
-    if let Some(d) = spec.cwd.as_ref().filter(|d| d.is_dir()) {
-        cmd.current_dir(d);
-    }
     cmd.spawn()
 }
 
@@ -143,15 +144,9 @@ fn matches(d: &Detect, procs: &[String]) -> bool {
 
 /// Every process's command line, args separated (and wrapped) by NUL so exact-arg matching works.
 pub fn process_table() -> Vec<String> {
-    let me = std::process::id().to_string();
-    let Ok(rd) = fs::read_dir("/proc") else { return vec![] };
-    rd.flatten()
-        .filter(|e| {
-            let n = e.file_name();
-            let n = n.to_string_lossy();
-            n.bytes().all(|b| b.is_ascii_digit()) && n != me
-        })
-        .filter_map(|e| fs::read(e.path().join("cmdline")).ok())
+    crate::host::procs()
+        .into_iter()
+        .map(|p| p.cmdline)
         .filter(|b| !b.is_empty())
         .map(|b| {
             let mut s = String::from("\0");

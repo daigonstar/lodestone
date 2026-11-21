@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.lodestone.launcher</id>
+  <name>Lodestone</name>
+  <summary>One launcher for every game library on Linux</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <launchable type="desktop-id">dev.lodestone.launcher.desktop</launchable>
+  <description>
+    <p>All your games in one library: Steam, Epic, GOG, Amazon, Battle.net, EA, Ubisoft, Minecraft and your own games, with Proton through umu, mods, artwork and friends.</p>
+  </description>
+  <url type="homepage">https://github.com/daigonstar/lodestone</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-21"/>
+  </releases>
+</component>

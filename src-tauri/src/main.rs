@@ -3,6 +3,7 @@
 mod downloads;
 mod friends;
 mod gog_setup;
+mod host;
 mod gamesdb;
 mod kiln;
 mod launcher;
@@ -1155,6 +1156,7 @@ fn tracker(app: AppHandle, inner: Shared) {
 }
 
 fn main() {
+    host::use_host_dirs();
     gog_setup::main_hook();
     stores::bnet_agent::play_hook();
     launcher::ORIGINAL_ENV.get_or_init(|| std::env::vars().collect());

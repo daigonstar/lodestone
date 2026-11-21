@@ -80,6 +80,17 @@ cd src-tauri && cargo tauri dev        # from the repo root: cargo tauri dev
 cargo tauri build                      # AppImage + .deb in src-tauri/target/release/bundle
 ```
 
+### Flatpak
+
+```bash
+packaging/flatpak/build.sh             # installs dev.lodestone.launcher and writes packaging/flatpak/lodestone.flatpak
+```
+
+Needs `flatpak install --user flathub org.flatpak.Builder org.gnome.Sdk//50 org.freedesktop.Sdk.Extension.rust-stable//25.08`.
+The Flatpak uses the same settings, library data and sign-ins as a native install. Games, Steam, umu-run and
+store clients still run on the host: Lodestone starts them with `flatpak-spawn --host` and watches the host's
+process list, so the app has host access (`--talk-name=org.freedesktop.Flatpak`, `--filesystem=host`).
+
 See what's detected without the UI:
 
 ```bash

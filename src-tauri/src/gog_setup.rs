@@ -33,14 +33,17 @@ pub fn needed(prefix: &Path, game: &Path, id: &str) -> bool {
 
 /// Wrap a launch so setup runs first (only when it's still needed).
 pub fn wrap(spec: LaunchSpec, prefix: &Path, game: &Path, id: &str) -> LaunchSpec {
-    let Ok(me) = std::env::current_exe() else { return spec };
+    let Some((program, mut args)) = crate::host::self_command() else { return spec };
     if !needed(prefix, game, id) {
         return spec;
     }
     let Some(umu) = crate::tools::umu_path() else { return spec };
-    let mut args = vec![FLAG.to_string(), id.to_string(), game.to_string_lossy().into_owned(), umu.to_string_lossy().into_owned(), "--".into(), spec.program.clone()];
+    args.extend([FLAG.to_string(), id.to_string(), game.to_string_lossy().into_owned(), umu.to_string_lossy().into_owned(), "--".into(), spec.program.clone()]);
     args.extend(spec.args.iter().cloned());
-    LaunchSpec { program: me.to_string_lossy().into_owned(), args, env: spec.env, cwd: spec.cwd }
+    let mut env = spec.env;
+    let keys: Vec<String> = env.keys().cloned().collect();
+    env.insert(crate::host::FWD_ENV.into(), keys.join(","));
+    LaunchSpec { program, args, env, cwd: spec.cwd }
 }
 
 /// `lodestone --gog-setup <id> <game dir> <umu-run> -- <program> <args...>`: set up, then exec the program.
@@ -61,7 +64,9 @@ pub fn main_hook() {
     }
     let Some((prog, a)) = rest.split_first() else { std::process::exit(2) };
     use std::os::unix::process::CommandExt;
-    let e = Command::new(prog).args(a).exec();
+    let mut c = Command::new(prog);
+    c.args(a);
+    let e = crate::host::wrap(c).exec();
     eprintln!("couldn't start {prog}: {e}");
     std::process::exit(1);
 }
@@ -132,7 +137,9 @@ fn copy_tree(from: &Path, to: &Path, overwrite: bool) -> std::io::Result<()> {
 
 /// Runs a Windows program in the prefix through umu and waits.
 fn umu(umu: &str, args: &[String], cwd: &Path) -> Result<(), String> {
-    let s = Command::new(umu).args(args).current_dir(cwd).env("PROTON_VERB", "run").status().map_err(|e| e.to_string())?;
+    let mut c = Command::new(umu);
+    c.args(args).current_dir(cwd).env("PROTON_VERB", "run");
+    let s = crate::host::wrap(c).status().map_err(|e| e.to_string())?;
     s.success().then_some(()).ok_or_else(|| format!("{} exited with {s}", args.first().map(String::as_str).unwrap_or("")))
 }
 

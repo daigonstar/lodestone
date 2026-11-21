@@ -92,23 +92,9 @@ fn token(prefix: &Path) -> Option<String> {
 fn wine_ports(prefix: &Path) -> Vec<u16> {
     let want = prefix.to_string_lossy().trim_end_matches('/').to_string();
     let mut inodes = std::collections::HashSet::new();
-    for e in fs::read_dir("/proc").into_iter().flatten().flatten() {
-        let p = e.path();
-        if fs::read_to_string(p.join("comm")).map(|c| c.trim() != "wineserver").unwrap_or(true) {
-            continue;
-        }
-        let env = fs::read(p.join("environ")).unwrap_or_default();
-        let ours = env.split(|b| *b == 0).any(|kv| {
-            let kv = String::from_utf8_lossy(kv);
-            kv.strip_prefix("WINEPREFIX=").is_some_and(|v| v.trim_end_matches('/').trim_end_matches("/pfx") == want)
-        });
-        if !ours {
-            continue;
-        }
-        for fd in fs::read_dir(p.join("fd")).into_iter().flatten().flatten() {
-            if let Some(i) = fs::read_link(fd.path()).ok().and_then(|l| l.to_string_lossy().strip_prefix("socket:[")?.strip_suffix(']').map(String::from)) {
-                inodes.insert(i);
-            }
+    for (pfx, socks) in crate::host::wineservers() {
+        if pfx.trim_end_matches('/').trim_end_matches("/pfx") == want {
+            inodes.extend(socks);
         }
     }
     let tcp = fs::read_to_string("/proc/net/tcp").unwrap_or_default();
@@ -411,19 +397,17 @@ pub const PLAY_FLAG: &str = "--bnet-play";
 /// Play goes through `lodestone --bnet-play <umu-run> <Battle.net.exe> <--exec=launch CODE>`
 /// (with the prefix's environment), which runs `play_hook` below.
 pub fn play_spec(spec: crate::model::LaunchSpec, client: &Path, exec: &str) -> crate::model::LaunchSpec {
-    let Ok(me) = std::env::current_exe() else { return spec };
-    crate::model::LaunchSpec {
-        program: me.to_string_lossy().into_owned(),
-        args: vec![PLAY_FLAG.into(), spec.program.clone(), client.to_string_lossy().into_owned(), exec.into()],
-        env: spec.env,
-        cwd: spec.cwd,
-    }
+    let Some((program, mut args)) = crate::host::self_command() else { return spec };
+    args.extend([PLAY_FLAG.into(), spec.program.clone(), client.to_string_lossy().into_owned(), exec.into()]);
+    let mut env = spec.env;
+    let keys: Vec<String> = env.keys().cloned().collect();
+    env.insert(crate::host::FWD_ENV.into(), keys.join(","));
+    crate::model::LaunchSpec { program, args, env, cwd: spec.cwd }
 }
 
 fn bnet_running() -> bool {
-    fs::read_dir("/proc").into_iter().flatten().flatten().any(|e| {
-        let cmd = fs::read(e.path().join("cmdline")).unwrap_or_default();
-        let cmd = String::from_utf8_lossy(&cmd);
+    crate::host::procs().iter().any(|p| {
+        let cmd = String::from_utf8_lossy(&p.cmdline);
         cmd.contains("Battle.net\\Battle.net.exe") && !cmd.contains("--type=") && !cmd.contains("umu") && !cmd.contains("--exec")
     })
 }
@@ -448,7 +432,11 @@ pub fn play_hook() {
     let prefix = std::env::var_os("WINEPREFIX").map(PathBuf::from).unwrap_or_default();
     let drive_c = prefix.join("drive_c");
     winapps::bnet_quiet_launches(&drive_c);
-    let run = |extra: &[&str]| std::process::Command::new(umu).arg(client).args(extra).stdin(std::process::Stdio::null()).spawn();
+    let run = |extra: &[&str]| {
+        let mut c = std::process::Command::new(umu);
+        c.arg(client).args(extra);
+        crate::host::wrap(c).stdin(std::process::Stdio::null()).spawn()
+    };
     if !bnet_running() {
         // Battle.net ignores a launch command given with its tray start, so start it first and wait.
         let since = std::time::SystemTime::now();
