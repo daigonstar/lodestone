@@ -777,12 +777,17 @@ fn shop_open_external(app: AppHandle) -> Result<(), String> {
     open_url(url)
 }
 
+/// Async so checking Steam's log and Battle.net's download service never blocks the window.
 #[tauri::command]
-fn downloads_status() -> Vec<downloads::Status> {
-    let mut v = downloads::statuses();
-    v.extend(steam_bg::statuses());
-    v.extend(stores::bnet_agent::statuses());
-    v
+async fn downloads_status() -> Vec<downloads::Status> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut v = downloads::statuses();
+        v.extend(steam_bg::statuses());
+        v.extend(stores::bnet_agent::statuses());
+        v
+    })
+    .await
+    .unwrap_or_default()
 }
 
 fn is_steam_job(id: &str) -> bool {

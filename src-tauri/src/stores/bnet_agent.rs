@@ -124,37 +124,63 @@ fn wine_ports(prefix: &Path) -> Vec<u16> {
 }
 
 /// A tiny HTTP/1.1 client for the Agent on localhost. Returns (status, body).
+/// Reads only as much as the reply says it has: Battle.net's own local server keeps connections open.
 fn http(port: u16, token: &str, method: &str, path: &str, body: Option<&Value>) -> Result<(u16, Value), String> {
-    let mut s = TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_secs(3)).map_err(|e| e.to_string())?;
-    s.set_read_timeout(Some(Duration::from_secs(10))).ok();
+    let mut s = TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_secs(2)).map_err(|e| e.to_string())?;
+    s.set_read_timeout(Some(Duration::from_secs(4))).ok();
+    s.set_write_timeout(Some(Duration::from_secs(2))).ok();
     let payload = body.map(|b| b.to_string()).unwrap_or_default();
     let req = format!(
         "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUser-Agent: phoenix-agent/1.0\r\nAuthorization: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
         payload.len()
     );
     s.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
-    let mut raw = Vec::new();
-    let _ = s.read_to_end(&mut raw);
+    let mut raw: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 16384];
+    loop {
+        if reply_complete(&raw) {
+            break;
+        }
+        match s.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => raw.extend_from_slice(&buf[..n]),
+            Err(_) => break,
+        }
+    }
     let text = String::from_utf8_lossy(&raw);
     let (head, rest) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
     let code: u16 = head.split_whitespace().nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
-    // Chunked replies: take the JSON between the chunk sizes.
-    let body = if head.to_ascii_lowercase().contains("transfer-encoding: chunked") {
-        let mut out = String::new();
-        let mut r = rest;
-        while let Some((size, tail)) = r.split_once("\r\n") {
-            let n = usize::from_str_radix(size.trim(), 16).unwrap_or(0);
-            if n == 0 || tail.len() < n {
-                break;
-            }
-            out.push_str(&tail[..n]);
-            r = tail[n..].trim_start_matches("\r\n");
-        }
-        out
-    } else {
-        rest.to_string()
-    };
+    let body = if head.to_ascii_lowercase().contains("transfer-encoding: chunked") { dechunk(rest) } else { rest.to_string() };
     Ok((code, serde_json::from_str(&body).unwrap_or(Value::Null)))
+}
+
+/// Whole reply received (headers plus Content-Length bytes, or the last chunk).
+fn reply_complete(raw: &[u8]) -> bool {
+    let Some(i) = raw.windows(4).position(|w| w == b"\r\n\r\n") else { return false };
+    let head = String::from_utf8_lossy(&raw[..i]).to_ascii_lowercase();
+    let body = &raw[i + 4..];
+    if head.contains("transfer-encoding: chunked") {
+        return body.ends_with(b"0\r\n\r\n");
+    }
+    match head.lines().find_map(|l| l.strip_prefix("content-length:").and_then(|v| v.trim().parse::<usize>().ok())) {
+        Some(n) => body.len() >= n,
+        // No length: only the connection closing ends it.
+        None => false,
+    }
+}
+
+fn dechunk(rest: &str) -> String {
+    let mut out = String::new();
+    let mut r = rest;
+    while let Some((size, tail)) = r.split_once("\r\n") {
+        let n = usize::from_str_radix(size.trim(), 16).unwrap_or(0);
+        if n == 0 || tail.len() < n {
+            break;
+        }
+        out.push_str(&tail[..n]);
+        r = tail[n..].trim_start_matches("\r\n");
+    }
+    out
 }
 
 struct Agent {
@@ -163,12 +189,22 @@ struct Agent {
     region: String,
 }
 
+static PORT: Mutex<Option<u16>> = Mutex::new(None);
+
 fn connect(prefix: &Path) -> Option<Agent> {
     let token = token(prefix)?;
-    wine_ports(prefix).into_iter().find_map(|port| match http(port, &token, "GET", "/agent", None) {
+    let check = |port: u16| match http(port, &token, "GET", "/agent", None) {
         Ok((200, v)) if v["pid"].is_number() => Some(Agent { port, token: token.clone(), region: v["region"].as_str().unwrap_or("us").to_string() }),
         _ => None,
-    })
+    };
+    // The port found last time first; look again only when it stops answering.
+    let known = *PORT.lock().unwrap();
+    if let Some(a) = known.and_then(check) {
+        return Some(a);
+    }
+    let a = wine_ports(prefix).into_iter().filter(|p| Some(*p) != known).find_map(check);
+    *PORT.lock().unwrap() = a.as_ref().map(|a| a.port);
+    a
 }
 
 /// Start Battle.net in its tray mode if it isn't running, and wait for the Agent.
@@ -374,6 +410,17 @@ mod tests {
 
     /// `LODESTONE_BNET_CODE=S1 cargo test live_agent_install -- --ignored --nocapture`: starts an install
     /// through the Agent, watches it for 30 s, then cancels it.
+    #[test]
+    #[ignore]
+    fn live_agent_connect() {
+        let app = super::app().unwrap();
+        for _ in 0..3 {
+            let t = std::time::Instant::now();
+            let a = super::connect(&app.prefix());
+            println!("found={} in {:?}", a.is_some(), t.elapsed());
+        }
+    }
+
     /// `LODESTONE_BNET_UID=s1 cargo test live_agent_uninstall -- --ignored --nocapture`
     #[test]
     #[ignore]
@@ -399,6 +446,14 @@ mod tests {
             }
             println!("cancel: {:?}", super::cancel(&format!("battlenet:{}", code.to_ascii_lowercase())));
         }
+    }
+
+    #[test]
+    fn knows_when_a_reply_is_complete() {
+        assert!(super::reply_complete(b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found"));
+        assert!(!super::reply_complete(b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nNot"));
+        assert!(super::reply_complete(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n"));
+        assert_eq!(super::dechunk("2\r\n{}\r\n0\r\n\r\n"), "{}");
     }
 
     #[test]

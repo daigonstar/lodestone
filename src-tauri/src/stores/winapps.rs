@@ -203,6 +203,7 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
     let art = |p: &Option<PathBuf>| p.as_ref().map(|x| path_str(x));
     let mut out = Vec::new();
     let mut installed_codes = std::collections::HashSet::new();
+    let aggregate = bnet_catalog::aggregate_products(&c);
 
     for base in ["Program Files (x86)", "Program Files"] {
         let Ok(rd) = fs::read_dir(c.join(base)) else { continue };
@@ -212,7 +213,10 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
             if folder == "Battle.net" {
                 continue;
             }
-            let Some(tact) = bnet_catalog::build_info_product(&dir.join(".build.info")) else { continue };
+            if !dir.join(".build.info").is_file() {
+                continue;
+            }
+            let Some(tact) = bnet_catalog::build_info_product(&dir.join(".build.info")).or_else(|| aggregate.get(&folder.to_ascii_lowercase()).cloned()) else { continue };
             let prod = by_tact.get(tact.to_ascii_lowercase().as_str()).copied();
             // Unknown to the catalog (shouldn't happen): fall back to the install id.
             let exec = match prod {
@@ -577,6 +581,18 @@ mod tests {
         assert_eq!(v["Client"]["AutoLogin"], "true");
         assert_eq!((v["Client"]["SavedAccountNames"].as_str(), v["Other"]["A"].as_str()), (Some("x"), Some("1")));
         let _ = fs::remove_dir_all(c);
+    }
+
+    #[test]
+    #[ignore]
+    fn live_bnet_scan() {
+        let app = super::find("battlenet").unwrap();
+        let c = crate::proton::drive_c(&app.prefix());
+        let d = c.join("Program Files/Diablo II Resurrected/.build.info");
+        println!("build.info product: {:?}", super::bnet_catalog::build_info_product(&d));
+        let cat = super::bnet_catalog::catalog(&c);
+        for p in cat.values().filter(|p| p.code.eq_ignore_ascii_case("osi")) { println!("catalog OSI tact {:?}", p.tact); }
+        for g in super::bnet_games(app) { println!("{} installed={} {}", g.id, g.installed, g.title); }
     }
 
     #[test]

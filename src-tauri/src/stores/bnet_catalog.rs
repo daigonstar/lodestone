@@ -169,6 +169,24 @@ pub fn build_info_product(path: &Path) -> Option<String> {
     row.split('|').nth(col).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
+/// Installed games by folder name (lowercase) -> product, from the Agent's aggregate.json. Installs
+/// the Agent does on its own can leave .build.info's Product column empty.
+pub fn aggregate_products(drive_c: &Path) -> HashMap<String, String> {
+    let Ok(t) = fs::read_to_string(drive_c.join("ProgramData/Battle.net/Agent/aggregate.json")) else { return HashMap::new() };
+    let v: Value = serde_json::from_str(&t).unwrap_or_default();
+    v["installed"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|g| {
+            let product = g["product_id"].as_str()?.to_string();
+            let exe = g["icon_path"].as_str()?.replace('\\', "/");
+            let folder = exe.rsplit_once('/')?.0.rsplit('/').next()?.to_ascii_lowercase();
+            Some((folder, product))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     /// `cargo test live_bnet -- --ignored --nocapture`: reads the real Lodestone Battle.net prefix.
