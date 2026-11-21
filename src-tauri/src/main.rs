@@ -309,6 +309,19 @@ async fn install_game(id: String, inner: State<'_, Shared>) -> Result<String, St
         return Ok("download".into());
     }
     let mut how = "client";
+    // Blizzard games: download through Battle.net's own service with its window kept hidden.
+    if let Some((code, tact)) = id.strip_prefix("battlenet:").filter(|_| !game.installed).and_then(stores::winapps::bnet_product) {
+        let title = game.title.clone();
+        let r = tauri::async_runtime::spawn_blocking(move || stores::bnet_agent::install(&code, &tact, &title)).await.map_err(|e| e.to_string())?;
+        match r {
+            Ok(()) => return Ok("download".into()),
+            // Couldn't reach it: fall back to Battle.net's page for the game.
+            Err(e) => {
+                let _ = std::fs::write(launcher::log_path(&format!("bnet-install-{id}")), &e);
+                how = "client-fallback";
+            }
+        }
+    }
     if let Some(appid) = id.strip_prefix("steam:").and_then(|a| a.parse::<u32>().ok()).filter(|_| steam_bg::enabled()) {
         match steam_bg::install(appid, &game.title) {
             Ok(()) => return Ok("download".into()),
@@ -397,6 +410,14 @@ async fn store_login_finish(app: AppHandle, store: String, code: String) {
     let r = match store.as_str() {
         "epic" => stores::epic::login(&code).await,
         "gog" => stores::gog::login(&code).await,
+        "ubisoft" => stores::ubisoft_api::login(&code).await,
+        "ea" => {
+            let (tok, exp) = code.split_once('|').unwrap_or((code.as_str(), "3600"));
+            match stores::ea_api::login(tok, exp.parse().unwrap_or(3600)).await {
+                Ok(n) => stores::ea_api::refresh().await.map(|_| n),
+                Err(e) => Err(e),
+            }
+        }
         _ => Err("unknown store".into()),
     };
     let payload = match r {
@@ -409,9 +430,13 @@ async fn store_login_finish(app: AppHandle, store: String, code: String) {
 /// Open the store's official sign-in page in a Lodestone window and catch the sign-in code.
 #[tauri::command]
 async fn store_login(app: AppHandle, store: String) -> Result<(), String> {
+    let ubi_url = stores::ubisoft_api::login_url();
     let (url, title) = match store.as_str() {
         "epic" => (stores::epic::LOGIN_URL, "Sign in to Epic Games"),
         "gog" => (stores::gog::LOGIN_URL, "Sign in to GOG"),
+        "ubisoft" => (ubi_url.as_str(), "Sign in to Ubisoft"),
+        // Straight to the token page: it answers at once when the window still has EA's sign-in.
+        "ea" => (stores::ea_api::TOKEN_URL, "Sign in to EA"),
         _ => return Err("unknown store".into()),
     };
     let label = format!("login-{store}");
@@ -423,12 +448,64 @@ async fn store_login(app: AppHandle, store: String) -> Result<(), String> {
     let handle = app.clone();
     let st = store.clone();
     let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
+    let script = match store.as_str() {
+        "ubisoft" => stores::ubisoft_api::LOGIN_SCRIPT,
+        "ea" => stores::ea_api::LOGIN_SCRIPT,
+        _ => EPIC_CODE_SCRIPT,
+    };
+    let nav_app = app.clone();
+    let ea_signing_in = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fired_close = fired.clone();
+    let close_app = app.clone();
+    let close_store = store.clone();
+    if store == "ea" {
+        let _ = std::fs::remove_file(launcher::log_path("login-ea"));
+    }
+    let win = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
         .title(title)
         .inner_size(560.0, 780.0)
-        .initialization_script(EPIC_CODE_SCRIPT)
+        .initialization_script(script)
         .on_navigation(move |u| {
             let host = u.host_str().unwrap_or("");
+            if st == "ea" {
+                // Where the sign-in goes (addresses only, no query strings: those can hold tokens).
+                login_log(&format!("{}://{}{}", u.scheme(), host, u.path()));
+                if host.ends_with("signin.ea.com") || (host == "accounts.ea.com" && !u.path().starts_with("/connect/auth")) {
+                    ea_signing_in.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                // Back on ea.com after signing in: ask for the token again.
+                if host.ends_with("ea.com") && !host.ends_with("signin.ea.com") && host != "accounts.ea.com" && !u.path().contains("/login")
+                    && ea_signing_in.swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    let a = nav_app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                        if let (Some(w), Ok(url)) = (a.get_webview_window("login-ea"), stores::ea_api::TOKEN_URL.parse()) {
+                            let _ = w.navigate(url);
+                        }
+                    });
+                }
+            }
+            if host == "lodestone.localhost" {
+                let q: HashMap<String, String> = u.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+                // EA: not signed in yet, so show EA's sign-in page in this window.
+                if q.contains_key("ea_login") {
+                    let a = nav_app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let (Some(w), Ok(url)) = (a.get_webview_window("login-ea"), stores::ea_api::LOGIN_URL.parse()) {
+                            let _ = w.navigate(url);
+                        }
+                    });
+                    return false;
+                }
+                let code = q.get("ubisoft").cloned().or_else(|| q.get("ea").map(|t| format!("{t}|{}", q.get("expires").map(String::as_str).unwrap_or("3600"))));
+                if let Some(code) = code {
+                    if !fired.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                        tauri::async_runtime::spawn(store_login_finish(handle.clone(), st.clone(), code));
+                    }
+                    return false;
+                }
+            }
             let is_code_url = host == "lodestone.localhost" || (host == "embed.gog.com" && u.path().starts_with("/on_login_success"));
             if !is_code_url {
                 return true;
@@ -442,10 +519,17 @@ async fn store_login(app: AppHandle, store: String) -> Result<(), String> {
         })
         .build()
         .map_err(|e| e.to_string())?;
+    // Closed before finishing: stop showing "Waiting…".
+    win.on_window_event(move |e| {
+        if matches!(e, tauri::WindowEvent::Destroyed) && !fired_close.load(std::sync::atomic::Ordering::SeqCst) {
+            let _ = close_app.emit("account", serde_json::json!({ "store": close_store, "ok": false, "error": "the sign-in window was closed before it finished" }));
+        }
+    });
     // Fetch the store's engine meanwhile so sign-in completes quickly.
     match store.as_str() {
         "epic" => drop(tools::LEGENDARY.ensure().await),
-        _ => drop(tools::GOGDL.ensure().await),
+        "gog" => drop(tools::GOGDL.ensure().await),
+        _ => {}
     }
     Ok(())
 }
@@ -465,6 +549,14 @@ async fn store_login_code(app: AppHandle, store: String, code: String) -> Result
 async fn store_logout(store: String) -> Result<(), String> {
     match store.as_str() {
         "epic" => stores::epic::logout().await,
+        "ubisoft" => {
+            stores::ubisoft_api::logout();
+            Ok(())
+        }
+        "ea" => {
+            stores::ea_api::logout();
+            Ok(())
+        }
         "gog" => {
             stores::gog::logout();
             Ok(())
@@ -495,8 +587,25 @@ async fn store_import_heroic(store: String) -> Result<String, String> {
 
 /// Re-fetch owned libraries for signed-in stores.
 #[tauri::command]
-async fn store_refresh() -> Result<(), String> {
+async fn store_refresh(app: AppHandle) -> Result<(), String> {
     let mut errs = Vec::new();
+    if stores::ubisoft_api::account().is_some() {
+        if let Err(e) = stores::ubisoft_api::refresh().await {
+            errs.push(format!("Ubisoft: {e}"));
+        }
+    }
+    if stores::ea_api::account().is_some() {
+        let mut r = stores::ea_api::refresh().await;
+        if matches!(&r, Err(e) if e == "expired") {
+            r = match ea_renew(&app).await {
+                Ok(()) => stores::ea_api::refresh().await,
+                Err(e) => Err(e),
+            };
+        }
+        if let Err(e) = r {
+            errs.push(format!("EA: {e}"));
+        }
+    }
     if let Err(e) = stores::steam::refresh_owned().await {
         errs.push(format!("Steam: {e}"));
     }
@@ -511,6 +620,47 @@ async fn store_refresh() -> Result<(), String> {
         }
     }
     if errs.is_empty() { Ok(()) } else { Err(errs.join("; ")) }
+}
+
+fn login_log(line: &str) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(launcher::log_path("login-ea")) {
+        let _ = writeln!(f, "{} {line}", state::now());
+    }
+}
+
+/// A new EA token from the sign-in cookies, in a hidden window (EA tokens last a few hours).
+async fn ea_renew(app: &AppHandle) -> Result<(), String> {
+    const LABEL: &str = "ea-renew";
+    if let Some(w) = app.get_webview_window(LABEL) {
+        let _ = w.close();
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<(String, u64), String>>();
+    let tx = Arc::new(Mutex::new(Some(tx)));
+    let url: tauri::Url = stores::ea_api::TOKEN_URL.parse().map_err(|_| "bad url")?;
+    let w = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::External(url))
+        .visible(false)
+        .initialization_script(stores::ea_api::LOGIN_SCRIPT)
+        .on_navigation(move |u| {
+            if u.host_str() != Some("lodestone.localhost") {
+                return true;
+            }
+            let q: HashMap<String, String> = u.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+            let r = match q.get("ea") {
+                Some(t) => Ok((t.clone(), q.get("expires").and_then(|e| e.parse().ok()).unwrap_or(3600))),
+                None => Err("EA sign-in expired: sign in again in Accounts".to_string()),
+            };
+            if let Some(tx) = tx.lock().unwrap().take() {
+                let _ = tx.send(r);
+            }
+            false
+        })
+        .build()
+        .map_err(|e| e.to_string())?;
+    let r = tokio::time::timeout(std::time::Duration::from_secs(30), rx).await;
+    let _ = w.close();
+    let (tok, exp) = r.map_err(|_| "EA didn't answer".to_string())?.map_err(|_| "EA didn't answer".to_string())??;
+    stores::ea_api::login(&tok, exp).await.map(|_| ())
 }
 
 fn steam_account() -> Option<String> {
@@ -532,6 +682,8 @@ fn accounts() -> serde_json::Value {
         "gog": { "account": stores::gog::account(), "heroic": heroic("gog_store/auth.json") },
         "steam": { "account": steam_account() },
         "battlenet": { "installed": stores::winapps::find("battlenet").map(|a| a.installed()).unwrap_or(false) },
+        "ea": { "installed": stores::winapps::find("ea").map(|a| a.installed()).unwrap_or(false), "account": stores::ea_api::account() },
+        "ubisoft": { "installed": stores::winapps::find("ubisoft").map(|a| a.installed()).unwrap_or(false), "account": stores::ubisoft_api::account() },
     })
 }
 
@@ -629,6 +781,7 @@ fn shop_open_external(app: AppHandle) -> Result<(), String> {
 fn downloads_status() -> Vec<downloads::Status> {
     let mut v = downloads::statuses();
     v.extend(steam_bg::statuses());
+    v.extend(stores::bnet_agent::statuses());
     v
 }
 
@@ -638,6 +791,9 @@ fn is_steam_job(id: &str) -> bool {
 
 #[tauri::command]
 fn download_cancel(id: String) -> Result<(), String> {
+    if stores::bnet_agent::is_job(&id) {
+        return stores::bnet_agent::cancel(&id);
+    }
     if is_steam_job(&id) {
         return steam_bg::cancel(&id);
     }
@@ -647,6 +803,7 @@ fn download_cancel(id: String) -> Result<(), String> {
 
 #[tauri::command]
 fn download_dismiss(id: String) {
+    stores::bnet_agent::dismiss(&id);
     if is_steam_job(&id) {
         steam_bg::dismiss(&id);
     }

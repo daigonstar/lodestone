@@ -117,6 +117,25 @@ installs it into its own Proton prefix (with GE-Proton's Battle.net fixes via `S
 games in Battle.net; after a Rescan each game (found via its `.build.info`) launches from Lodestone with
 `Battle.net.exe --exec="launch <code>"`. **ArenaNet → Install Guild Wars 2** does the same with ArenaNet's installer.
 
+- **Silent Blizzard installs:** Install asks Battle.net's download service (the Agent, its local web API) to
+  install the game, with Battle.net started in its tray mode so its window stays hidden; progress shows in the
+  downloads panel. The Agent's session token is read from its own log in Lodestone's prefix and only sent to
+  the Agent on this PC. If that fails, Battle.net opens on the game's page instead.
+- Lodestone keeps Battle.net's "Keep me logged in" on, so it doesn't ask for your password every start.
+
+## EA and Ubisoft
+
+**EA → Set up EA app** and **Ubisoft → Set up Ubisoft Connect** install each launcher into its own Proton prefix.
+Games you install there show up after a Rescan: EA games start through the EA app, Ubisoft games through
+Ubisoft Connect (`uplay://launch/<id>/0`).
+
+Both launchers keep your library encrypted on disk, so to list games you own but haven't installed, **👤 Accounts →
+Sign in** for EA and Ubisoft opens their official sign-in page in a Lodestone window, and Lodestone reads your
+library from the same web APIs their sites use (sessions kept in `~/.config/lodestone/{ea,ubisoft}.json`, mode 600).
+Install on an EA game opens the EA app and starts the download; on a Ubisoft game it opens Ubisoft Connect
+(Ubisoft's API doesn't give the id its install links need). The EA app's Windows folder link (`EA Desktop\EA Desktop`),
+which Wine leaves broken, is replaced with a real link to the current version.
+
 **+ Add game → "Windows game: run it with Proton"** runs any `.exe` in its own prefix.
 
 ### Older notes

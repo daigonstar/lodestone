@@ -298,7 +298,7 @@ function renderNav() {
   const counts = {};
   for (const g of visible) if (inst(g)) counts[g.store] = (counts[g.store] || 0) + 1;
   $("#nav-stores").innerHTML = Object.keys(STORES)
-    .filter((k) => counts[k] || ["battlenet", "arenanet"].includes(k))
+    .filter((k) => counts[k] || ["battlenet", "ea", "ubisoft", "arenanet"].includes(k))
     .map((k) => `<button data-view="${k}" class="${state.view === k ? "active" : ""}"><span class="dot" style="background:${STORES[k].color}"></span>${STORES[k].label}<span class="count">${counts[k] || 0}</span></button>`)
     .join("");
 }
@@ -360,22 +360,35 @@ function rowHTML(g) {
   </div>`;
 }
 
-const WINAPP_FOR = { battlenet: "battlenet", arenanet: "gw2" };
+const WINAPP_FOR = { battlenet: "battlenet", ea: "ea", ubisoft: "ubisoft", arenanet: "gw2" };
+// Store clients Lodestone installs into their own Proton prefix.
+const CLIENTS = {
+  battlenet: { name: "Battle.net", account: "Blizzard",
+    owned: "Your owned and free Battle.net games are below. <b>Install</b> opens Battle.net on that game's page; after it finishes, Rescan and play it from Lodestone.",
+    tip: 'Tip: in Battle.net\'s settings, set "When I launch a game" to exit or minimize to tray so its window stays out of the way.' },
+  ea: { name: "EA app", account: "EA",
+    owned: "Games you install in the EA app show up below after a Rescan and start from Lodestone. EA games open the EA app themselves to check your sign-in. Sign in to EA under 👤 Accounts to also see the games you own but haven't installed; Install opens the EA app and starts the download.",
+    tip: "Tip: in the EA app's settings, turn off \"Open EA app at startup\" and the in-game overlay if a game has trouble starting." },
+  ubisoft: { name: "Ubisoft Connect", account: "Ubisoft",
+    owned: "Games you install in Ubisoft Connect show up below after a Rescan. Play starts them through Ubisoft Connect, which signs you in and keeps them updated. Sign in to Ubisoft under 👤 Accounts to also see the games you own but haven't installed; Install opens Ubisoft Connect on the game.",
+    tip: "Tip: in Ubisoft Connect's settings, turn off the in-game overlay if a game has trouble starting." },
+};
 function renderSetup() {
   const el = $("#setup");
   const app = (state.winapps || []).find((a) => a.id === WINAPP_FOR[state.view]);
   if (!app || (app.installed && app.id === "gw2")) return el.classList.add("hidden");
   el.classList.remove("hidden");
   const busy = state.setupBusy === app.id;
+  const c = CLIENTS[app.id];
   if (!app.installed) {
-    el.innerHTML = app.id === "battlenet"
-      ? `<div><h2>Battle.net on Proton</h2><p class="muted">Lodestone downloads Blizzard's official installer and installs Battle.net into its own Proton prefix: no Steam, Lutris or Wine setup needed. Sign in with your Blizzard account in the window that opens, install your games there, then Rescan. The first run also downloads the Proton runtime, so it can take a few minutes.</p></div>
-         <button class="play" data-winsetup="battlenet" ${busy ? "disabled" : ""}>${busy ? "Setting up…" : "Set up Battle.net"}</button>`
+    el.innerHTML = c
+      ? `<div><h2>${c.name} on Proton</h2><p class="muted">Lodestone downloads ${c.account}'s official installer and installs ${c.name} into its own Proton prefix: no Steam, Lutris or Wine setup needed. Sign in with your ${c.account} account in the window that opens, install your games there, then Rescan. The first run also downloads the Proton runtime, so it can take a few minutes.</p></div>
+         <button class="play" data-winsetup="${app.id}" ${busy ? "disabled" : ""}>${busy ? "Setting up…" : `Set up ${c.name}`}</button>`
       : `<div><h2>Guild Wars 2 on Proton</h2><p class="muted">Lodestone downloads ArenaNet's official installer and runs it in its own Proton prefix. Sign in with your ArenaNet account in the game's launcher.</p></div>
          <button class="play" data-winsetup="gw2" ${busy ? "disabled" : ""}>${busy ? "Setting up…" : "Install Guild Wars 2"}</button>`;
   } else {
-    el.innerHTML = `<div><h2>Battle.net is set up</h2><p class="muted">Your owned and free Battle.net games are below. <b>Install</b> opens Battle.net on that game's page; after it finishes, Rescan and play it from Lodestone. Tip: in Battle.net's settings, set "When I launch a game" to exit or minimize to tray so its window stays out of the way.</p></div>
-      <div class="row-btns"><button class="ghost" data-winopen="battlenet">Open Battle.net</button><button class="play" onclick="document.getElementById('btn-refresh').click()">Rescan</button></div>`;
+    el.innerHTML = `<div><h2>${c.name} is set up</h2><p class="muted">${c.owned} ${c.tip}</p></div>
+      <div class="row-btns"><button class="ghost" data-winopen="${app.id}">Open ${c.name}</button><button class="play" onclick="document.getElementById('btn-refresh').click()">Rescan</button></div>`;
   }
 }
 
@@ -641,6 +654,8 @@ const SHOPS = [
   ["epic", "Epic Games Store"],
   ["gog", "GOG"],
   ["battlenet", "Battle.net Shop"],
+  ["ea", "EA"],
+  ["ubisoft", "Ubisoft Store"],
 ];
 function render() {
   renderNav();
@@ -707,6 +722,8 @@ const ACCT = [
   { id: "gog", name: "GOG", color: "#b26bff", login: true },
   { id: "steam", name: "Steam", color: "#66c0f4" },
   { id: "battlenet", name: "Battle.net", color: "#148eff" },
+  { id: "ea", name: "EA", color: "#ff4747", client: "EA app" },
+  { id: "ubisoft", name: "Ubisoft", color: "#2f7bff", client: "Ubisoft Connect" },
 ];
 const acctBusy = new Set();
 async function renderAccounts() {
@@ -716,7 +733,14 @@ async function renderAccounts() {
     const info = a[s.id] || {};
     const busy = acctBusy.has(s.id);
     let status, actions = "";
-    if (s.login) {
+    if (s.client) {
+      // A Windows launcher (games install and run through it) plus a web sign-in for the owned-games list.
+      const open = info.installed ? `<button class="ghost" data-winopen="${s.id}">Open ${s.client}</button>` : `<button class="ghost" data-winsetup="${s.id}">Set up ${s.client}</button>`;
+      status = info.account ? `Signed in as <b>${esc(info.account)}</b>: games you own show in the library` : `Sign in to list the games you own${info.installed ? "" : `, and set up ${s.client} to install and play them`}`;
+      actions = open + (info.account
+        ? `<button class="ghost" data-acct-out="${s.id}">Sign out</button>`
+        : `<button class="play small" data-acct-in="${s.id}" ${busy ? "disabled" : ""}>${busy ? "Waiting…" : "Sign in"}</button>`);
+    } else if (s.login) {
       status = info.account ? `Signed in as <b>${esc(info.account)}</b>` : "Not signed in";
       actions = info.account
         ? `<button class="ghost" data-acct-out="${s.id}">Sign out</button>`
@@ -726,8 +750,8 @@ async function renderAccounts() {
       status = info.account ? `Signed in as <b>${esc(info.account)}</b> in the Steam client (kept in the tray)` : "Sign in once in the Steam client";
       actions = `<button class="ghost" data-acct-steam>Open Steam</button>`;
     } else {
-      status = info.installed ? "Sign in inside Battle.net" : "Not set up yet";
-      actions = info.installed ? `<button class="ghost" data-winopen="battlenet">Open Battle.net</button>` : `<button class="ghost" data-winsetup="battlenet">Set up Battle.net</button>`;
+      status = info.installed ? `Sign in inside ${s.name}` : "Not set up yet";
+      actions = info.installed ? `<button class="ghost" data-winopen="${s.id}">Open ${s.name}</button>` : `<button class="ghost" data-winsetup="${s.id}">Set up ${s.name}</button>`;
     }
     const paste = s.login && !info.account
       ? `<details class="paste"><summary>Sign-in window not working?</summary>
@@ -773,7 +797,7 @@ async function onAccountClick(e) {
 document.querySelectorAll(".acct-list").forEach((el) => el.addEventListener("click", onAccountClick));
 if (T) T.event.listen("account", ({ payload }) => {
   acctBusy.delete(payload.store);
-  if (payload.ok) { toast(`Signed in to ${payload.store === "epic" ? "Epic Games" : "GOG"} as ${payload.account}`); load(true); }
+  if (payload.ok) { toast(`Signed in to ${(ACCT.find((a) => a.id === payload.store) || { name: payload.store }).name} as ${payload.account}`); load(true); }
   else toast(`Sign-in failed: ${payload.error}`, true);
   if ($("#dlg-accounts").open || !$("#onboard").classList.contains("hidden")) renderAccounts();
 });
@@ -961,10 +985,14 @@ async function install(g) {
     if (how === "download") {
       toast(`Downloading ${g.title}…`);
       pollDownloads();
+    } else if (how === "client-fallback") {
+      toast(`Couldn't install ${g.title} in the background, so Battle.net is opening on its page. Click Install there.`, true);
     } else if (how === "client-busy") {
       toast(`A Steam game is running, so Steam's own install dialog opened for ${g.title}.`);
     } else {
-      toast(g.store === "steam" ? `Steam's install dialog is opening for ${g.title}. Rescan when it's done.` : `Opening ${g.via.split(" ·")[0]} to install ${g.title}…`);
+      toast(g.store === "steam" ? `Steam's install dialog is opening for ${g.title}. Rescan when it's done.`
+        : g.store === "ubisoft" ? `Opening Ubisoft Connect: find ${g.title} under Games and click Download. Rescan when it's done.`
+        : `Opening ${g.via.split(" ·")[0]} to install ${g.title}…`);
     }
   } catch (e) {
     toast(String(e), true);
@@ -1041,7 +1069,7 @@ document.addEventListener("click", (e) => {
   const ws = e.target.closest("[data-winsetup]");
   if (ws) return winSetup(ws.dataset.winsetup);
   const wo = e.target.closest("[data-winopen]");
-  if (wo) return invoke("winapp_open", { id: wo.dataset.winopen }).then(() => toast("Opening Battle.net…")).catch((err) => toast(String(err), true));
+  if (wo) return invoke("winapp_open", { id: wo.dataset.winopen }).then(() => toast(`Opening ${(CLIENTS[wo.dataset.winopen] || { name: "it" }).name}…`)).catch((err) => toast(String(err), true));
   const forget = e.target.closest("[data-forget]");
   if (forget) return invoke("forget_session", { id: forget.dataset.forget });
   const act = e.target.closest("[data-act]");

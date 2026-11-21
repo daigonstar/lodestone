@@ -15,6 +15,8 @@ pub fn home(store: &str) -> Option<&'static str> {
         "epic" => "https://store.epicgames.com/",
         "gog" => "https://www.gog.com/en/games",
         "battlenet" => "https://shop.battle.net/",
+        "ea" => "https://www.ea.com/games/library",
+        "ubisoft" => "https://store.ubisoft.com/",
         _ => return None,
     })
 }
@@ -61,6 +63,22 @@ fn hand_off(app: &AppHandle, url: &Url) -> bool {
             }
             if let Some(spec) = stores::steam::open_url(url.as_str()) {
                 let _ = launcher::spawn(&spec, launcher::log_path("steam-url"));
+            }
+            true
+        }
+        // "Play"/"Install" links on the EA and Ubisoft sites: hand them to the client in its prefix.
+        "origin2" | "link2ea" | "uplay" => {
+            let id = if url.scheme() == "uplay" { "ubisoft" } else { "ea" };
+            match stores::winapps::find(id) {
+                Ok(a) if a.installed() => {
+                    if let Ok(spec) = a.run(&a.exe_path(), vec![url.to_string()]) {
+                        let _ = launcher::spawn(&spec, launcher::log_path(&format!("{id}-url")));
+                    }
+                }
+                Ok(a) => {
+                    let _ = app.emit("shop-error", format!("Set up {} first (Accounts)", a.name));
+                }
+                Err(_) => {}
             }
             true
         }

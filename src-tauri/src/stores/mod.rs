@@ -1,11 +1,14 @@
+pub mod bnet_agent;
 pub mod bnet_catalog;
 pub mod custom;
+pub mod ea_api;
 pub mod epic;
 pub mod gog;
 pub mod heroic;
 pub mod lutris;
 pub mod minecraft;
 pub mod steam;
+pub mod ubisoft_api;
 pub mod winapps;
 
 use crate::model::Game;
