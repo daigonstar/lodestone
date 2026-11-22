@@ -34,15 +34,15 @@
   <screenshots>
     <screenshot type="default">
       <caption>Home: recent games, updates, news and play time</caption>
-      <image>https://raw.githubusercontent.com/daigonstar/lodestone/v0.1.0/packaging/flatpak/screenshots/home.png</image>
+      <image>https://raw.githubusercontent.com/daigonstar/lodestone/fda2bf18a4253fb890e92a4bfc37c7558f56dbf7/packaging/flatpak/screenshots/home.png</image>
     </screenshot>
     <screenshot>
       <caption>Every store in one library, with play time and ProtonDB ratings</caption>
-      <image>https://raw.githubusercontent.com/daigonstar/lodestone/v0.1.0/packaging/flatpak/screenshots/library.png</image>
+      <image>https://raw.githubusercontent.com/daigonstar/lodestone/fda2bf18a4253fb890e92a4bfc37c7558f56dbf7/packaging/flatpak/screenshots/library.png</image>
     </screenshot>
     <screenshot>
       <caption>Battle.net games on Proton</caption>
-      <image>https://raw.githubusercontent.com/daigonstar/lodestone/v0.1.0/packaging/flatpak/screenshots/battlenet.png</image>
+      <image>https://raw.githubusercontent.com/daigonstar/lodestone/fda2bf18a4253fb890e92a4bfc37c7558f56dbf7/packaging/flatpak/screenshots/battlenet.png</image>
     </screenshot>
   </screenshots>
   <url type="homepage">https://github.com/daigonstar/lodestone</url>
