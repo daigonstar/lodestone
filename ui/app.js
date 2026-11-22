@@ -1014,8 +1014,9 @@ async function pollDownloads() {
   $("#downloads").innerHTML = list.map((d) => dlCard(d, false)).join("") + (list.length ? `<button class="dl-open ghost small" data-view="downloads">Open Downloads</button>` : "");
   if (state.view === "downloads") renderDlView();
   if (before !== list.filter((d) => d.state === "downloading").length) renderNav();
-  // Fast while something's downloading; otherwise look now and then for updates Steam starts by itself.
-  dlTimer = setTimeout(pollDownloads, list.some((d) => d.state === "downloading") ? 1500 : 20000);
+  // Fast while something's downloading; otherwise every few seconds, so downloads Steam starts by itself
+  // (or restarts after pausing them) show up quickly.
+  dlTimer = setTimeout(pollDownloads, list.some((d) => d.state === "downloading") ? 1500 : 5000);
 }
 if (T) T.event.listen("downloads-changed", ({ payload }) => { toast(`Installing ${payload.title} in the background…`); pollDownloads(); });
 if (T) T.event.listen("shop-error", ({ payload }) => toast(String(payload), true));

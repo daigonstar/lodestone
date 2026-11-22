@@ -72,6 +72,20 @@
     <display_length compare="ge">768</display_length>
   </requires>
   <releases>
+    <release version="0.1.2" date="2026-11-22">
+      <description>
+        <p>Security and reliability release, following the first full security review (published in the repository).</p>
+        <ul>
+          <li>Updated the bundled SQLite (RUSTSEC-2026-0459) and url (RUSTSEC-2026-0592) libraries</li>
+          <li>Minecraft mod downloads can no longer be written outside the instance folder</li>
+          <li>The Steam Web API key no longer appears in connection error messages</li>
+          <li>A strict content security policy for the app window</li>
+          <li>Sign-in windows only accept the sign-in result from the store's own pages</li>
+          <li>Downloaded tools are checked against GitHub's published checksums</li>
+          <li>Steam download progress, speed and folder are shown for downloads Steam started on its own, and a paused Steam download is no longer reported as failed</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.1" date="2026-11-22">
       <description>
         <p>Privacy fix: the Epic and GOG sign-in files are now readable only by your own user account, like Lodestone's other stored sign-ins. Lodestone tightens them when it starts and whenever it loads your library.</p>

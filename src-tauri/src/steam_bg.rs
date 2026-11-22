@@ -741,3 +741,19 @@ mod live {
         assert!(steam_running());
     }
 }
+
+#[cfg(test)]
+mod live_status {
+    /// `cargo test live_steam_downloads -- --ignored --nocapture`: what the Downloads tab would show now.
+    #[test]
+    #[ignore]
+    fn live_steam_downloads() {
+        for _ in 0..2 {
+            for s in super::statuses() {
+                println!("{} | {} | {} | {:.1}% | {:?}/{:?} | {} | {:?}", s.id, s.title, s.state, s.percent, s.downloaded, s.total, s.detail, s.path);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+        println!("steam running: {}", super::steam_running());
+    }
+}
