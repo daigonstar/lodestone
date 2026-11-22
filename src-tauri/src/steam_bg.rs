@@ -368,6 +368,10 @@ struct Seen {
     /// (download bytes, stage bytes) from "update started"
     totals: Option<(u64, u64)>,
     finished: Option<Result<(), String>>,
+    /// Steam wrote "finished update" (the new files are in place).
+    updated: bool,
+    /// Steam took it off its schedule unfinished ("Suspended"): paused, not failed.
+    paused: bool,
 }
 
 fn after_colon(line: &str) -> &str {
@@ -391,16 +395,30 @@ fn read_app(lines: &[&str], appid: u32) -> Seen {
             let run = st.contains("Update Running");
             if run && !s.running {
                 s.finished = None;
+                s.updated = false;
+                s.paused = false;
             }
             s.running = run;
             s.delayed = st.contains("Update delayed");
         } else if rest.starts_with("update started") {
             let st = after_colon(rest);
             s.totals = Some((total_of(st, "download").unwrap_or(0), total_of(st, "stage").unwrap_or(0)));
+        } else if rest.starts_with("finished update") {
+            s.updated = true;
         } else if rest.starts_with("scheduler finished") {
             let res = rest.split("(result ").nth(1).and_then(|r| r.split(',').next()).unwrap_or("No Error");
             s.running = false;
-            s.finished = Some(if res == "No Error" { Ok(()) } else { Err(format!("Steam: {res}")) });
+            // "Suspended" is Steam handing over to another download: done if the update finished
+            // first, otherwise paused until Steam picks it up again. Neither is a failure.
+            s.finished = match res {
+                "No Error" => Some(Ok(())),
+                "Suspended" if s.updated => Some(Ok(())),
+                "Suspended" => {
+                    s.paused = true;
+                    None
+                }
+                other => Some(Err(format!("Steam: {other}"))),
+            };
         }
     }
     s
@@ -561,6 +579,7 @@ pub fn statuses() -> Vec<Status> {
                 let (state, pct, detail) = match &tr.result {
                     Some(_) => ("", 0.0, String::new()),
                     None if tr.applied.is_none() => ("downloading", 0.0, "Handing it to Steam…".to_string()),
+                    None if seen.paused && !seen.running => ("downloading", progress(tr.appid, &seen, tr.kind).0, "Paused by Steam (another download went first); it carries on by itself".to_string()),
                     None if !seen.running => ("downloading", 0.0, "Waiting for Steam…".to_string()),
                     None => ("downloading", progress(tr.appid, &seen, tr.kind).0, "Steam is downloading".to_string()),
                 };
@@ -587,6 +606,31 @@ pub fn statuses() -> Vec<Status> {
         t.retain(|_, tr| !(tr.auto && tr.result.as_ref().is_some_and(|(at, _)| at.elapsed() > Duration::from_secs(8))));
     });
     out
+}
+
+#[cfg(test)]
+mod suspended_tests {
+    /// Steam's real log for a redistributables update that finished, then was "Suspended" off the
+    /// schedule as Grim Dawn's install took over. It was reported as failed.
+    #[test]
+    fn suspended_after_finishing_is_success() {
+        let log = "AppID 228980 state changed : Update Required,Fully Installed,Update Queued,Update Running,
+AppID 228980 update started : download 0/42914928, store 0/0, reuse 0/0, delta 0/0, stage 0/43001447 
+AppID 228980 state changed : Update Required,Fully Installed,Update Queued,Update Running,Update Started,
+AppID 228980 finished update, 8 mounted depots (BuildID 24098430) : 228983 (1)
+AppID 228980 state changed : Fully Installed,Update Queued,
+AppID 228980 state changed : Fully Installed,
+AppID 228980 scheduler finished : removed from schedule (result Suspended, state 0xc) ";
+        let lines: Vec<&str> = log.lines().collect();
+        let s = super::read_app(&lines, 228980);
+        assert_eq!(s.finished, Some(Ok(())));
+        // Suspended before finishing: paused, not failed.
+        let s = super::read_app(&lines[..3].iter().copied().chain(["AppID 228980 scheduler finished : removed from schedule (result Suspended, state 0x6) "]).collect::<Vec<_>>(), 228980);
+        assert_eq!((s.finished, s.paused), (None, true));
+        // A real error is still an error.
+        let s = super::read_app(&lines[..3].iter().copied().chain(["AppID 228980 scheduler finished : removed from schedule (result No connection, state 0x6) "]).collect::<Vec<_>>(), 228980);
+        assert_eq!(s.finished, Some(Err("Steam: No connection".into())));
+    }
 }
 
 #[cfg(test)]
