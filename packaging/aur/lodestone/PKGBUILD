@@ -1,0 +1,55 @@
+# Maintainer: daigonstar
+pkgname=lodestone
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='One library for every game on Linux: Steam, Epic, GOG, Battle.net, EA, Ubisoft, Lutris, Heroic and Minecraft'
+arch=('x86_64')
+url='https://github.com/daigonstar/lodestone'
+license=('GPL-3.0-or-later')
+depends=('webkit2gtk-4.1' 'gtk3' 'glib2' 'cairo' 'pango' 'gdk-pixbuf2' 'libsoup3' 'hicolor-icon-theme' 'xdg-utils')
+makedepends=('cargo')
+optdepends=(
+  'steam: Steam games'
+  'lutris: games installed with Lutris'
+  'heroic-games-launcher-bin: games installed with Heroic'
+  'umu-launcher: use the system umu-run (Lodestone otherwise sets up its own)'
+  'mangohud: performance overlay (Lodestone can also set it up itself)'
+  'vulkan-tools: MangoHud preview window (vkcube)'
+  'gamemode: GameMode status in the MangoHud overlay'
+)
+options=('!lto' '!debug')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz"
+        'lodestone.desktop')
+sha256sums=('55ea729e342774e4aa03f1a1bcd736c7c8a2acc49bfee08f12a2350289cb5f09'
+            '4ef274f902d4a9cc2a2b0ea5d8a4473f421b80eb6f0f40535d8d1b30e5f7d622')
+
+prepare() {
+  cd "$pkgname-$pkgver/src-tauri"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver/src-tauri"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  # custom-protocol: serve the bundled UI (what `cargo tauri build` turns on).
+  cargo build --frozen --release --features tauri/custom-protocol
+}
+
+check() {
+  cd "$pkgname-$pkgver/src-tauri"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --frozen --release --features tauri/custom-protocol
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 src-tauri/target/release/lodestone "$pkgdir/usr/bin/lodestone"
+  install -Dm644 "$srcdir/lodestone.desktop" "$pkgdir/usr/share/applications/lodestone.desktop"
+  install -Dm644 assets/lodestone.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/lodestone.svg"
+  install -Dm644 src-tauri/icons/32x32.png "$pkgdir/usr/share/icons/hicolor/32x32/apps/lodestone.png"
+  install -Dm644 src-tauri/icons/128x128.png "$pkgdir/usr/share/icons/hicolor/128x128/apps/lodestone.png"
+  install -Dm644 src-tauri/icons/128x128@2x.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/lodestone.png"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

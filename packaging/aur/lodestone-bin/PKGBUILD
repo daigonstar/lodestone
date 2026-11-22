@@ -1,0 +1,37 @@
+# Maintainer: daigonstar
+pkgname=lodestone-bin
+_pkgname=lodestone
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='One library for every game on Linux: Steam, Epic, GOG, Battle.net, EA, Ubisoft, Lutris, Heroic and Minecraft (prebuilt)'
+arch=('x86_64')
+url='https://github.com/daigonstar/lodestone'
+license=('GPL-3.0-or-later')
+depends=('webkit2gtk-4.1' 'gtk3' 'glib2' 'cairo' 'pango' 'gdk-pixbuf2' 'libsoup3' 'hicolor-icon-theme' 'xdg-utils')
+optdepends=(
+  'steam: Steam games'
+  'lutris: games installed with Lutris'
+  'heroic-games-launcher-bin: games installed with Heroic'
+  'umu-launcher: use the system umu-run (Lodestone otherwise sets up its own)'
+  'mangohud: performance overlay (Lodestone can also set it up itself)'
+  'vulkan-tools: MangoHud preview window (vkcube)'
+  'gamemode: GameMode status in the MangoHud overlay'
+)
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+options=('!strip' '!debug')
+source=("$_pkgname-$pkgver-x86_64.tar.gz::$url/releases/download/$pkgver/$_pkgname-$pkgver-x86_64.tar.gz"
+        'lodestone.desktop')
+sha256sums=('SKIP'
+            'SKIP')
+
+package() {
+  cd "$_pkgname-$pkgver-x86_64"
+  install -Dm755 lodestone "$pkgdir/usr/bin/lodestone"
+  install -Dm644 "$srcdir/lodestone.desktop" "$pkgdir/usr/share/applications/lodestone.desktop"
+  install -Dm644 icons/lodestone.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/lodestone.svg"
+  install -Dm644 icons/32x32.png "$pkgdir/usr/share/icons/hicolor/32x32/apps/lodestone.png"
+  install -Dm644 icons/128x128.png "$pkgdir/usr/share/icons/hicolor/128x128/apps/lodestone.png"
+  install -Dm644 icons/256x256.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/lodestone.png"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

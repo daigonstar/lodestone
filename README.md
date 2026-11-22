@@ -16,6 +16,25 @@ All launches run in their own process group with stdin/stdout detached; output g
 `/proc` (Steam's `AppId=<id>` argument, or the game's install folder), which also records playtime in
 `~/.local/share/lodestone/state.json`.
 
+## Install
+
+| Where | How |
+|---|---|
+| Arch Linux and friends (AUR) | `yay -S lodestone` (builds from source) or `yay -S lodestone-bin` (prebuilt) |
+| Most other distributions | the `.AppImage` from the [latest release](https://github.com/daigonstar/lodestone/releases/latest): make it executable and run it |
+| Debian, Ubuntu, Mint, Pop!_OS | the `.deb` from the latest release: `sudo apt install ./Lodestone_*_amd64.deb` |
+| Flatpak (any distribution, Steam Deck) | the `.flatpak` from the latest release: `flatpak install --user lodestone-*.flatpak` |
+
+The native packages (AUR, AppImage, .deb) have every feature. The Flatpak runs games on the host through
+`flatpak-spawn`, so it needs host access.
+
+### Making a release
+
+1. Bump `version` in `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`, add a `<release>` to the metainfo, commit, push.
+2. Tag it and push the tag: GitHub Actions builds the AppImage, `.deb` and binary tarball and attaches them to the release.
+3. `scripts/release.sh <version> --upload` builds and attaches the Flatpak bundle and updates `packaging/aur/*`
+   (version, checksums, `.SRCINFO`); then push those files to the two AUR repositories.
+
 ## Steam: install, uninstall, Workshop
 
 - Turn on **Not installed** to see every game you own on Steam (read offline from Steam's own `appinfo.vdf`

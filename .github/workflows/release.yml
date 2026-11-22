@@ -1,0 +1,73 @@
+# Builds the release files that have to come from an older system to run on most distributions,
+# and attaches them to the GitHub release for the tag:
+#   Lodestone_<v>_amd64.AppImage, Lodestone_<v>_amd64.deb, and lodestone-<v>-x86_64.tar.gz (the
+#   prebuilt binary the lodestone-bin AUR package installs).
+# Runs when a tag is pushed, or by hand (Actions → Release builds → Run workflow) for an existing tag.
+# The Flatpak bundle and the AUR files are made locally with scripts/release.sh.
+name: Release builds
+
+on:
+  push:
+    tags: ['*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build (its GitHub release must exist)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    # Ubuntu 22.04: an older glibc, so the files also run on older distributions.
+    runs-on: ubuntu-22.04
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          # Older tags may not have packaging/linux/lodestone.desktop yet: it's taken from main then.
+          fetch-depth: 0
+
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libsoup-3.0-dev \
+            libayatana-appindicator3-dev patchelf file desktop-file-utils
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Tauri CLI
+        run: cargo install tauri-cli --version '^2' --locked
+
+      - name: Build AppImage and .deb
+        working-directory: src-tauri
+        run: cargo tauri build --bundles appimage,deb
+
+      - name: Binary tarball
+        run: |
+          v=$(python3 -c 'import json;print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
+          d=dist/lodestone-$v-x86_64
+          mkdir -p "$d/icons"
+          install -m755 src-tauri/target/release/lodestone "$d/lodestone"
+          install -m644 packaging/linux/lodestone.desktop "$d/lodestone.desktop" 2>/dev/null \
+            || git show origin/main:packaging/linux/lodestone.desktop > "$d/lodestone.desktop"
+          install -m644 assets/lodestone.svg "$d/icons/lodestone.svg"
+          install -m644 src-tauri/icons/32x32.png "$d/icons/32x32.png"
+          install -m644 src-tauri/icons/128x128.png "$d/icons/128x128.png"
+          install -m644 src-tauri/icons/128x128@2x.png "$d/icons/256x256.png"
+          install -m644 LICENSE "$d/LICENSE"
+          tar -C dist -czf "$d.tar.gz" "lodestone-$v-x86_64"
+          cp src-tauri/target/release/bundle/appimage/*.AppImage src-tauri/target/release/bundle/deb/*.deb dist/
+          (cd dist && sha256sum -- *.tar.gz *.AppImage *.deb > SHA256SUMS-linux)
+          ls -la dist
+
+      - name: Attach to the release
+        run: gh release upload "$TAG" dist/*.tar.gz dist/*.AppImage dist/*.deb dist/SHA256SUMS-linux --clobber
