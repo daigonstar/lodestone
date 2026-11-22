@@ -1,6 +1,6 @@
 # Maintainer: daigonstar
 pkgname=lodestone
-pkgver=0.1.1
+pkgver=0.1.2
 pkgrel=1
 pkgdesc='One library for every game on Linux: Steam, Epic, GOG, Battle.net, EA, Ubisoft, Lutris, Heroic and Minecraft'
 arch=('x86_64')
@@ -20,7 +20,7 @@ optdepends=(
 options=('!lto' '!debug')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz"
         'lodestone.desktop')
-sha256sums=('9aacd8c673040cdf2da21c7a84ea599e4b7f27ce5d69cbf75de59fb2247c0e62'
+sha256sums=('d80d11f67477d47c87bbe26c5784b15a0fe33ea473d886501fd3617c7d9ddaac'
             '4ef274f902d4a9cc2a2b0ea5d8a4473f421b80eb6f0f40535d8d1b30e5f7d622')
 
 prepare() {
