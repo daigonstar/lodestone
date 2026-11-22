@@ -72,6 +72,11 @@
     <display_length compare="ge">768</display_length>
   </requires>
   <releases>
+    <release version="0.1.1" date="2026-11-22">
+      <description>
+        <p>Privacy fix: the Epic and GOG sign-in files are now readable only by your own user account, like Lodestone's other stored sign-ins. Lodestone tightens them when it starts and whenever it loads your library.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-11-22">
       <description>
         <p>First release.</p>

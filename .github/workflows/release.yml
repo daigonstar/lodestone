@@ -26,7 +26,7 @@ jobs:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ env.TAG }}
           # Older tags may not have packaging/linux/lodestone.desktop yet: it's taken from main then.
@@ -70,4 +70,7 @@ jobs:
           ls -la dist
 
       - name: Attach to the release
-        run: gh release upload "$TAG" dist/*.tar.gz dist/*.AppImage dist/*.deb dist/SHA256SUMS-linux --clobber
+        run: |
+          # Make the release when the tag doesn't have one yet (notes from the commits since the last tag).
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --title "Lodestone $TAG" --generate-notes
+          gh release upload "$TAG" dist/*.tar.gz dist/*.AppImage dist/*.deb dist/SHA256SUMS-linux --clobber
