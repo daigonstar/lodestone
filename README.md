@@ -45,7 +45,7 @@ Making a release yourself? See [RELEASING.md](RELEASING.md).
 
 ## How Lodestone is built
 
-I'm a server and cloud engineer, not a full-time application developer. I built Lodestone because I kept
+I'm an IT Support Engineer with strong server and cloud experience, not a full-time application developer. I built Lodestone because I kept
 hitting gaps in Linux gaming: games spread over half a dozen launchers, Battle.net and EA needing Lutris
 scripts, no one place to see what I own or have played. On Windows I used GOG Galaxy, which I found awesome.
 Linux had nothing like that I could find. Like others, I was aggressively against AI until I realised its
