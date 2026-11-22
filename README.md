@@ -1,20 +1,33 @@
 # Lodestone
 
-One library for every game on this Linux box. It reads each launcher's own data files and launches games
-headless, so Steam stays in the tray and Heroic / Lutris / ATLauncher windows never show up.
+One library for every game you own on Linux. On Windows I used GOG Galaxy, which I found awesome; Linux had
+nothing like it that I could find, so I built Lodestone: every store in one place, installed or not.
+Epic, GOG, Battle.net, EA and Ubisoft games run through Proton (via umu-launcher), so they don't go through
+the Steam client. Steam itself is still needed for your Steam games and Steam features like friends.
 
-| Store | Discovered from | Launched with (hidden) |
-|---|---|---|
-| Steam (native or Flatpak) | `libraryfolders.vdf`, `appmanifest_*.acf` | `steam -silent steam://rungameid/<id>` |
-| Epic, GOG, Amazon | Heroic's `store_cache` + installed JSON | `heroic --no-gui heroic://launch?appName=…&runner=…` |
-| Battle.net, ArenaNet (GW2), EA, Ubisoft, anything in Lutris | Lutris `pga.db` | `lutris lutris:rungameid/<id>` |
-| Minecraft | ATLauncher / Prism instance folders | `--launch <instance> --close-launcher` / `-l <instance>` |
-| Anything else | `~/.config/lodestone/games.json` (or **+ Add game**) | your command via `sh -c` |
+![Lodestone's library: games from every store in one list, with play time and ProtonDB ratings](packaging/flatpak/screenshots/library.png)
 
-All launches run in their own process group with stdin/stdout detached; output goes to
-`~/.local/share/lodestone/logs/<game>.log` (⋯ → View launch log). Running state is tracked by watching
-`/proc` (Steam's `AppId=<id>` argument, or the game's install folder), which also records playtime in
-`~/.local/share/lodestone/state.json`.
+> [!NOTE]
+> Lodestone is an early beta (0.1.x), built with an AI coding assistant and reviewed and tested by me.
+> Read [How Lodestone is built](#how-lodestone-is-built) and [Security and privacy](#security-and-privacy)
+> before you sign in to anything.
+
+| Store | What Lodestone does |
+|---|---|
+| Steam (native or Flatpak) | Your whole library, installed or not. Installs, updates and uninstalls in the background, and plays through Steam with its window kept out of the way |
+| Epic Games, GOG | Its own sign-in: install, update, uninstall and play through Proton, no Heroic needed |
+| Battle.net, EA app, Ubisoft Connect | Sets each one up on Proton (or uses the one you installed with Lutris or Steam), lists what you own, and plays through it. Battle.net installs run in the background; World of Warcraft can start directly |
+| Guild Wars 2 | Installs and runs it on Proton |
+| Heroic, Lutris | Games you installed with them (including Amazon through Heroic) show up and play through them |
+| Minecraft | Your ATLauncher instances, with a hub for mods, resource packs and shaders (in development) |
+| Anything else | **+ Add game**: a native game or script, or a Windows `.exe` run with Proton |
+
+Plus a Downloads tab, play time from Steam, Epic, Lutris and Heroic, game details and news, ProtonDB
+ratings, artwork editing, MangoHud, Steam friends, and modding through [Kiln](#mods-with-kiln).
+
+Every launch runs detached, with its output in `~/.local/share/lodestone/logs/<game>.log`
+(⋯ → View launch log). Lodestone tracks running games from the process list, which is also how it counts
+play time.
 
 ## Install
 
@@ -28,23 +41,20 @@ All launches run in their own process group with stdin/stdout detached; output g
 The native packages (AUR, AppImage, .deb) have every feature. The Flatpak runs games on the host through
 `flatpak-spawn`, so it needs host access.
 
-### Making a release
-
-1. Bump `version` in `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`, add a `<release>` to the metainfo, commit, push.
-2. Tag it and push the tag: GitHub Actions builds the AppImage, `.deb` and binary tarball and attaches them to the release.
-3. `scripts/release.sh <version> --upload` builds and attaches the Flatpak bundle and updates `packaging/aur/*`
-   (version, checksums, `.SRCINFO`); then push those files to the two AUR repositories.
+Making a release yourself? See [RELEASING.md](RELEASING.md).
 
 ## How Lodestone is built
 
 I'm a server and cloud engineer, not a full-time application developer. I built Lodestone because I kept
 hitting gaps in Linux gaming: games spread over half a dozen launchers, Battle.net and EA needing Lutris
-scripts, no one place to see what I own or have played. On windows I used GOG Galaxy which I found awesome
-Linux had nothing like that I could find. Like others I have been agressivly against AI until I realised potential.
-Can it be a security risk? Yes. But again like many other tools the tool itself isnt evil it is the human weilding it.
-Below is an honest and accurate account of how the app is made and what it does and talks too.
+scripts, no one place to see what I own or have played. On Windows I used GOG Galaxy, which I found awesome.
+Linux had nothing like that I could find. Like others, I was aggressively against AI until I realised its
+potential. Can AI-written code be a security risk? Yes, like any code, which is why I review every change,
+test it myself, and publish all of it here for anyone to check.
+Below is an honest and accurate account of how the app is made, what it does and what it talks to.
 
-Please read this if you have any concerns and please conduct your own audits.
+> [!IMPORTANT]
+> If you have any concerns, please read on, and audit the code yourself.
 
 **Lodestone is written with an AI coding assistant (Anthropic's Claude).** Every commit says so in its
 `Co-Authored-By` line. I decide what gets built, review the changes, and test them on my own machine
@@ -53,7 +63,7 @@ than find it in the git history.
 
 What that means in practice:
 
-- **It's a beta.** 0.1.0 is the first release. Steam, Epic, GOG, Battle.net (Diablo II: Resurrected) and
+- **It's an early beta (0.1.x).** Steam, Epic, GOG, Battle.net (Diablo II: Resurrected) and
   the library, play time and downloads are what I use daily. EA sign-in, Ubisoft, some World of Warcraft
   versions and the Minecraft hub have had less real-world use. Please report what breaks.
 - **It's maintained in my spare time**, around a full-time job and a young family. I'll fix what I can,
@@ -81,7 +91,7 @@ only talks to the stores and services below, when you use a feature that needs t
 | GOG sign-in (kept by gogdl) | `~/.local/share/lodestone/gog/` |
 | Cookies from the sign-in and store windows | `~/.local/share/dev.lodestone.launcher/` (WebKit's data folder) |
 
-You sign in on each store's own login page, in a Lodestone window. Lodestone never sees or stores your
+You sign in on each store's own login page, in a Lodestone window. Lodestone never reads or stores your
 passwords, only the session tokens the stores hand back. Battle.net keeps its own sign-in inside its
 Wine prefix; Lodestone only turns its "keep me logged in" option back on. Signing out in
 **Accounts** deletes the stored session.
@@ -127,6 +137,16 @@ the native packages', not stronger.
 
 **Found a security problem?** Please don't open a public issue. Use GitHub's private
 [security advisory](https://github.com/daigonstar/lodestone/security/advisories/new) form instead.
+
+## Other apps I build
+
+Other than my Hyprdots project (which was started by hand but accelerated with the assistance of Claude late this year), I have been
+using Claude a lot. I do not see this personally as an issue, as I always look at these things from a security and privacy first perspective.
+That's the reason I moved to Linux in the first place.
+Other apps, like my Kiln Mod Manager, which Lodestone also communicates with to tag and launch modded games, have been built the same way.
+I do learn from this, as I like to review and test changes myself. I also try to test on multiple systems, not just my own.
+
+With this in mind, if you feel these projects are beneficial, please do give them a go.
 
 ## Steam: install, uninstall, Workshop
 

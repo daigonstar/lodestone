@@ -12,8 +12,8 @@
   <launchable type="desktop-id">io.github.daigonstar.Lodestone.desktop</launchable>
   <description>
     <p>
-      Lodestone brings the games you own on every store into one library, and runs Windows games and
-      store apps through Proton without needing Steam.
+      Lodestone brings the games you own on every store into one library. Epic, GOG, Battle.net, EA and
+      Ubisoft games run through Proton without going through the Steam client; Steam games still use Steam.
     </p>
     <ul>
       <li>Steam, Epic Games, GOG, Amazon, Battle.net, EA, Ubisoft, Lutris, Heroic and Minecraft in one place, installed or not</li>
