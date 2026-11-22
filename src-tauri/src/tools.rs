@@ -47,6 +47,7 @@ pub async fn install_umu() -> Result<String, String> {
         .ok_or("release has no zipapp")?;
     let url = asset["browser_download_url"].as_str().ok_or("no download url")?;
     let bytes = net::client().get(url).send().await.map_err(net::err)?.error_for_status().map_err(net::err)?.bytes().await.map_err(net::err)?;
+    net::verify_release_file(asset, &bytes)?;
     let dir = umu_dir();
     let stage = dir.join(format!("stage-{tag}"));
     let _ = fs::remove_dir_all(&stage);
@@ -178,6 +179,7 @@ impl BinTool {
             .ok_or_else(|| format!("{} {tag} has no Linux build", self.name))?;
         let url = asset["browser_download_url"].as_str().ok_or("no download url")?;
         let bytes = net::client().get(url).send().await.map_err(net::err)?.error_for_status().map_err(net::err)?.bytes().await.map_err(net::err)?;
+        net::verify_release_file(asset, &bytes)?;
         // A compiled program, or a self-contained Python zipapp (legendary ships as one).
         if !(bytes.starts_with(b"\x7fELF") || bytes.starts_with(b"#!")) {
             return Err(format!("{} download isn't a Linux program", self.name));

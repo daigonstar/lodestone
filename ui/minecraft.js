@@ -30,7 +30,7 @@
   const fmtNum = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
   const iconHTML = (src, title) =>
     src
-      ? `<img class="mc-ico" loading="lazy" src="${esc(src)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'mc-ico ph',textContent:'${esc((title || "?")[0])}'}))">`
+      ? `<img class="mc-ico" loading="lazy" src="${esc(src)}" alt="" data-err="mcico" data-letter="${esc((title || "?")[0])}">`
       : `<div class="mc-ico ph">${esc((title || "?")[0])}</div>`;
 
   // ---------- header ----------
@@ -154,7 +154,7 @@
       $("#mc-results").innerHTML = `<div class="pad card-note">
         <b>CurseForge needs an API key.</b><br>
         <span class="muted">It's free: sign in at <a href="#" data-href="https://console.curseforge.com/">console.curseforge.com</a>, create a key, and paste it in Settings. Modrinth works without one.</span><br><br>
-        <button class="play small" onclick="document.getElementById('btn-settings').click()">Open Settings</button></div>`;
+        <button class="play small" data-click="btn-settings">Open Settings</button></div>`;
       return;
     }
     if (!mc.results.length) {

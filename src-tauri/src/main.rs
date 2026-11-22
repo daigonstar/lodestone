@@ -511,6 +511,9 @@ async fn store_login(app: AppHandle, store: String) -> Result<(), String> {
     };
     let nav_app = app.clone();
     let ea_signing_in = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // The last site this window was on: the token hand-off (a lodestone.localhost address) is only
+    // accepted straight from the store's own sign-in pages, not from any other site the window visits.
+    let last_host = Arc::new(Mutex::new(parsed.host_str().unwrap_or("").to_string()));
     let fired_close = fired.clone();
     let close_app = app.clone();
     let close_store = store.clone();
@@ -523,6 +526,7 @@ async fn store_login(app: AppHandle, store: String) -> Result<(), String> {
         .initialization_script(script)
         .on_navigation(move |u| {
             let host = u.host_str().unwrap_or("");
+            let came_from = if host == "lodestone.localhost" { last_host.lock().unwrap().clone() } else { std::mem::replace(&mut *last_host.lock().unwrap(), host.to_string()) };
             if st == "ea" {
                 // Where the sign-in goes (addresses only, no query strings: those can hold tokens).
                 login_log(&format!("{}://{}{}", u.scheme(), host, u.path()));
@@ -543,6 +547,18 @@ async fn store_login(app: AppHandle, store: String) -> Result<(), String> {
                 }
             }
             if host == "lodestone.localhost" {
+                let trusted = match st.as_str() {
+                    "ea" => came_from == "accounts.ea.com" || came_from.ends_with(".ea.com") || came_from == "ea.com",
+                    "ubisoft" => came_from.ends_with("ubisoft.com") || came_from.ends_with("ubi.com"),
+                    "epic" => came_from.ends_with("epicgames.com"),
+                    _ => false,
+                };
+                if !trusted {
+                    if st == "ea" {
+                        login_log(&format!("ignored a sign-in hand-off from {came_from}"));
+                    }
+                    return false;
+                }
                 let q: HashMap<String, String> = u.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
                 // EA: not signed in yet, so show EA's sign-in page in this window.
                 if q.contains_key("ea_login") {
@@ -565,6 +581,10 @@ async fn store_login(app: AppHandle, store: String) -> Result<(), String> {
             let is_code_url = host == "lodestone.localhost" || (host == "embed.gog.com" && u.path().starts_with("/on_login_success"));
             if !is_code_url {
                 return true;
+            }
+            // GOG's code arrives on embed.gog.com: only straight from GOG's own sign-in pages.
+            if st == "gog" && !came_from.ends_with("gog.com") {
+                return false;
             }
             if let Some(code) = u.query_pairs().find(|(k, _)| k == "code").map(|(_, v)| v.into_owned()) {
                 if !fired.swap(true, std::sync::atomic::Ordering::SeqCst) {

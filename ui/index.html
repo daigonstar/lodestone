@@ -364,12 +364,12 @@
     </form>
   </dialog>
 
-  <dialog id="dlg-shot" class="shot-dlg"><img id="shot-img" alt="" /><button class="icon shot-close" onclick="this.closest('dialog').close()">✕</button></dialog>
+  <dialog id="dlg-shot" class="shot-dlg"><img id="shot-img" alt="" /><button class="icon shot-close" data-close-dialog>✕</button></dialog>
 
   <dialog id="dlg-log">
     <h2>Launch log</h2>
     <pre id="log-text"></pre>
-    <div class="dlg-actions"><button class="play" onclick="this.closest('dialog').close()">Close</button></div>
+    <div class="dlg-actions"><button class="play" data-close-dialog>Close</button></div>
   </dialog>
 
   <dialog id="dlg-workshop">
@@ -380,14 +380,14 @@
       <button id="ws-steam" class="ghost">Open in Steam</button>
     </div>
     <div id="ws-list" class="ws-list"></div>
-    <div class="dlg-actions"><button class="ghost" onclick="this.closest('dialog').close()">Close</button></div>
+    <div class="dlg-actions"><button class="ghost" data-close-dialog>Close</button></div>
   </dialog>
 
   <dialog id="dlg-accounts">
     <h2>Accounts</h2>
     <p class="hint">Sign in on each store's own page in a Lodestone window. Lodestone never sees your password; it only receives the store's sign-in token, kept in <code>~/.local/share/lodestone</code>.</p>
     <div id="acct-list" class="acct-list"></div>
-    <div class="dlg-actions"><button class="ghost" onclick="this.closest('dialog').close()">Close</button></div>
+    <div class="dlg-actions"><button class="ghost" data-close-dialog>Close</button></div>
   </dialog>
 
   <dialog id="dlg-settings">
@@ -432,7 +432,7 @@
         <code>~/.config/lodestone/settings.json</code> (readable only by you).</p>
       <div class="dlg-actions">
         <button type="button" class="ghost" id="btn-rerun-setup" style="margin-right:auto">Run setup guide again</button>
-        <button type="button" class="ghost" onclick="this.closest('dialog').close()">Cancel</button>
+        <button type="button" class="ghost" data-close-dialog>Cancel</button>
         <button type="submit" class="play">Save</button>
       </div>
     </form>

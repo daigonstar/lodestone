@@ -88,7 +88,26 @@ function toast(msg, err = false) {
   host.append(t);
   setTimeout(() => t.remove(), err ? 6000 : 3000);
 }
-const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+// For url('...') inside a style attribute: HTML escaping is undone before CSS reads it, so quotes,
+// brackets and backslashes are percent-encoded too (they can't then end the url() early).
+const cssUrl = (u) => esc(String(u).replace(/['"()\\\s]/g, (c) => "%" + c.charCodeAt(0).toString(16).padStart(2, "0").toUpperCase()));
+// Inline event handlers aren't allowed (the content security policy only runs app.js and minecraft.js),
+// so images that fail and buttons that close dialogs are handled here instead.
+document.addEventListener("error", (e) => {
+  const t = e.target;
+  if (!(t instanceof HTMLImageElement) || !t.dataset.err) return;
+  if (t.dataset.err === "remove") t.remove();
+  else if (t.dataset.err === "parent") t.parentElement && t.parentElement.remove();
+  else if (t.dataset.err === "hide") t.style.visibility = "hidden";
+  else if (t.dataset.err === "mcico") t.replaceWith(Object.assign(document.createElement("div"), { className: "mc-ico ph", textContent: t.dataset.letter || "?" }));
+}, true);
+document.addEventListener("click", (e) => {
+  const c = e.target.closest("[data-close-dialog]");
+  if (c) return c.closest("dialog")?.close();
+  const k = e.target.closest("[data-click]");
+  if (k) document.getElementById(k.dataset.click)?.click();
+});
 
 // ---------- data ----------
 // ---------- genres / series / letters ----------
@@ -324,8 +343,8 @@ function cardHTML(g) {
   return `<div class="${cls}" data-id="${esc(g.id)}" data-key="${esc(titleKey(g.title))}">
     <div class="art" style="${placeholder(g)}">
       <div class="ph">${esc(g.title)}</div>
-      ${src ? `<img loading="lazy" decoding="async" src="${esc(src)}" alt="" onerror="this.remove()">` : ""}
-      ${fb ? `<div class="fb-art"><div class="fb-blur" style="background-image:url('${esc(fb)}')"></div><img loading="lazy" src="${esc(fb)}" alt="" onerror="this.parentElement.remove()"><div class="fb-title">${esc(g.title)}</div></div>` : ""}
+      ${src ? `<img loading="lazy" decoding="async" src="${esc(src)}" alt="" data-err="remove">` : ""}
+      ${fb ? `<div class="fb-art"><div class="fb-blur" style="background-image:url('${cssUrl(fb)}')"></div><img loading="lazy" src="${esc(fb)}" alt="" data-err="parent"><div class="fb-title">${esc(g.title)}</div></div>` : ""}
       <span class="badges">${dots.map((d) => `<span class="badge" style="background:${d.color}" title="${d.label}"></span>`).join("")}</span>
       ${g.favorite ? '<span class="fav">★</span>' : ""}
       <span class="corner-br">${g.kiln_managed ? '<span class="modded" title="Modded with Kiln">MODDED</span>' : ""}${compatBadge(g)}</span>
@@ -355,7 +374,7 @@ function rowHTML(g) {
     : g.installed && g.update ? `<span class="upd-text">${g.update === "updating" ? "Updating" : "Update"}</span>`
     : g.kiln_managed ? `<span class="mod-text">Modded</span>` : !g.installed ? `<span class="muted">Not installed</span>` : "";
   return `<div class="${cls}" data-id="${esc(g.id)}" data-key="${esc(titleKey(g.title))}">
-    <div class="row-art" style="${placeholder(g)}">${src ? `<img loading="lazy" decoding="async" src="${esc(src)}" alt="" onerror="this.remove()">` : ""}</div>
+    <div class="row-art" style="${placeholder(g)}">${src ? `<img loading="lazy" decoding="async" src="${esc(src)}" alt="" data-err="remove">` : ""}</div>
     <div class="row-main"><div class="title">${g.favorite ? '<span class="fav-s">★</span> ' : ""}${esc(g.title)}</div>
       <div class="sub">${stores.map((d) => `<span class="dot" style="background:${d.color}"></span>${d.label}`).join(" ")}</div></div>
     <div class="row-genres muted">${esc([...genresOf(g)].slice(0, 3).join(", "))}</div>
@@ -396,7 +415,7 @@ function renderSetup() {
   } else {
     const from = app.found_in ? ` <b>Using the ${c.name} you installed with ${app.found_in}</b>, and the games installed there.` : "";
     el.innerHTML = `<div><h2>${c.name} is set up</h2><p class="muted">${c.owned}${from} ${c.tip}</p></div>
-      <div class="row-btns"><button class="ghost" data-winopen="${app.id}">Open ${c.name}</button><button class="play" onclick="document.getElementById('btn-refresh').click()">Rescan</button></div>`;
+      <div class="row-btns"><button class="ghost" data-winopen="${app.id}">Open ${c.name}</button><button class="play" data-click="btn-refresh">Rescan</button></div>`;
   }
 }
 
@@ -879,7 +898,7 @@ function dlCard(d, big) {
   const btn = d.state === "downloading" && d.kind !== "install" ? "" : `<button class="dl-x" title="${d.state === "downloading" ? "Cancel" : "Dismiss"}" data-dl="${esc(d.id)}" data-dl-state="${d.state}">✕</button>`;
   if (!big) {
     return `<div class="dl ${d.state}">
-      <div class="dl-banner" ${art ? `style="background-image:url('${esc(art)}')"` : `style="${placeholder({ title: d.title })}"`}></div>
+      <div class="dl-banner" ${art ? `style="background-image:url('${cssUrl(art)}')"` : `style="${placeholder({ title: d.title })}"`}></div>
       <div class="dl-body">
         <div class="dl-top"><span class="grow dl-title">${esc(d.title)}</span>${btn}</div>
         <div class="dl-meta"><span class="dot" style="background:${s.color}"></span>${esc(s.label)} · ${dlKind(d.kind)}</div>
@@ -892,7 +911,7 @@ function dlCard(d, big) {
   const stat = (k, v) => (v ? `<div><small>${k}</small><span>${v}</span></div>` : "");
   const samples = dlSamples.get(d.id) || [];
   return `<div class="dlv-card ${d.state}">
-    <div class="dlv-banner" ${art ? `style="background-image:url('${esc(art)}')"` : `style="${placeholder({ title: d.title })}"`}>
+    <div class="dlv-banner" ${art ? `style="background-image:url('${cssUrl(art)}')"` : `style="${placeholder({ title: d.title })}"`}>
       <div class="dlv-over">
         <div class="dl-meta"><span class="dot" style="background:${s.color}"></span>${esc(s.label)} · ${dlKind(d.kind)}</div>
         <h3>${esc(d.title)}</h3>
@@ -934,7 +953,7 @@ async function renderDlView() {
   const upd = state.games.filter((g) => g.installed && g.update === "available" && !g.hidden && !list.some((d) => d.game_id === g.id && d.state === "downloading"));
   $("#dlv-updates-wrap").classList.toggle("hidden", !upd.length);
   $("#dlv-updates").innerHTML = upd.map((g) => `<div class="dlv-row">
-      <img src="${esc(imgSrc(g.cover || g.hero, 80) || "")}" alt="" onerror="this.style.visibility='hidden'">
+      <img src="${esc(imgSrc(g.cover || g.hero, 80) || "")}" alt="" data-err="hide">
       <div class="grow"><b>${esc(g.title)}</b><small class="muted">${esc(store(g.store).label)}${g.update_size ? ` · ${fmtSize(g.update_size)}` : ""}</small></div>
       <button class="ghost small" data-dlv-update="${esc(g.id)}">⟳ Update</button></div>`).join("");
   if (dlHistory === null) { try { dlHistory = await invoke("downloads_history"); } catch { dlHistory = []; } }
@@ -943,7 +962,7 @@ async function renderDlView() {
     const g = state.games.find((x) => x.id === p.game_id);
     const art = g && (g.cover || g.hero);
     return `<div class="dlv-row ${p.state}">
-      <img src="${esc(art ? imgSrc(art, 80) : "")}" alt="" onerror="this.style.visibility='hidden'">
+      <img src="${esc(art ? imgSrc(art, 80) : "")}" alt="" data-err="hide">
       <div class="grow"><b>${esc(p.title)}</b><small class="muted">${esc(store(p.store).label)} · ${dlKind(p.kind)}${p.total ? ` · ${fmtSize(p.total)}` : ""} · took ${fmtDur(p.seconds)}</small>${p.state === "failed" && p.detail ? `<small class="err-text">${esc(p.detail)}</small>` : ""}</div>
       <span class="dlv-res ${p.state}">${p.state === "done" ? "✓ " + dlDone(p) : "✕ Failed"}</span>
       <small class="muted dlv-when" title="${new Date(p.finished * 1000).toLocaleString()}">${fmtAgo(p.finished)}</small></div>`;
@@ -1018,7 +1037,7 @@ async function openWorkshop(g) {
     $("#ws-list").innerHTML = items.length
       ? `<div class="muted pad">${items.length} subscribed item${items.length === 1 ? "" : "s"} installed</div>` +
         items.map((i) => `<div class="ws-item" data-ws="${esc(i.id)}" title="Open item page">
-          <div class="ws-thumb" style="${i.preview ? `background-image:url('${esc(i.preview)}')` : ""}"></div>
+          <div class="ws-thumb" style="${i.preview ? `background-image:url('${cssUrl(i.preview)}')` : ""}"></div>
           <div class="grow"><div>${esc(i.title)}</div><small class="muted">${fmtSize(i.size) || ""}${i.updated ? " · updated " + new Date(i.updated * 1000).toLocaleDateString() : ""}</small></div>
           <span class="muted">›</span></div>`).join("")
       : '<div class="muted pad">No Workshop items installed for this game yet.</div>';
@@ -1674,7 +1693,7 @@ function newsHTML(n, withGame) {
   const g = withGame && state.games.find((x) => x.id === n.game);
   const src = g && imgSrc(g.cover, 120);
   return `<div class="news" data-page="${esc(n.url)}" data-page-title="${esc(n.title)}" title="Open in Lodestone">
-    ${withGame ? `<div class="news-art" style="${g ? placeholder(g) : ""}">${src ? `<img loading="lazy" src="${esc(src)}" alt="" onerror="this.remove()">` : ""}</div>` : ""}
+    ${withGame ? `<div class="news-art" style="${g ? placeholder(g) : ""}">${src ? `<img loading="lazy" src="${esc(src)}" alt="" data-err="remove">` : ""}</div>` : ""}
     <div class="news-body">
       <div class="news-meta">${g ? `<b>${esc(g.title)}</b> · ` : ""}${fmtDate(n.date)}${n.patch ? ' <span class="patch">Patch notes</span>' : ""}</div>
       <div class="news-title">${esc(n.title)}</div>
@@ -1813,7 +1832,7 @@ async function renderHome() {
     const src = imgSrc(g.cover, 120);
     const p = patchFor(g);
     return `<div class="upd-row">
-      <div class="row-art" style="${placeholder(g)}">${src ? `<img src="${esc(src)}" alt="" onerror="this.remove()">` : ""}</div>
+      <div class="row-art" style="${placeholder(g)}">${src ? `<img src="${esc(src)}" alt="" data-err="remove">` : ""}</div>
       <div class="grow"><div class="title" data-open-game="${esc(g.id)}">${esc(g.title)}</div>
         <div class="sub"><span class="dot" style="background:${store(g.store).color}"></span>${store(g.store).label} · ${g.update === "updating" ? "updating now" : `update ready${g.update_size ? ` · ${fmtSize(g.update_size)}` : ""}`}</div>
         ${p ? `<a href="#" class="patch-link" data-page="${esc(p.url)}" data-page-title="${esc(p.title)}">${esc(p.title)}</a>` : ""}</div>
@@ -1825,7 +1844,7 @@ async function renderHome() {
   const recent = vis.filter((g) => g.last_played).sort((a, b) => b.last_played - a.last_played).slice(0, 8);
   $("#home-recent").innerHTML = recent.length ? recent.map((g) => {
     const src = imgSrc(g.cover, 220);
-    return `<button class="recent" data-open-game="${esc(g.id)}" title="${esc(g.title)}"><div class="art" style="${placeholder(g)}">${src ? `<img src="${esc(src)}" alt="" onerror="this.remove()">` : ""}</div>
+    return `<button class="recent" data-open-game="${esc(g.id)}" title="${esc(g.title)}"><div class="art" style="${placeholder(g)}">${src ? `<img src="${esc(src)}" alt="" data-err="remove">` : ""}</div>
       <div class="title">${esc(g.title)}</div><div class="sub">${fmtAgo(g.last_played)}</div></button>`;
   }).join("") : '<div class="muted pad-s">Games you play from Lodestone show up here.</div>';
 
@@ -1953,7 +1972,7 @@ function renderArt() {
   const list = artHits.filter((a) => a.kind === artKind);
   $("#art-results").className = `art-results ${artKind}`;
   $("#art-results").innerHTML = list.length ? list.map((a) => `<button type="button" class="art-hit ${a.url === cur ? "on" : ""}" data-art="${esc(a.url)}" title="${esc(a.source)} · ${esc(a.name)}">
-      <img loading="lazy" src="${esc(a.thumb)}" alt="" onerror="this.parentElement.remove()"><small>${esc(a.source)}</small></button>`).join("")
+      <img loading="lazy" src="${esc(a.thumb)}" alt="" data-err="parent"><small>${esc(a.source)}</small></button>`).join("")
     : '<span class="muted">Nothing found. Try a shorter name.</span>';
 }
 $("#art-go").onclick = artSearch;
@@ -2025,7 +2044,7 @@ const STATUS_TEXT = { ingame: "In game", online: "Online", away: "Away", offline
 function avatarHTML(f, size = 34) {
   const h = hue(f.name);
   return f.avatar
-    ? `<img class="av" style="width:${size}px;height:${size}px" src="${esc(f.avatar)}" alt="" onerror="this.style.visibility='hidden'">`
+    ? `<img class="av" style="width:${size}px;height:${size}px" src="${esc(f.avatar)}" alt="" data-err="hide">`
     : `<span class="av ph" style="width:${size}px;height:${size}px;background:hsl(${h} 45% 30%)">${esc((f.name[0] || "?").toUpperCase())}</span>`;
 }
 function inLibrary(gid) { return gid && state.games.some((g) => g.id === gid); }

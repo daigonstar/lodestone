@@ -102,12 +102,12 @@ async fn gql(token: &str, query: &str, vars: Value) -> Result<Value, (u16, Strin
         .json(&serde_json::json!({ "query": query, "variables": vars }))
         .send()
         .await
-        .map_err(|e| (0, e.to_string()))?;
+        .map_err(|e| (0, crate::net::err(e)))?;
     let code = r.status().as_u16();
     if !r.status().is_success() {
         return Err((code, format!("EA answered {code}")));
     }
-    let v: Value = r.json().await.map_err(|e| (0, e.to_string()))?;
+    let v: Value = r.json().await.map_err(|e| (0, crate::net::err(e)))?;
     if let Some(e) = v["errors"].as_array().and_then(|a| a.first()) {
         let msg = e["message"].as_str().unwrap_or("query failed").to_string();
         let auth = msg.to_lowercase().contains("auth") || msg.to_lowercase().contains("token");

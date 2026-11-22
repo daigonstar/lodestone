@@ -65,6 +65,7 @@ pub async fn install() -> Result<String, String> {
         .ok_or("this MangoHud release has no prebuilt download")?;
     let url = asset["browser_download_url"].as_str().ok_or("no download url")?;
     let bytes = net::client().get(url).send().await.map_err(net::err)?.error_for_status().map_err(net::err)?.bytes().await.map_err(net::err)?;
+    net::verify_release_file(asset, &bytes)?;
     let stage = dir().join(format!("stage-{tag}"));
     let _ = fs::remove_dir_all(&stage);
     fs::create_dir_all(&stage).map_err(net::err)?;

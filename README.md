@@ -96,7 +96,8 @@ passwords, only the session tokens the stores hand back. Battle.net keeps its ow
 Wine prefix; Lodestone only turns its "keep me logged in" option back on. Signing out in
 **Accounts** deletes the stored session.
 
-**Who Lodestone talks to**
+**Who Lodestone talks to.** The complete list, every address with what it's for, is in
+[network-hosts.txt](network-hosts.txt). In short:
 
 - **Stores, for your library and downloads:** Steam (`api.steampowered.com`, `store.steampowered.com`),
   Epic, GOG, EA and Ubisoft, using the same web services their own apps use. Battle.net's download service
@@ -105,8 +106,9 @@ Wine prefix; Lodestone only turns its "keep me logged in" option back on. Signin
   (with your key), Modrinth and CurseForge (Minecraft).
 - **Tools Lodestone sets up for you:** the official GitHub releases of umu-launcher (runs Proton),
   legendary (Epic), gogdl (GOG) and MangoHud, and the official installers of Battle.net, the EA app,
-  Ubisoft Connect and Guild Wars 2. These are downloaded over HTTPS from their publishers. Lodestone
-  doesn't check them against a separate checksum, so you're trusting GitHub and the publisher.
+  Ubisoft Connect and Guild Wars 2. These are downloaded over HTTPS from their publishers. The GitHub tools are
+  checked against the SHA-256 checksum GitHub publishes for each release file and refused if they don't
+  match; the store installers have no published checksum, so for those you're trusting the publisher.
   Minecraft mods are checked against Modrinth's and CurseForge's checksums.
 
 **Unofficial APIs.** Steam's Web API is public, but Epic, GOG, EA, Ubisoft and Battle.net are reached
@@ -134,6 +136,23 @@ named, and are listed so nothing is a surprise:
 **The Flatpak** runs games, Steam and Proton on your system rather than inside its sandbox, so it has
 host access (`--filesystem=host`, `--talk-name=org.freedesktop.Flatpak`). Its protection is the same as
 the native packages', not stronger.
+
+**Kept honest automatically.** These promises aren't just words:
+
+- **Every push is checked.** A GitHub Actions check ([checks.yml](.github/workflows/checks.yml)) fails if the code
+  mentions any web address that isn't in [network-hosts.txt](network-hosts.txt). A new destination can't
+  slip in quietly: it has to be added to that file, in public, where anyone can see it in the commit.
+- **Dependencies are audited.** The same check runs `cargo audit` against the RustSec database of
+  known-vulnerable Rust libraries, and Dependabot suggests updates monthly.
+- **The interface is locked down.** A strict content security policy means only Lodestone's own script
+  files can run in its window, and store pages, sign-ins and news open in separate windows with no access
+  to the app.
+- **Reviews are published.** Each security review, every finding and fix included, is in
+  [docs/security-reviews](docs/security-reviews/) ([SECURITY.md](SECURITY.md) has the list).
+- **The rules are written down.** [AGENTS.md](AGENTS.md) sets out what Lodestone will never do: no
+  telemetry, no hidden network calls, no back doors or obfuscated code, sign-in data never leaves your
+  PC. AI coding tools read that file as the project's rules, and so can you. It's public on purpose,
+  not a hidden instruction.
 
 **Found a security problem?** Please don't open a public issue. Use GitHub's private
 [security advisory](https://github.com/daigonstar/lodestone/security/advisories/new) form instead.

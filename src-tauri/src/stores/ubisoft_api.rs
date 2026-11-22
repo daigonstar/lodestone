@@ -148,12 +148,12 @@ async fn query(s: &Session) -> Result<Value, (u16, String)> {
         .json(&serde_json::json!({ "operationName": "AllGames", "variables": { "owned": true }, "query": QUERY }))
         .send()
         .await
-        .map_err(|e| (0, e.to_string()))?;
+        .map_err(|e| (0, crate::net::err(e)))?;
     let code = r.status().as_u16();
     if !r.status().is_success() {
         return Err((code, format!("Ubisoft answered {code}")));
     }
-    r.json().await.map_err(|e| (0, e.to_string()))
+    r.json().await.map_err(|e| (0, crate::net::err(e)))
 }
 
 /// PC games only (the list also has console purchases).

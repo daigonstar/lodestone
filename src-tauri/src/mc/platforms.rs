@@ -12,6 +12,22 @@ const MR: &str = "https://api.modrinth.com/v2";
 const CF: &str = "https://api.curseforge.com/v1";
 const CF_MINECRAFT: u32 = 432;
 
+/// A download's file name exactly as the mod site gives it, but only if it's a plain name: no folders
+/// ("/", "\\"), nothing hidden, no "..", no control characters. The name comes from the site's answer,
+/// so without this a bad listing could write outside the instance's mods folder.
+fn safe_file_name(name: &str) -> Result<&str, String> {
+    let ok = !name.is_empty()
+        && name.len() <= 255
+        && !name.starts_with('.')
+        && !name.contains(['/', '\\', '\0'])
+        && !name.chars().any(char::is_control);
+    if ok {
+        Ok(name)
+    } else {
+        Err(format!("Refused a download with an unsafe file name: {name:?}"))
+    }
+}
+
 fn enc(s: &str) -> String {
     urlencoding::encode(s).into_owned()
 }
@@ -312,7 +328,7 @@ fn mr_install<'a>(cx: &'a mut Ctx<'_>, project: String, depth: u8) -> std::pin::
         };
         let files = ver["files"].as_array().cloned().unwrap_or_default();
         let file = files.iter().find(|f| f["primary"] == true).or(files.first()).ok_or("version has no files")?;
-        let name = file["filename"].as_str().ok_or("no filename")?.to_string();
+        let name = safe_file_name(file["filename"].as_str().ok_or("no filename")?)?.to_string();
         let dest = cx.inst.dir(cx.kind).join(&name);
         if !dest.exists() {
             download(file["url"].as_str().ok_or("no url")?, &dest, file["hashes"]["sha1"].as_str()).await?;
@@ -378,7 +394,7 @@ fn cf_install<'a>(cx: &'a mut Ctx<'_>, key: &'a str, mod_id: u64, depth: u8) -> 
         let Some(dl) = file["downloadUrl"].as_str() else {
             return Err(format!("{title}'s author only allows downloads through CurseForge's own app. Get it from its page or Modrinth."));
         };
-        let name = file["fileName"].as_str().ok_or("no file name")?.to_string();
+        let name = safe_file_name(file["fileName"].as_str().ok_or("no file name")?)?.to_string();
         let sha1 = file["hashes"].as_array().into_iter().flatten().find(|h| h["algo"] == 1).and_then(|h| h["value"].as_str()).map(String::from);
         let dest = cx.inst.dir(cx.kind).join(&name);
         if !dest.exists() {
@@ -444,6 +460,17 @@ pub async fn update(inst: &Instance, kind: Kind, file: &str) -> Result<String, S
         }
     }
     Ok(it.title.clone())
+}
+
+#[cfg(test)]
+mod safe_name_tests {
+    #[test]
+    fn refuses_file_names_that_leave_the_folder() {
+        assert_eq!(super::safe_file_name("sodium-fabric-0.6.jar"), Ok("sodium-fabric-0.6.jar"));
+        for bad in ["../../.config/autostart/x.desktop", "/etc/passwd", "a/b.jar", "..\\x.jar", ".hidden.jar", "", "a\nb.jar", "a\0b.jar"] {
+            assert!(super::safe_file_name(bad).is_err(), "{bad:?} should be refused");
+        }
+    }
 }
 
 #[cfg(test)]
