@@ -35,6 +35,99 @@ The native packages (AUR, AppImage, .deb) have every feature. The Flatpak runs g
 3. `scripts/release.sh <version> --upload` builds and attaches the Flatpak bundle and updates `packaging/aur/*`
    (version, checksums, `.SRCINFO`); then push those files to the two AUR repositories.
 
+## How Lodestone is built
+
+I'm a server and cloud engineer, not a full-time application developer. I built Lodestone because I kept
+hitting gaps in Linux gaming: games spread over half a dozen launchers, Battle.net and EA needing Lutris
+scripts, no one place to see what I own or have played. On windows I used GOG Galaxy which I found awesome
+Linux had nothing like that I could find. Like others I have been agressivly against AI until I realised potential.
+Can it be a security risk? Yes. But again like many other tools the tool itself isnt evil it is the human weilding it.
+Below is an honest and accurate account of how the app is made and what it does and talks too.
+
+Please read this if you have any concerns and please conduct your own audits.
+
+**Lodestone is written with an AI coding assistant (Anthropic's Claude).** Every commit says so in its
+`Co-Authored-By` line. I decide what gets built, review the changes, and test them on my own machine
+(Arch Linux, Hyprland, AMD) before they're released. I'm not hiding that, and I'd rather you know up front
+than find it in the git history.
+
+What that means in practice:
+
+- **It's a beta.** 0.1.0 is the first release. Steam, Epic, GOG, Battle.net (Diablo II: Resurrected) and
+  the library, play time and downloads are what I use daily. EA sign-in, Ubisoft, some World of Warcraft
+  versions and the Minecraft hub have had less real-world use. Please report what breaks.
+- **It's maintained in my spare time**, around a full-time job and a young family. I'll fix what I can,
+  but replies may take a few days. Pull requests and clear bug reports (with the launch log from
+  ⋯ → View launch log) help enormously.
+- **The code is all here** under the GPL, and the release files are built by GitHub Actions from the tagged
+  source, so you can check what you're running.
+
+## Security and privacy
+
+Lodestone signs in to stores for you and starts other programs, so here is exactly what it does with
+that access.
+
+**No telemetry.** Lodestone has no analytics, crash reporting or tracking, and no server of its own. It
+only talks to the stores and services below, when you use a feature that needs them.
+
+**Where your sign-ins are kept.** Everything stays on your PC, readable only by your user account
+(folders `700`, files `600`):
+
+| What | Where |
+|---|---|
+| Steam Web API, SteamGridDB and CurseForge keys (optional) | `~/.config/lodestone/settings.json` |
+| EA and Ubisoft sessions | `~/.config/lodestone/ea.json`, `ubisoft.json` |
+| Epic sign-in (kept by legendary) | `~/.local/share/lodestone/legendary/` |
+| GOG sign-in (kept by gogdl) | `~/.local/share/lodestone/gog/` |
+| Cookies from the sign-in and store windows | `~/.local/share/dev.lodestone.launcher/` (WebKit's data folder) |
+
+You sign in on each store's own login page, in a Lodestone window. Lodestone never sees or stores your
+passwords, only the session tokens the stores hand back. Battle.net keeps its own sign-in inside its
+Wine prefix; Lodestone only turns its "keep me logged in" option back on. Signing out in
+**Accounts** deletes the stored session.
+
+**Who Lodestone talks to**
+
+- **Stores, for your library and downloads:** Steam (`api.steampowered.com`, `store.steampowered.com`),
+  Epic, GOG, EA and Ubisoft, using the same web services their own apps use. Battle.net's download service
+  runs locally on your PC and is only reached on `127.0.0.1`.
+- **Game information and artwork:** ProtonDB, Wikipedia and Wikidata, GOG's public catalog, SteamGridDB
+  (with your key), Modrinth and CurseForge (Minecraft).
+- **Tools Lodestone sets up for you:** the official GitHub releases of umu-launcher (runs Proton),
+  legendary (Epic), gogdl (GOG) and MangoHud, and the official installers of Battle.net, the EA app,
+  Ubisoft Connect and Guild Wars 2. These are downloaded over HTTPS from their publishers. Lodestone
+  doesn't check them against a separate checksum, so you're trusting GitHub and the publisher.
+  Minecraft mods are checked against Modrinth's and CurseForge's checksums.
+
+**Unofficial APIs.** Steam's Web API is public, but Epic, GOG, EA, Ubisoft and Battle.net are reached
+through the web services and local programs their own apps use, not through public developer APIs. This
+is the same approach as Heroic, legendary and Lutris. It works today but isn't something these companies
+promise to keep working, and using it is your call.
+
+**Files Lodestone changes outside its own folders.** These are only changed when you use the feature
+named, and are listed so nothing is a surprise:
+
+- **Steam (background installs):** with *Keep Steam in the background* on, Lodestone edits Steam's
+  `appmanifest_*.acf` files to queue installs, updates and uninstalls, then restarts Steam quietly.
+- **Battle.net:** `Battle.net.config`, to keep you signed in and to start minimized without its window
+  coming back after games.
+- **World of Warcraft:** *Play and choose a realm* removes the remembered realm from `WTF/Config.wtf`.
+- **MangoHud:** `~/.config/MangoHud/MangoHud.conf` (the first save keeps your original as
+  `MangoHud.conf.bak`), and two Vulkan layer files in `~/.local/share/vulkan/implicit_layer.d/` if
+  Lodestone sets MangoHud up itself.
+- **Minecraft (ATLauncher):** the instance's `instance.json` when you add or remove mods (backed up as
+  `instance.json.lodestone-backup` first).
+- **Wine prefixes:** Battle.net, EA, Ubisoft and games run in prefixes under
+  `~/.local/share/lodestone/prefixes/`. If Battle.net, EA or Ubisoft is already installed through Lutris
+  or Steam, Lodestone uses that prefix instead, and Proton may update it.
+
+**The Flatpak** runs games, Steam and Proton on your system rather than inside its sandbox, so it has
+host access (`--filesystem=host`, `--talk-name=org.freedesktop.Flatpak`). Its protection is the same as
+the native packages', not stronger.
+
+**Found a security problem?** Please don't open a public issue. Use GitHub's private
+[security advisory](https://github.com/daigonstar/lodestone/security/advisories/new) form instead.
+
 ## Steam: install, uninstall, Workshop
 
 - Turn on **Not installed** to see every game you own on Steam (read offline from Steam's own `appinfo.vdf`

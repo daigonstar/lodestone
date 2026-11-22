@@ -69,6 +69,8 @@ fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> impl s
 async fn list_games(inner: State<'_, Shared>) -> Result<Vec<GameDto>, String> {
     let inner = inner.inner().clone();
     blocking(move || {
+        // Sign-ins may have been refreshed since (legendary and gogdl rewrite their token files).
+        state::lock_down_secrets();
         let mut games = stores::scan_all();
         apply_series(&mut games);
         apply_kiln(&mut games);
@@ -1257,6 +1259,7 @@ fn tracker(app: AppHandle, inner: Shared) {
 
 fn main() {
     host::use_host_dirs();
+    state::lock_down_secrets();
     gog_setup::main_hook();
     stores::bnet_agent::play_hook();
     launcher::ORIGINAL_ENV.get_or_init(|| std::env::vars().collect());

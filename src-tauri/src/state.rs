@@ -35,6 +35,24 @@ pub struct Store {
     pub games: HashMap<String, Entry>,
 }
 
+/// Keep sign-in data readable only by you. legendary (Epic) and gogdl (GOG) write their token files
+/// themselves, with ordinary permissions, so their folders are closed off as a whole (and the token
+/// files too), along with Lodestone's own settings folder (keys, EA and Ubisoft sessions).
+pub fn lock_down_secrets() {
+    use std::os::unix::fs::PermissionsExt;
+    let private = |p: PathBuf, mode: u32| {
+        if p.exists() {
+            let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode));
+        }
+    };
+    let d = data_dir();
+    private(d.join("legendary"), 0o700);
+    private(d.join("gog"), 0o700);
+    private(d.join("legendary/user.json"), 0o600);
+    private(d.join("gog/auth.json"), 0o600);
+    private(dirs::config_dir().unwrap_or_else(|| crate::model::home().join(".config")).join("lodestone"), 0o700);
+}
+
 pub fn data_dir() -> PathBuf {
     dirs::data_dir().unwrap_or_else(|| crate::model::home().join(".local/share")).join("lodestone")
 }

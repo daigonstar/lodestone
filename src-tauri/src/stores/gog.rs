@@ -44,7 +44,11 @@ fn read<T: for<'a> Deserialize<'a> + Default>(name: &str) -> T {
 
 fn write<T: Serialize>(name: &str, v: &T) -> Result<(), String> {
     fs::create_dir_all(dir()).map_err(|e| e.to_string())?;
-    fs::write(dir().join(name), serde_json::to_string_pretty(v).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    let text = serde_json::to_string_pretty(v).map_err(|e| e.to_string())?;
+    if name == "auth.json" {
+        return super::ea_api::write_private(&dir().join(name), &text);
+    }
+    fs::write(dir().join(name), text).map_err(|e| e.to_string())
 }
 
 fn gogdl(args: &[&str]) -> Result<LaunchSpec, String> {
