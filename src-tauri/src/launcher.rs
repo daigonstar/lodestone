@@ -179,7 +179,9 @@ mod tests {
     #[test]
     fn spawns_detached_and_tracks_until_exit() {
         let marker = format!("lodestone-test-{}", std::process::id());
-        let spec = LaunchSpec::new("sh", &["-c", &format!("exec -a {marker} sleep 3")]);
+        // The shell stays running for the whole sleep (the `true` after it), and its command line holds
+        // the marker. (No `exec -a`: dash, Ubuntu's sh, doesn't have it.)
+        let spec = LaunchSpec::new("sh", &["-c", &format!("sleep 3; true {marker}")]);
         let game = Game {
             id: "custom:test".into(), store: "custom".into(), via: "Custom".into(), title: "Test".into(),
             installed: true, cover: None, hero: None, size: None,

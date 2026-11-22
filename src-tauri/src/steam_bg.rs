@@ -418,17 +418,6 @@ fn read_log_from(offset: u64) -> String {
     String::from_utf8_lossy(&buf).into_owned()
 }
 
-fn dir_size(p: &Path) -> u64 {
-    let Ok(rd) = fs::read_dir(p) else { return 0 };
-    rd.flatten()
-        .map(|e| match e.file_type() {
-            Ok(t) if t.is_dir() => dir_size(&e.path()),
-            Ok(_) => e.metadata().map(|m| m.len()).unwrap_or(0),
-            Err(_) => 0,
-        })
-        .sum()
-}
-
 fn manifest_info(appid: u32) -> Option<(String, u32, u64, u64)> {
     let m = steam::manifest_path(appid)?;
     let v = vdf::parse(&fs::read_to_string(m).ok()?);
@@ -437,20 +426,75 @@ fn manifest_info(appid: u32) -> Option<(String, u32, u64, u64)> {
     Some((a.str("name").unwrap_or("").to_string(), n("StateFlags") as u32, n("BytesDownloaded"), n("BytesToDownload")))
 }
 
-fn percent(appid: u32, seen: &Seen) -> f32 {
-    let mut best = 0.0f32;
-    if let Some((_, _, done, total)) = manifest_info(appid) {
-        if total > 0 {
-            best = done as f32 / total as f32 * 100.0;
-        }
+/// The byte counts in a game's appmanifest, and the game's folder name.
+#[derive(Default, Debug, PartialEq)]
+struct Sizes {
+    downloaded: u64,
+    to_download: u64,
+    staged: u64,
+    to_stage: u64,
+    installdir: String,
+}
+
+fn manifest_sizes(text: &str) -> Option<Sizes> {
+    let v = vdf::parse(text);
+    let a = v.get("AppState")?;
+    let n = |k: &str| a.str(k).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    Some(Sizes {
+        downloaded: n("BytesDownloaded"),
+        to_download: n("BytesToDownload"),
+        staged: n("BytesStaged"),
+        to_stage: n("BytesToStage"),
+        installdir: a.str("installdir").unwrap_or("").to_string(),
+    })
+}
+
+/// How far a Steam download is: (percent, bytes done, bytes in total).
+///
+/// Steam only rewrites the manifest's byte counts now and then, so they can sit at 0 for most of a
+/// download. What grows steadily is the game's folder under steamapps/downloading, where Steam puts the
+/// new files before swapping them in; it's measured against the bytes to stage. Whichever source is
+/// further along wins. (This doesn't depend on having seen the update start, so updates Steam began
+/// before Lodestone opened are measured too.)
+fn progress(appid: u32, seen: &Seen, kind: &str) -> (f32, Option<u64>, Option<u64>) {
+    let Some(m) = steam::manifest_path(appid) else { return (0.0, None, None) };
+    let s = fs::read_to_string(&m).ok().and_then(|t| manifest_sizes(&t)).unwrap_or_default();
+    let mut in_folder = disk_used(&m.with_file_name("downloading").join(appid.to_string()));
+    // A new install usually goes straight into the game's own folder instead.
+    if kind == "install" && !s.installdir.is_empty() {
+        in_folder = in_folder.max(disk_used(&m.with_file_name("common").join(&s.installdir)));
     }
-    if let (Some((_, stage)), Some(m)) = (seen.totals, steam::manifest_path(appid)) {
-        if stage > 0 {
-            let staged = dir_size(&m.with_file_name("downloading").join(appid.to_string()));
-            best = best.max(staged as f32 / stage as f32 * 100.0);
-        }
+    progress_from(&s, in_folder, seen.totals.map(|t| t.1))
+}
+
+/// Disk space a folder really uses (blocks written), not its files' apparent sizes: Steam reserves
+/// full-size files up front, which would otherwise look finished straight away.
+fn disk_used(p: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(rd) = fs::read_dir(p) else { return 0 };
+    rd.flatten()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => disk_used(&e.path()),
+            Ok(t) if t.is_file() => e.metadata().map(|m| m.blocks() * 512).unwrap_or(0),
+            _ => 0,
+        })
+        .sum()
+}
+
+fn progress_from(s: &Sizes, in_folder: u64, logged_stage: Option<u64>) -> (f32, Option<u64>, Option<u64>) {
+    let to_stage = if s.to_stage > 0 { s.to_stage } else { logged_stage.unwrap_or(0) };
+    let staged = s.staged.max(in_folder).min(to_stage);
+    let pct = |d: u64, t: u64| if t > 0 { d as f32 / t as f32 * 100.0 } else { 0.0 };
+    let by_stage = pct(staged, to_stage);
+    let by_download = pct(s.downloaded, s.to_download);
+    let percent = by_stage.max(by_download).clamp(0.0, 99.0);
+    if to_stage > 0 && by_stage >= by_download {
+        (percent, Some(staged), Some(to_stage))
+    } else if s.to_download > 0 {
+        (percent, Some(s.downloaded), Some(s.to_download))
+    } else {
+        (percent, None, None)
     }
-    best.clamp(0.0, 99.0)
 }
 
 /// Steam work for the downloads panel: Lodestone's requests and updates Steam runs by itself.
@@ -518,15 +562,17 @@ pub fn statuses() -> Vec<Status> {
                     Some(_) => ("", 0.0, String::new()),
                     None if tr.applied.is_none() => ("downloading", 0.0, "Handing it to Steam…".to_string()),
                     None if !seen.running => ("downloading", 0.0, "Waiting for Steam…".to_string()),
-                    None => ("downloading", percent(tr.appid, &seen), "Steam is downloading".to_string()),
+                    None => ("downloading", progress(tr.appid, &seen, tr.kind).0, "Steam is downloading".to_string()),
                 };
                 if !state.is_empty() {
-                    // Steam's manifest has the bytes; Lodestone works out the speed from them.
-                    let (downloaded, total) = match manifest_info(tr.appid) {
-                        Some((_, _, d, t)) if t > 0 && seen.running => (Some(d), Some(t)),
-                        _ => (None, None),
-                    };
-                    let path = steam::manifest_path(tr.appid).and_then(|m| m.parent().map(|p| p.join("common").to_string_lossy().into_owned()));
+                    // Bytes from the manifest and Steam's download folder; Lodestone works out the speed and
+                    // time left from how fast they grow.
+                    let (downloaded, total) = if seen.running { let (_, d, t) = progress(tr.appid, &seen, tr.kind); (d, t) } else { (None, None) };
+                    // The game's own folder, from the manifest's installdir.
+                    let path = steam::manifest_path(tr.appid).and_then(|m| {
+                        let dir = fs::read_to_string(&m).ok().and_then(|t| manifest_sizes(&t)).map(|s| s.installdir).filter(|d| !d.is_empty())?;
+                        Some(m.parent()?.join("common").join(dir).to_string_lossy().into_owned())
+                    });
                     out.push(Status { id: key.clone(), title: tr.title.clone(), state, percent: pct, detail, seconds: tr.started.elapsed().as_secs(), kind: tr.kind, downloaded, total, path, ..Default::default() });
                     continue;
                 }
@@ -541,6 +587,27 @@ pub fn statuses() -> Vec<Status> {
         t.retain(|_, tr| !(tr.auto && tr.result.as_ref().is_some_and(|(at, _)| at.elapsed() > Duration::from_secs(8))));
     });
     out
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::*;
+
+    #[test]
+    fn measures_updates_steam_started_on_its_own() {
+        // The tester's case: Steam left the manifest at 0 while the download folder filled up.
+        let s = Sizes { downloaded: 0, to_download: 4_600_000_000, staged: 0, to_stage: 5_100_000_000, installdir: "rocketleague".into() };
+        let (pct, done, total) = progress_from(&s, 3_900_000_000, None);
+        assert!((76.0..77.0).contains(&pct), "{pct}");
+        assert_eq!((done, total), (Some(3_900_000_000), Some(5_100_000_000)));
+        // Manifest ahead of the folder (Steam just saved it): the manifest wins.
+        let s = Sizes { downloaded: 4_000_000_000, to_download: 4_600_000_000, staged: 0, to_stage: 5_100_000_000, installdir: String::new() };
+        assert_eq!(progress_from(&s, 0, None).1, Some(4_000_000_000));
+        // Nothing known yet.
+        assert_eq!(progress_from(&Sizes::default(), 0, None), (0.0, None, None));
+        let m = manifest_sizes("\"AppState\" { \"installdir\" \"rocketleague\" \"BytesToStage\" \"5\" \"BytesStaged\" \"2\" }").unwrap();
+        assert_eq!((m.installdir.as_str(), m.staged, m.to_stage), ("rocketleague", 2, 5));
+    }
 }
 
 #[cfg(test)]
