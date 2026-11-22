@@ -1,0 +1,79 @@
+# Every web address that appears in Lodestone's code, and why.
+#
+# This list is enforced: scripts/check-network.py runs on every push and pull request (GitHub Actions)
+# and fails if the code mentions an address that isn't here. Adding one means adding it to this file,
+# where it shows up in the commit for anyone to review. The README's "Security and privacy" section
+# describes the same services in plain words.
+#
+# Not visible here, and so not checked: addresses that services send back in their answers, which
+# Lodestone then loads, such as store artwork and screenshot servers, Modrinth and CurseForge file
+# downloads, GitHub's release download servers, and the download links of the store installers.
+# Lodestone only follows those for the service that sent them.
+#
+# Lodestone has no server of its own and sends no telemetry, analytics or crash reports anywhere.
+
+# --- Steam (library, owned games, friends, news, Workshop, store pages) ---
+api.steampowered.com                          # Steam Web API (owned games, friends, news), with your key
+store.steampowered.com                        # store data for game details, series and the in-app store
+shared.steamstatic.com                        # Steam's game artwork
+steamcommunity.com                            # Workshop pages and friends' profile links
+
+# --- Epic Games (sign-in through legendary, friends, play time, store) ---
+www.epicgames.com                             # Epic sign-in page
+account-public-service-prod.ol.epicgames.com  # friends' display names
+friends-public-service-prod.ol.epicgames.com  # your friends list
+library-service.live.use1a.on.epicgames.com   # your play time
+store.epicgames.com                           # in-app store
+
+# --- GOG (sign-in through gogdl, library, updates, details, store) ---
+auth.gog.com                                  # GOG sign-in
+embed.gog.com                                 # your GOG library and account name
+api.gog.com                                   # game details for GOG games
+content-system.gog.com                        # newest game builds (update checks)
+gamesdb.gog.com                               # genres and series (GOG's games database)
+www.gog.com                                   # in-app store
+
+# --- EA (sign-in, owned games, EA app installer, store) ---
+www.ea.com                                    # EA sign-in page and in-app store
+accounts.ea.com                               # EA sign-in session token
+service-aggregation-layer.juno.ea.com         # your owned EA games
+origin-a.akamaihd.net                         # official EA app installer
+
+# --- Ubisoft (sign-in, owned games, Ubisoft Connect installer, store) ---
+connect.ubisoft.com                           # Ubisoft sign-in page
+public-ubiservices.ubi.com                    # sign-in session and your owned games
+api-ubiservices.ubi.com                       # game details from Ubisoft
+static3.cdn.ubi.com                           # official Ubisoft Connect installer
+store.ubisoft.com                             # in-app store
+
+# --- Battle.net (installer, shop) ---
+downloader.battle.net                         # official Battle.net installer
+shop.battle.net                               # in-app shop
+# Passed to Battle.net's own download service (on 127.0.0.1) when it installs a game; Battle.net
+# contacts these, not Lodestone:
+*.version.battle.net
+*.patch.battle.net
+wowdev.wiki                                   # in a code comment only (documentation link)
+
+# --- Guild Wars 2 ---
+s3.amazonaws.com                              # official Guild Wars 2 installer (ArenaNet's download)
+
+# --- Game information and artwork ---
+www.protondb.com                              # ProtonDB ratings
+en.wikipedia.org                              # game details for games not on Steam or GOG
+www.wikidata.org                              # developer, publisher and release date for those
+query.wikidata.org                            # game series names
+www.steamgriddb.com                           # artwork search, with your key
+
+# --- Minecraft hub ---
+api.modrinth.com                              # mod search and updates
+modrinth.com                                  # links to mod pages
+api.curseforge.com                            # mod search, with your key
+console.curseforge.com                        # link to get a CurseForge key (opened in your browser)
+
+# --- Tools Lodestone sets up (official GitHub releases) ---
+api.github.com                                # newest release of umu-launcher, legendary, gogdl and MangoHud
+github.com                                    # links to MangoHud's documentation (opened in your browser)
+
+# --- Inside Lodestone only ---
+lodestone.localhost                           # internal address for sign-in hand-offs; never leaves the app
