@@ -22,8 +22,8 @@ conflicts=("$_pkgname")
 options=('!strip' '!debug')
 source=("$_pkgname-$pkgver-x86_64.tar.gz::$url/releases/download/$pkgver/$_pkgname-$pkgver-x86_64.tar.gz"
         'lodestone.desktop')
-sha256sums=('SKIP'
-            'SKIP')
+sha256sums=('b8bd1f084e9e2dc1ab2d5ad9593452560a03dd9a3e6283c671a0cf6afaa4eb00'
+            '4ef274f902d4a9cc2a2b0ea5d8a4473f421b80eb6f0f40535d8d1b30e5f7d622')
 
 package() {
   cd "$_pkgname-$pkgver-x86_64"
