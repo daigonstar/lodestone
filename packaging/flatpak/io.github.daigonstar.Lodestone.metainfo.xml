@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 daigonstar -->
+<component type="desktop-application">
+  <id>io.github.daigonstar.Lodestone</id>
+  <name>Lodestone</name>
+  <summary>One library for all your games on Linux</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <developer id="io.github.daigonstar">
+    <name>daigonstar</name>
+  </developer>
+  <launchable type="desktop-id">io.github.daigonstar.Lodestone.desktop</launchable>
+  <description>
+    <p>
+      Lodestone brings the games you own on every store into one library, and runs Windows games and
+      store apps through Proton without needing Steam.
+    </p>
+    <ul>
+      <li>Steam, Epic Games, GOG, Amazon, Battle.net, EA, Ubisoft, Lutris, Heroic and Minecraft in one place, installed or not</li>
+      <li>Install, update and uninstall Epic and GOG games directly, and Steam games in the background</li>
+      <li>Battle.net, EA app and Ubisoft Connect set up on Proton, or used from Lutris or Steam where you already have them</li>
+      <li>Downloads tab with speed, sizes, time left and history</li>
+      <li>Play time from Steam, Epic, Lutris and Heroic, plus everything you play through Lodestone</li>
+      <li>Game details, news, ProtonDB ratings and artwork, with an editor for titles, covers and install locations</li>
+      <li>MangoHud performance overlay, set up and configured from the app</li>
+      <li>Steam friends, and who among them owns a game</li>
+      <li>Mods through Kiln, a separate mod manager: Lodestone shows which games it can mod and plays them with their mods checked</li>
+      <li>Minecraft hub for mods, resource packs and shaders (in active development: works with ATLauncher today, Prism Launcher support is early)</li>
+    </ul>
+    <p>
+      Lodestone is not affiliated with Valve, Epic Games, GOG, Amazon, Blizzard, Electronic Arts, Ubisoft or Mojang.
+    </p>
+  </description>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Home: recent games, updates, news and play time</caption>
+      <image>https://raw.githubusercontent.com/daigonstar/lodestone/v0.1.0/packaging/flatpak/screenshots/home.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Every store in one library, with play time and ProtonDB ratings</caption>
+      <image>https://raw.githubusercontent.com/daigonstar/lodestone/v0.1.0/packaging/flatpak/screenshots/library.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Battle.net games on Proton</caption>
+      <image>https://raw.githubusercontent.com/daigonstar/lodestone/v0.1.0/packaging/flatpak/screenshots/battlenet.png</image>
+    </screenshot>
+  </screenshots>
+  <url type="homepage">https://github.com/daigonstar/lodestone</url>
+  <url type="bugtracker">https://github.com/daigonstar/lodestone/issues</url>
+  <url type="vcs-browser">https://github.com/daigonstar/lodestone</url>
+  <categories>
+    <category>Game</category>
+  </categories>
+  <keywords>
+    <keyword>launcher</keyword>
+    <keyword>steam</keyword>
+    <keyword>epic</keyword>
+    <keyword>gog</keyword>
+    <keyword>battle.net</keyword>
+    <keyword>proton</keyword>
+  </keywords>
+  <branding>
+    <color type="primary" scheme_preference="light">#b9b2ff</color>
+    <color type="primary" scheme_preference="dark">#2a2357</color>
+  </branding>
+  <content_rating type="oars-1.1"/>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <releases>
+    <release version="0.1.0" date="2026-11-22">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

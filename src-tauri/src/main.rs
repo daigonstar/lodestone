@@ -174,13 +174,10 @@ fn launch_game(id: String, mode: Option<String>, inner: State<'_, Shared>, app: 
     };
     // "alt": the game's second way to start (e.g. through Battle.net instead of directly).
     let alt = if mode == "alt" { game.alt_launch.as_ref() } else { None };
-    // WoW started directly: "acct:WoW2", "realm" or "acct:WoW2+realm" pick the game account and/or show
-    // the realm list.
-    if alt.is_none() && !game.accounts.is_empty() || mode.contains("realm") {
-        let account = mode.split('+').find_map(|p| p.strip_prefix("acct:"));
-        let realm = mode.split('+').any(|p| p == "realm");
-        if let Some(dir) = game.launch.as_ref().and_then(|l| l.cwd.as_ref()).filter(|_| account.is_some() || realm) {
-            stores::winapps::wow_prepare(dir, account, &game.accounts, realm)?;
+    // WoW started directly with "realm": show the realm list instead of joining the last realm.
+    if mode == "realm" && game.pick_realm {
+        if let Some(dir) = game.launch.as_ref().and_then(|l| l.cwd.as_ref()) {
+            stores::winapps::wow_prepare(dir)?;
         }
     }
     let spec = alt.or(kiln_spec.as_ref()).or(game.launch.as_ref()).ok_or("No launch method for this game")?;

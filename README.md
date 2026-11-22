@@ -62,6 +62,9 @@ All launches run in their own process group with stdin/stdout detached; output g
 
 ## Minecraft hub
 
+> **In active development.** The hub works with ATLauncher today; Prism Launcher support is early, and other
+> launchers (including the official one) aren't supported yet.
+
 Click **Minecraft** in the sidebar, or start straight into it with `lodestone --view minecraft`
 (handy as its own desktop shortcut). ATLauncher / Prism still handle Microsoft sign-in and running the game; Lodestone manages content:
 
@@ -73,6 +76,14 @@ Click **Minecraft** in the sidebar, or start straight into it with `lodestone --
 - ATLauncher instances: new and removed files are also written to `instance.json` (backup kept as
   `instance.json.lodestone-backup`), so close ATLauncher while changing mods.
 
+## Mods with Kiln
+
+Modding goes through **Kiln**, a separate mod manager released alongside Lodestone. When Kiln is installed,
+Lodestone shows which games it can mod (the **Modded (Kiln)** view and a *Modded* tag), and **Play modded** starts
+a game through Kiln's Guarded Play, which checks that mods are deployed and loaders are set up first
+(⚙ Settings → Mods; the ▾ next to Play also offers *Play without mods*). Without Kiln, everything else in
+Lodestone works as usual and these options don't appear.
+
 ## Run
 
 ```bash
@@ -83,10 +94,10 @@ cargo tauri build                      # AppImage + .deb in src-tauri/target/rel
 ### Flatpak
 
 ```bash
-packaging/flatpak/build.sh             # installs dev.lodestone.launcher and writes packaging/flatpak/lodestone.flatpak
+packaging/flatpak/build.sh             # installs io.github.daigonstar.Lodestone and writes packaging/flatpak/lodestone.flatpak
 ```
 
-Needs `flatpak install --user flathub org.flatpak.Builder org.gnome.Sdk//50 org.freedesktop.Sdk.Extension.rust-stable//25.08`.
+Needs `flatpak install --user flathub org.flatpak.Builder org.gnome.Sdk//51 org.freedesktop.Sdk.Extension.rust-stable//26.08`. The build is offline like Flathub's: crates come from `packaging/flatpak/cargo-sources.json` (rebuilt from `Cargo.lock` by `cargo-sources.py`).
 The Flatpak uses the same settings, library data and sign-ins as a native install. Games, Steam, umu-run and
 store clients still run on the host: Lodestone starts them with `flatpak-spawn --host` and watches the host's
 process list, so the app has host access (`--talk-name=org.freedesktop.Flatpak`, `--filesystem=host`).
@@ -158,3 +169,7 @@ They appear here automatically, tagged as Battle.net / ArenaNet. Or add any Wine
 ## Keys
 
 `/` search · arrows move · `Enter` play · `F` favorite · `Ctrl+R` rescan
+
+## License
+
+Lodestone is free software under the GNU General Public License, version 3 or later. See [LICENSE](LICENSE).

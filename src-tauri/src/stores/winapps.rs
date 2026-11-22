@@ -310,7 +310,6 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
     let mut installed_codes = std::collections::HashSet::new();
     let aggregate = bnet_catalog::aggregate_products(&c);
     let wow = bnet_catalog::wow_versions(&c);
-    let wow_accounts = bnet_catalog::wow_accounts(&c);
     let mut wow_installed = std::collections::HashSet::new();
     // Retail by its product code (Battle.net's usual Play); the others by install id.
     let wow_exec = |v: &bnet_catalog::WowVersion| match v.uid.as_str() {
@@ -368,42 +367,51 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
             // says so, .build.info lists it, or its folder has the game in it (installs the Agent made
             // leave .build.info's product column empty).
             let rows = bnet_catalog::build_info_products(&dir.join(".build.info"));
+            let known: Vec<&str> = wow.iter().map(|v| v.folder.as_str()).collect();
             let is_wow = recs.iter().any(|r| r.code.starts_with("wow") || r.uid.starts_with("wow"))
                 || rows.iter().any(|r| r.starts_with("wow"))
                 || wow.iter().any(|v| wow_exe(&dir.join(&v.folder)).is_some());
-            let versions: Vec<&bnet_catalog::WowVersion> = if is_wow {
+            let versions: Vec<(&bnet_catalog::WowVersion, Option<PathBuf>)> = if is_wow {
                 wow.iter()
-                    .filter(|v| {
-                        recs.iter().any(|r| r.uid.eq_ignore_ascii_case(&v.uid) || r.code.eq_ignore_ascii_case(&v.tact))
-                            || rows.iter().any(|r| r.eq_ignore_ascii_case(&v.tact))
-                            || wow_exe(&dir.join(&v.folder)).is_some()
+                    .filter_map(|v| {
+                        let recorded = recs.iter().any(|r| r.uid.eq_ignore_ascii_case(&v.uid) || r.code.eq_ignore_ascii_case(&v.tact))
+                            || rows.iter().any(|r| r.eq_ignore_ascii_case(&v.tact));
+                        let vdir = wow_version_dir(&dir, &v.folder, &known, recorded);
+                        // When Battle.net has records for this folder, they decide; the files alone only
+                        // count for installs it has no record of.
+                        let has_records = !recs.is_empty() || !rows.is_empty();
+                        (recorded || (!has_records && vdir.is_some())).then_some((v, vdir))
                     })
                     .collect()
             } else {
                 vec![]
             };
             if !versions.is_empty() {
-                for v in versions {
+                for (v, vdir) in versions {
                     wow_installed.insert(v.uid.clone());
                     let through_bnet = bnet_play(app, &client, wow_exec(v)).ok();
                     // Straight to the game: no waiting for Battle.net to start and hand it over. WoW asks
                     // you to sign in itself the first time (it can remember you).
-                    let direct = wow_exe(&dir.join(&v.folder)).and_then(|exe| {
+                    let direct = vdir.as_deref().and_then(wow_exe).and_then(|exe| {
                         let mut s = app.run(&exe, vec![]).ok()?;
                         s.cwd = exe.parent().map(Path::to_path_buf);
                         Some(s)
                     });
-                    let g = match direct {
+                    let mut g = match direct {
                         Some(d) => {
                             let mut g = wow_game(v, true, Some(d));
                             g.via = "Direct · Proton".into();
                             g.alt_launch = through_bnet;
                             g.alt_label = Some("Play through Battle.net".into());
-                            g.accounts = wow_accounts.get(bnet_catalog::WOW[v.order].1).cloned().unwrap_or_default();
+                            g.pick_realm = true;
                             g
                         }
                         None => wow_game(v, true, through_bnet),
                     };
+                    // Track it by the folder it really runs from.
+                    if let Some(n) = vdir.as_ref().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().into_owned()) {
+                        g.detect = Some(Detect::Contains(n));
+                    }
                     out.push(g);
                 }
                 installed_codes.extend(["WoW".to_string(), "WoWC".to_string()]);
@@ -487,48 +495,50 @@ fn bnet_games(app: &WinApp) -> Vec<Game> {
     out
 }
 
-/// Before starting a WoW version directly: pick which game account it signs in to (WoW keeps the
-/// default in WTF/Config.wtf as `SET accountList "WoW1|!WoW2|"`, ! marking it), and, if asked,
-/// forget the last realm so WoW shows the realm list.
-pub fn wow_prepare(version_dir: &Path, account: Option<&str>, accounts: &[String], pick_realm: bool) -> Result<(), String> {
+/// Before starting a WoW version directly with "choose a realm": forget the last realm in
+/// WTF/Config.wtf (`SET realmName`), so WoW shows the realm list.
+pub fn wow_prepare(version_dir: &Path) -> Result<(), String> {
     let f = version_dir.join("WTF/Config.wtf");
-    let text = fs::read_to_string(&f).unwrap_or_default();
-    let out = wow_config(&text, account, accounts, pick_realm);
+    let Ok(text) = fs::read_to_string(&f) else { return Ok(()) };
+    let out = wow_forget_realm(&text);
     if out != text {
-        fs::create_dir_all(f.parent().unwrap()).map_err(|e| e.to_string())?;
         fs::write(&f, out).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
-fn wow_config(text: &str, account: Option<&str>, accounts: &[String], pick_realm: bool) -> String {
-    let mut lines: Vec<String> = text.lines().map(String::from).collect();
-    if let Some(acct) = account {
-        let at = lines.iter().position(|l| l.trim_start().starts_with("SET accountList "));
-        // Names already in the list keep WoW's spelling; any it doesn't know yet are added.
-        let mut names: Vec<String> = at
-            .and_then(|i| lines[i].split('"').nth(1).map(|v| v.split('|').filter(|s| !s.is_empty()).map(|s| s.trim_start_matches('!').to_string()).collect()))
-            .unwrap_or_default();
-        for a in accounts.iter().map(String::as_str).chain([acct]) {
-            if !names.iter().any(|n| n.eq_ignore_ascii_case(a)) {
-                names.push(a.to_string());
-            }
-        }
-        let list: String = names.iter().map(|n| if n.eq_ignore_ascii_case(acct) { format!("!{n}|") } else { format!("{n}|") }).collect();
-        let line = format!("SET accountList \"{list}\"");
-        match at {
-            Some(i) => lines[i] = line,
-            None => lines.push(line),
-        }
-    }
-    if pick_realm {
-        lines.retain(|l| !l.trim_start().starts_with("SET realmName "));
-    }
-    let mut s = lines.join("\n");
+fn wow_forget_realm(text: &str) -> String {
+    let mut s: String = text.lines().filter(|l| !l.trim_start().starts_with("SET realmName ")).collect::<Vec<_>>().join("\n");
     if !s.is_empty() {
         s.push('\n');
     }
     s
+}
+
+/// Where a WoW version's files are inside the install: its usual folder (_retail_, _classic_era_...),
+/// or, for a version Battle.net says is installed there but whose folder name Lodestone doesn't know
+/// (WoW: Forever), the one "_name_" folder with a WoW program that no other version uses. An install
+/// with the program right at the top counts too.
+fn wow_version_dir(dir: &Path, folder: &str, known: &[&str], recorded: bool) -> Option<PathBuf> {
+    let usual = dir.join(folder);
+    if wow_exe(&usual).is_some() {
+        return Some(usual);
+    }
+    if !recorded {
+        return None;
+    }
+    let mut others: Vec<PathBuf> = fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            let n = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            p.is_dir() && n.starts_with('_') && n.ends_with('_') && !known.contains(&n.as_str()) && !n.contains("ptr") && !n.contains("beta")
+        })
+        .filter(|p| wow_exe(p).is_some())
+        .collect();
+    others.sort();
+    others.into_iter().next().or_else(|| wow_exe(dir).map(|_| dir.to_path_buf()))
 }
 
 /// The game's own program in a WoW version folder (_retail_/Wow.exe, _classic_*/WowClassic.exe).
@@ -951,18 +961,29 @@ mod foreign_tests {
 }
 
 #[cfg(test)]
+mod wow_dir_tests {
+    #[test]
+    fn finds_forevers_folder_by_elimination() {
+        let root = std::env::temp_dir().join(format!("lodestone-wowdir-{}", std::process::id()));
+        for (sub, exe) in [("_retail_", "Wow.exe"), ("_forever_", "WowClassic.exe"), ("_ptr_", "WowT.exe")] {
+            std::fs::create_dir_all(root.join(sub)).unwrap();
+            std::fs::write(root.join(sub).join(exe), b"MZ").unwrap();
+        }
+        let known = ["_retail_", "_wowf_", "_classic_", "_classic_era_", "_anniversary_"];
+        assert!(super::wow_version_dir(&root, "_retail_", &known, true).unwrap().ends_with("_retail_"));
+        assert!(super::wow_version_dir(&root, "_wowf_", &known, true).unwrap().ends_with("_forever_"));
+        // Not recorded as installed: no guessing.
+        assert!(super::wow_version_dir(&root, "_wowf_", &known, false).is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
 mod wow_config_tests {
     #[test]
-    fn picks_the_game_account_and_realm_list() {
-        let cfg = "SET portal \"EU\"\nSET accountList \"WoW1|!WoW2|\"\nSET realmName \"Draenor\"\n";
-        let accts = vec!["WoW1".to_string(), "WoW2".to_string()];
-        let out = super::wow_config(cfg, Some("WoW1"), &accts, false);
-        assert!(out.contains("SET accountList \"!WoW1|WoW2|\""));
-        assert!(out.contains("realmName"));
-        let out = super::wow_config(cfg, None, &accts, true);
-        assert!(!out.contains("realmName") && out.contains("!WoW2"));
-        // A fresh install has no Config.wtf yet.
-        assert_eq!(super::wow_config("", Some("WoW2"), &accts, false), "SET accountList \"WoW1|!WoW2|\"\n");
+    fn forgets_the_last_realm() {
+        let cfg = "SET portal \"EU\"\nSET realmName \"Draenor\"\nSET gxApi \"D3D12\"\n";
+        assert_eq!(super::wow_forget_realm(cfg), "SET portal \"EU\"\nSET gxApi \"D3D12\"\n");
     }
 }
 

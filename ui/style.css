@@ -180,6 +180,8 @@ a { color: var(--accent-2); }
 
 /* Minecraft hub */
 .mc { padding: 18px 24px 80px; }
+.mc-dev { margin-bottom: 12px; padding: 10px 14px; border-radius: 10px; border: 1px solid #f5a52455; background: #f5a5241a; color: var(--text); font-size: 13px; }
+.mc-dev b { color: #f5b14a; }
 .mc-head { display: flex; align-items: center; gap: 20px; padding: 22px; border-radius: 16px; border: 1px solid var(--line);
   background: linear-gradient(120deg, #1d3a2b 0%, #14261d 45%, var(--bg-2) 100%); }
 .mc-icon { width: 76px; height: 76px; border-radius: 14px; flex: none; background: linear-gradient(135deg, #62b47a, #2e6b45) center/cover; box-shadow: 0 6px 18px #0008; }

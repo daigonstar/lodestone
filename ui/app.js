@@ -535,9 +535,8 @@ function renderHero() {
   const play = $("#btn-play");
   play.classList.toggle("running", !!run);
   play.disabled = (!g.installed && !g.can_install) || !!run;
-  const acct = lastAccount(g);
-  play.textContent = !g.installed ? (g.can_install ? "⤓ Install" : "Not installed") : run ? (run.state === "launching" ? "Launching…" : "● Running") : g.kiln_managed && state.kilnPlay ? "▶ Play modded" : acct ? `▶ Play as ${acct}` : "▶ Play";
-  play.title = g.kiln_managed && state.kilnPlay ? "Launches through Kiln, which checks your mods first" : acct ? "The ▾ menu picks another game account or shows the realm list" : "";
+  play.textContent = !g.installed ? (g.can_install ? "⤓ Install" : "Not installed") : run ? (run.state === "launching" ? "Launching…" : "● Running") : g.kiln_managed && state.kilnPlay ? "▶ Play modded" : "▶ Play";
+  play.title = g.kiln_managed && state.kilnPlay ? "Launches through Kiln, which checks your mods first" : "";
   const options = playOptions(g);
   $("#play-menu").innerHTML = options.map(([mode, label, hint]) => `<button data-play-mode="${esc(mode)}">${label}${hint ? ` <small class="muted">${hint}</small>` : ""}</button>`).join("");
   const split = !!(options.length && g.installed && !run);
@@ -1269,29 +1268,19 @@ function select(id, scroll = false) {
 }
 
 // ---------- actions ----------
-// WoW with several game accounts: Play uses the one you picked last (WoW keeps it too).
-const lastAccount = (g) => (g.accounts && g.accounts.length > 1 ? ls.get(`account:${g.id}`, g.accounts[0]) : null);
 // The ▾ menu next to Play: [mode, label, hint].
 function playOptions(g) {
   const o = [];
   if (g.kiln_managed) {
     o.push(["modded", "▶ Play modded", "through Kiln's checks"], ["vanilla", "▶ Play without mods", "mods go back next time"]);
   }
-  if (g.accounts && g.accounts.length > 1) {
-    for (const a of g.accounts) o.push([`acct:${a}`, `▶ Play as ${esc(a)}`, a === lastAccount(g) ? "last used" : ""]);
-    o.push([`acct:${lastAccount(g)}+realm`, "▶ Play and choose a realm", "shows the realm list"]);
-  } else if (g.accounts && g.accounts.length === 1) {
-    o.push(["realm", "▶ Play and choose a realm", "shows the realm list"]);
-  }
+  if (g.pick_realm) o.push(["realm", "▶ Play and choose a realm", "shows the realm list"]);
   if (g.alt_label) o.push(["alt", `▶ ${esc(g.alt_label)}`, ""]);
   return o;
 }
 async function play(id, mode = null) {
   const g = state.games.find((x) => x.id === id);
   if (!g || !g.installed) return;
-  const acct = mode && mode.match(/^acct:([^+]+)/);
-  if (acct) { ls.set(`account:${g.id}`, acct[1]); renderHero(); }
-  else if (!mode && lastAccount(g)) mode = `acct:${lastAccount(g)}`;
   try {
     await invoke("launch_game", { id, mode });
     toast(mode === "vanilla" ? `Starting ${g.title} without mods (Kiln takes them out; Play modded puts them back)…` : `Starting ${g.title}…`);

@@ -1,0 +1,52 @@
+# Lodestone as a Flatpak (the manifest submitted to Flathub).
+# Local test build from this checkout:  packaging/flatpak/build.sh
+#
+# Games, Steam, umu-run and the store clients run on the host: Lodestone starts them through
+# `flatpak-spawn --host` and follows them in the host's process list (src-tauri/src/host.rs), which is
+# why it talks to org.freedesktop.Flatpak and sees the whole filesystem.
+#
+# The build is offline: every Rust crate is listed with its checksum in cargo-sources.json
+# (regenerate with packaging/flatpak/cargo-sources.py after Cargo.lock changes).
+app-id: io.github.daigonstar.Lodestone
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: lodestone
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  # Game folders on any drive, Wine prefixes, and the store clients' data.
+  - --filesystem=host
+  # Start games, Steam, umu-run and store clients on the host.
+  - --talk-name=org.freedesktop.Flatpak
+  - --talk-name=org.freedesktop.Notifications
+modules:
+  - name: lodestone
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/lodestone/cargo
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      - cargo --offline build --release --locked --features tauri/custom-protocol --manifest-path src-tauri/Cargo.toml
+      - install -Dm755 src-tauri/target/release/lodestone /app/bin/lodestone
+      - install -Dm644 assets/lodestone.svg /app/share/icons/hicolor/scalable/apps/io.github.daigonstar.Lodestone.svg
+      - install -Dm644 src-tauri/icons/128x128.png /app/share/icons/hicolor/128x128/apps/io.github.daigonstar.Lodestone.png
+      - install -Dm644 src-tauri/icons/128x128@2x.png /app/share/icons/hicolor/256x256/apps/io.github.daigonstar.Lodestone.png
+      - install -Dm644 packaging/flatpak/io.github.daigonstar.Lodestone.desktop /app/share/applications/io.github.daigonstar.Lodestone.desktop
+      - install -Dm644 packaging/flatpak/io.github.daigonstar.Lodestone.metainfo.xml /app/share/metainfo/io.github.daigonstar.Lodestone.metainfo.xml
+      - install -Dm644 LICENSE /app/share/licenses/io.github.daigonstar.Lodestone/LICENSE
+    sources:
+      # app-source-begin (build.sh swaps this for the local checkout)
+      - type: git
+        url: https://github.com/daigonstar/lodestone.git
+        tag: v0.1.0
+      # app-source-end
+      - cargo-sources.json

@@ -2,6 +2,8 @@
 name = "lodestone"
 version = "0.1.0"
 description = "One launcher for every game library on Linux"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/daigonstar/lodestone"
 edition = "2021"
 
 [build-dependencies]
