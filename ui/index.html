@@ -9,7 +9,7 @@
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand"><img class="brand-icon" src="lodestone.svg" alt="" />Lodestone</div>
+    <div class="brand"><img class="brand-icon" src="lodestone.svg" alt="" />Lodestone<a href="#" class="app-version" id="app-version" title="What's new in this version"></a></div>
     <nav id="nav-library" class="nav"></nav>
     <div class="nav-label">Stores</div>
     <nav id="nav-stores" class="nav"></nav>
@@ -431,7 +431,8 @@
         <a href="#" data-href="https://console.curseforge.com/">console.curseforge.com</a> → API keys. It's stored only in
         <code>~/.config/lodestone/settings.json</code> (readable only by you).</p>
       <div class="dlg-actions">
-        <button type="button" class="ghost" id="btn-rerun-setup" style="margin-right:auto">Run setup guide again</button>
+        <button type="button" class="ghost" id="btn-rerun-setup">Run setup guide again</button>
+        <small class="muted settings-version" id="settings-version" style="margin-right:auto"></small>
         <button type="button" class="ghost" data-close-dialog>Cancel</button>
         <button type="submit" class="play">Save</button>
       </div>

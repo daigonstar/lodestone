@@ -1217,6 +1217,12 @@ fn startup_view() -> Option<String> {
     args.iter().position(|a| a == "--view").and_then(|i| args.get(i + 1)).cloned()
 }
 
+/// Lodestone's version (from Cargo.toml), shown in the sidebar and Settings.
+#[tauri::command]
+fn app_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 #[tauri::command]
 fn get_settings() -> settings::Settings {
     settings::load()
@@ -1328,6 +1334,7 @@ fn main() {
             startup_view,
             refresh_series,
             proton_info,
+            app_version,
             downloads_history,
             downloads_history_clear,
             mangohud_info,

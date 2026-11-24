@@ -1666,6 +1666,15 @@ function announceUpdates() {
 setInterval(() => load(true), 5 * 60 * 1000);
 setInterval(() => { invoke("store_refresh").catch(() => {}).finally(() => load(true)); }, 30 * 60 * 1000);
 
+// Version in the sidebar and Settings; clicking it opens that release's notes on GitHub.
+invoke("app_version").then((v) => {
+  const rel = `https://github.com/daigonstar/lodestone/releases/tag/${encodeURIComponent(v)}`;
+  const a = $("#app-version");
+  a.textContent = `v${v}`;
+  a.dataset.href = rel;
+  $("#settings-version").innerHTML = `Lodestone ${esc(v)} · <a href="#" data-href="${esc(rel)}">release notes</a> · <a href="#" data-href="https://github.com/daigonstar/lodestone">source</a>`;
+}).catch(() => {});
+
 invoke("startup_view")
   .then((v) => { if (v) { state.view = v; ls.set("view", v); } })
   .catch(() => {})
