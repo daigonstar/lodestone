@@ -201,6 +201,16 @@ fn set_key(txt: &str, key: &str, val: &str) -> String {
     out.join("\n") + "\n"
 }
 
+/// Ask Steam to update a game when it next starts: "update required" (2) plus "update started" (1024),
+/// the same state a new install is written in. With "update required" alone, Steam's scheduler is free
+/// to put the update off, often by days for games not played lately ("Update delayed for 406444 secs"
+/// in its log, shown as "Scheduled" in Steam's Downloads), so nothing downloaded. An update already
+/// marked as started is resumed straight away, whatever the schedule says.
+fn mark_for_update(manifest: &str, flags: u32) -> String {
+    let txt = set_key(manifest, "StateFlags", &(flags | 2 | 1024).to_string());
+    set_key(&txt, "ScheduledAutoUpdate", "0")
+}
+
 fn apply(edit: &Edit) -> Result<(), String> {
     match edit {
         Edit::Write(path, body) => fs::write(path, body).map_err(|e| format!("Couldn't write {}: {e}", path.display())),
@@ -208,10 +218,7 @@ fn apply(edit: &Edit) -> Result<(), String> {
             let txt = fs::read_to_string(path).map_err(|e| e.to_string())?;
             let v = vdf::parse(&txt);
             let flags: u32 = v.get("AppState").and_then(|a| a.str("StateFlags")).and_then(|s| s.parse().ok()).unwrap_or(4);
-            // "Update required" + no delay: Steam updates it as soon as it starts.
-            let txt = set_key(&txt, "StateFlags", &(flags | 2).to_string());
-            let txt = set_key(&txt, "ScheduledAutoUpdate", "0");
-            fs::write(path, txt).map_err(|e| e.to_string())
+            fs::write(path, mark_for_update(&txt, flags)).map_err(|e| e.to_string())
         }
         Edit::Remove(paths) => {
             for p in paths {
@@ -606,6 +613,21 @@ pub fn statuses() -> Vec<Status> {
         t.retain(|_, tr| !(tr.auto && tr.result.as_ref().is_some_and(|(at, _)| at.elapsed() > Duration::from_secs(8))));
     });
     out
+}
+
+#[cfg(test)]
+mod update_request_tests {
+    #[test]
+    fn marks_updates_as_started_so_steam_doesnt_schedule_them_for_later() {
+        let m = "\"AppState\"\n{\n\t\"appid\"\t\t\"3483\"\n\t\"StateFlags\"\t\t\"4\"\n\t\"ScheduledAutoUpdate\"\t\t\"1795753869\"\n}\n";
+        let out = super::mark_for_update(m, 4);
+        let v = crate::vdf::parse(&out);
+        let a = v.get("AppState").unwrap();
+        // 4 installed | 2 update required | 1024 update started = 1030 (an install is written as 1026)
+        assert_eq!(a.str("StateFlags"), Some("1030"));
+        assert_eq!(a.str("ScheduledAutoUpdate"), Some("0"));
+        assert_eq!(a.str("appid"), Some("3483"));
+    }
 }
 
 #[cfg(test)]
