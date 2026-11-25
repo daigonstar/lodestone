@@ -137,18 +137,41 @@ fn builtin(id: &str) -> Option<SystemInfo> {
 
 // ---------------- where the ROMs are ----------------
 
-/// Emulation folders that have a `roms` folder, without duplicates.
+/// A folder as typed in Settings: `~/x` expands, anything else must be absolute.
+pub fn expand(dir: &str) -> Option<PathBuf> {
+    let d = dir.trim();
+    let p = match d.strip_prefix("~/") {
+        Some(r) => home().join(r),
+        None if d == "~" => home(),
+        None => PathBuf::from(d),
+    };
+    p.is_absolute().then_some(p)
+}
+
+/// The ROMs folder of a chosen folder: its `roms` folder (EmuDeck's Emulation folder), or the folder
+/// itself when it already holds system folders ("snes", "gba", ...).
+fn roms_in(dir: &Path) -> Option<PathBuf> {
+    if dir.join("roms").is_dir() {
+        return Some(dir.join("roms"));
+    }
+    let has_system = fs::read_dir(dir).into_iter().flatten().flatten().any(|e| {
+        let n = e.file_name().to_string_lossy().to_ascii_lowercase();
+        e.path().is_dir() && SYSTEMS.iter().any(|s| s.0 == n)
+    });
+    has_system.then(|| dir.to_path_buf())
+}
+
+/// The folder chosen in Settings, if any.
+pub fn chosen_dir() -> Option<PathBuf> {
+    let d = crate::settings::load().emulation_dir;
+    (!d.trim().is_empty()).then(|| expand(&d)).flatten()
+}
+
+/// Every ROMs folder found (the one chosen in Settings first), without duplicates.
 pub fn roots() -> Vec<PathBuf> {
     let h = home();
+    let mut found: Vec<PathBuf> = chosen_dir().and_then(|d| roms_in(&d)).into_iter().collect();
     let mut cands: Vec<PathBuf> = Vec::new();
-    let custom = crate::settings::load().emulation_dir;
-    let custom = custom.trim();
-    if !custom.is_empty() {
-        cands.push(match custom.strip_prefix("~/") {
-            Some(r) => h.join(r),
-            None => PathBuf::from(custom),
-        });
-    }
     cands.extend([h.join("Emulation"), h.join("retrodeck")]);
     // Other drives: /run/media/<user>/<drive>/..., /media/<user>/<drive>/..., /mnt/<drive>/...
     let mut drives: Vec<PathBuf> = Vec::new();
@@ -166,12 +189,66 @@ pub fn roots() -> Vec<PathBuf> {
             cands.push(d.join("Emulation").join(name));
         }
     }
+    found.extend(cands.into_iter().map(|c| c.join("roms")).filter(|r| r.is_dir()));
     let mut seen = HashSet::new();
-    cands
-        .into_iter()
-        .filter(|c| c.join("roms").is_dir())
-        .filter(|c| seen.insert(fs::canonicalize(c.join("roms")).unwrap_or(c.join("roms"))))
-        .collect()
+    found.into_iter().filter(|r| seen.insert(fs::canonicalize(r).unwrap_or(r.clone()))).collect()
+}
+
+/// Make EmuDeck's folder layout in `dir`: a `roms` folder with one folder per system (or the system
+/// folders straight inside, when `dir` is itself called "roms"). Existing folders and files are left
+/// as they are. Returns the ROMs folder and how many folders were new.
+pub fn create_layout(dir: &str) -> Result<(PathBuf, usize), String> {
+    let dir = expand(dir).ok_or("Use a full folder path, like ~/Emulation or /mnt/games/Emulation")?;
+    if dir.exists() && !dir.is_dir() {
+        return Err(format!("{} is a file, not a folder", dir.display()));
+    }
+    let roms = if dir.file_name().is_some_and(|n| n == "roms") { dir.clone() } else { dir.join("roms") };
+    let mut made = 0;
+    let mut ids: Vec<&str> = SYSTEMS.iter().map(|s| s.0).collect();
+    ids.dedup();
+    for id in ids {
+        let d = roms.join(id);
+        if !d.is_dir() {
+            fs::create_dir_all(&d).map_err(|e| format!("Couldn't create {}: {e}", d.display()))?;
+            made += 1;
+        }
+    }
+    Ok((roms, made))
+}
+
+/// Ask the desktop for a folder (zenity or kdialog, whichever is installed). None if cancelled or
+/// neither is there.
+pub fn pick_folder(start: &str) -> Result<Option<String>, String> {
+    let start = expand(start).filter(|p| p.is_dir()).unwrap_or_else(home);
+    let mut cmd = if crate::host::which("zenity").is_some() {
+        let mut c = std::process::Command::new("zenity");
+        c.args(["--file-selection", "--directory", "--title=Choose your Emulation or ROMs folder"]).arg(format!("--filename={}/", start.display()));
+        c
+    } else if crate::host::which("kdialog").is_some() {
+        let mut c = std::process::Command::new("kdialog");
+        c.arg("--getexistingdirectory").arg(&start).arg("--title").arg("Choose your Emulation or ROMs folder");
+        c
+    } else {
+        return Err("No folder picker found (zenity or kdialog); type the path instead".into());
+    };
+    let out = crate::host::wrap(cmd).stdin(std::process::Stdio::null()).output().map_err(|e| e.to_string())?;
+    let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok((out.status.success() && !p.is_empty()).then_some(p))
+}
+
+/// What Settings shows: the chosen folder's state and every ROMs folder found.
+#[derive(serde::Serialize)]
+pub struct FolderInfo {
+    pub chosen: String,
+    /// The chosen folder has ROM system folders (or a roms folder).
+    pub chosen_ok: bool,
+    pub found: Vec<String>,
+}
+
+pub fn folder_info() -> FolderInfo {
+    let chosen = crate::settings::load().emulation_dir.trim().to_string();
+    let chosen_ok = chosen_dir().and_then(|d| roms_in(&d)).is_some();
+    FolderInfo { chosen, chosen_ok, found: roots().iter().map(|p| path_str(p)).collect() }
 }
 
 /// Where ES-DE keeps downloaded artwork for these roots.
@@ -775,9 +852,10 @@ pub fn scan() -> Vec<Game> {
     let mut seen: HashSet<(String, String, u64)> = HashSet::new();
     let mut by_system: HashMap<String, System> = HashMap::new();
     let mut rom_paths: Vec<(String, PathBuf)> = Vec::new();
-    for root in roots() {
+    for roms in roots() {
+        let root = roms.parent().map(Path::to_path_buf).unwrap_or_else(|| roms.clone());
         let media = media_roots(&root);
-        let Ok(rd) = fs::read_dir(root.join("roms")) else { continue };
+        let Ok(rd) = fs::read_dir(&roms) else { continue };
         let mut dirs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
         dirs.sort();
         for dir in dirs {
@@ -876,6 +954,29 @@ mod tests {
         assert_eq!(core_crc(index, "bsnes_libretro.so.zip"), None);
         assert_eq!(core_label("mupen64plus_next_libretro.so"), "Mupen64Plus-Next");
         assert_eq!(core_label("beetle_new_thing_libretro.so"), "Beetle New Thing");
+    }
+
+    #[test]
+    fn makes_and_finds_the_rom_layout() {
+        let d = std::env::temp_dir().join(format!("lodestone-layout-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        let (roms, made) = create_layout(&path_str(&d.join("Emulation"))).unwrap();
+        assert_eq!(roms, d.join("Emulation/roms"));
+        assert!(made > 30 && roms.join("snes").is_dir() && roms.join("psx").is_dir());
+        assert_eq!(create_layout(&path_str(&d.join("Emulation"))).unwrap().1, 0, "second run makes nothing");
+        // Either the Emulation folder or the roms folder itself can be chosen.
+        assert_eq!(roms_in(&d.join("Emulation")), Some(roms.clone()));
+        assert_eq!(roms_in(&roms), Some(roms.clone()));
+        // A plain folder of system folders works too; a random folder doesn't.
+        fs::create_dir_all(d.join("mine/gba")).unwrap();
+        assert_eq!(roms_in(&d.join("mine")), Some(d.join("mine")));
+        fs::create_dir_all(d.join("other/stuff")).unwrap();
+        assert_eq!(roms_in(&d.join("other")), None);
+        // Named "roms": systems go straight inside.
+        let (r2, _) = create_layout(&path_str(&d.join("x/roms"))).unwrap();
+        assert!(r2.join("gba").is_dir() && !r2.join("roms").exists());
+        assert!(create_layout("relative/path").is_err());
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

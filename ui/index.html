@@ -11,11 +11,11 @@
   <aside class="sidebar">
     <div class="brand"><img class="brand-icon" src="lodestone.svg" alt="" />Lodestone<a href="#" class="app-version" id="app-version" title="What's new in this version"></a></div>
     <nav id="nav-library" class="nav"></nav>
-    <div class="nav-label">Stores</div>
+    <button type="button" class="nav-label" data-section="nav-stores" aria-expanded="true">Stores</button>
     <nav id="nav-stores" class="nav"></nav>
-    <div class="nav-label hidden" id="nav-systems-label">Systems</div>
+    <button type="button" class="nav-label hidden" id="nav-systems-label" data-section="nav-systems" aria-expanded="true">Systems</button>
     <nav id="nav-systems" class="nav"></nav>
-    <div class="nav-label">Shop</div>
+    <button type="button" class="nav-label" data-section="nav-shop" aria-expanded="true">Shop</button>
     <nav id="nav-shop" class="nav"></nav>
     <div class="sidebar-foot">
       <button id="btn-add" class="ghost">+ Add game</button>
@@ -415,6 +415,14 @@
       <h3>Artwork</h3>
       <label><span>SteamGridDB API key <small>(optional)</small></span><input name="sgdb" autocomplete="off" spellcheck="false" placeholder="paste key" /></label>
       <p class="hint">Without a key, Lodestone finds artwork from Steam's store. A free SteamGridDB key (<a href="#" data-href="https://www.steamgriddb.com/profile/preferences/api">steamgriddb.com → Preferences → API</a>) adds thousands of community covers and banners, including for games that aren't on Steam.</p>
+      <h3>Emulation</h3>
+      <label><span>ROMs folder <small>(optional)</small></span>
+        <div class="row-line emu-folder"><input name="emudir" autocomplete="off" spellcheck="false" placeholder="~/Emulation" />
+          <button type="button" class="ghost" id="emu-browse">Browse…</button>
+          <button type="button" class="ghost" id="emu-create">Create folders</button></div>
+      </label>
+      <p class="hint" id="emu-found"></p>
+      <p class="hint">Lodestone looks for EmuDeck's layout (<code>Emulation/roms/&lt;system&gt;</code>) in your home folder, RetroDECK's folder and on mounted drives. If your ROMs are somewhere else, choose the Emulation folder, its <code>roms</code> folder, or any folder with one folder per system (<code>snes</code>, <code>gba</code>, <code>psx</code>…). Starting from scratch? <b>Create folders</b> makes that layout in the folder above (or <code>~/Emulation</code>), with a folder for every system Lodestone knows; put each system's ROMs in its folder and Rescan. Nothing existing is changed.</p>
       <h3>RetroAchievements</h3>
       <div class="row-line ra-row">
         <label><span>Username</span><input name="rauser" autocomplete="off" spellcheck="false" placeholder="your RA username" /></label>

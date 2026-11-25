@@ -1337,6 +1337,44 @@ async fn emu_install(system: String, index: usize, menu: bool) -> Result<&'stati
     stores::emulation::install(&system, index, menu).await
 }
 
+/// The ROM folder setting and every ROMs folder Lodestone found.
+#[tauri::command]
+async fn emu_folders() -> Result<stores::emulation::FolderInfo, String> {
+    blocking(stores::emulation::folder_info).await
+}
+
+/// Use this folder for ROMs (an Emulation folder, a roms folder, or "" to only search automatically).
+#[tauri::command]
+fn emu_set_folder(path: String) -> Result<(), String> {
+    let p = path.trim();
+    if !p.is_empty() {
+        let d = stores::emulation::expand(p).ok_or("Use a full folder path, like ~/Emulation")?;
+        if !d.is_dir() {
+            return Err(format!("{} doesn't exist; use Create folders to make it", d.display()));
+        }
+    }
+    let mut s = settings::load();
+    s.emulation_dir = p.to_string();
+    settings::save(&s)
+}
+
+/// Create the ROM folder layout in this folder and use it.
+#[tauri::command]
+async fn emu_create_folders(path: String) -> Result<(String, usize), String> {
+    let p = if path.trim().is_empty() { "~/Emulation".to_string() } else { path.trim().to_string() };
+    let (roms, made) = blocking({ let p = p.clone(); move || stores::emulation::create_layout(&p) }).await??;
+    let mut s = settings::load();
+    s.emulation_dir = p;
+    settings::save(&s)?;
+    Ok((roms.to_string_lossy().into_owned(), made))
+}
+
+/// A folder picker from the desktop (zenity or kdialog).
+#[tauri::command]
+async fn emu_pick_folder(start: String) -> Result<Option<String>, String> {
+    blocking(move || stores::emulation::pick_folder(&start)).await?
+}
+
 /// Show or hide a system's emulator in the desktop's app menu.
 #[tauri::command]
 async fn emu_menu_entry(system: String, index: usize, show: bool) -> Result<(), String> {
@@ -1474,6 +1512,10 @@ fn main() {
             thumbs_sync,
             store_achievements,
             emu_menu_entry,
+            emu_folders,
+            emu_set_folder,
+            emu_create_folders,
+            emu_pick_folder,
             ra_game,
             downloads_history,
             downloads_history_clear,

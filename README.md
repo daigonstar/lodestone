@@ -154,6 +154,9 @@ named, and are listed so nothing is a surprise:
   Lodestone copies Flatpak's menu entry into `~/.local/share/applications/` with `NoDisplay=true` added and
   a comment marking it as Lodestone's. Ticking *Show in my app menu* in the system's library deletes that copy;
   Lodestone never touches menu entries it didn't write.
+- **ROM folders:** *Create folders* in Settings → Emulation makes a `roms` folder with one empty folder per
+  system in the folder you choose (`~/Emulation` if you leave it empty). Existing folders and files are left
+  as they are.
 - **Minecraft (ATLauncher):** the instance's `instance.json` when you add or remove mods (backed up as
   `instance.json.lodestone-backup` first).
 - **Wine prefixes:** Battle.net, EA, Ubisoft and games run in prefixes under
@@ -220,6 +223,9 @@ With this in mind, if you feel these projects are beneficial, please do give the
 - **ProtonDB ratings** (Platinum to Borked) show on covers, in the list view and in the details panel, which links
   to the game's ProtonDB page. Steam games with a Linux version show **Native** instead. Ratings are cached for a day.
 - **Library layouts:** covers, compact covers, wide banners, or a list with genres, time played, last played and size.
+- **Sorting** is remembered per library: recently played, A–Z, Z–A, most played, favorites first, size, ProtonDB
+  rating, store, or (in a system's library) RetroAchievements matches first. Sidebar sections (Stores, Systems,
+  Shop) fold away by clicking their heading; a folded section still shows the library you're in.
 - **Edit details & artwork** (⋯ menu or the details panel): change the title, genres or series, pick which Steam
   game it is, and choose covers and banners from Steam's store art or SteamGridDB. SteamGridDB needs a free
   API key, set in Settings → Artwork. Chosen images are saved in `~/.local/share/lodestone/art`; your edits are kept in `meta.json`.
@@ -231,7 +237,9 @@ With this in mind, if you feel these projects are beneficial, please do give the
 
 - **ROM libraries.** Lodestone reads EmuDeck's layout (`Emulation/roms/<system>`, found in your home folder
   and on mounted drives, RetroDECK's folder too) and lists each system that has games under **Systems** in
-  the sidebar. Multi-disc games (`.m3u`, `.cue`) show once. ES-DE's `gamelist.xml` names and downloaded covers
+  the sidebar. ROMs somewhere else? In **Settings → Emulation**, choose the Emulation folder, its `roms`
+  folder, or any folder with one folder per system (`snes`, `gba`, `psx`…). Starting from scratch,
+  **Create folders** makes that layout for you, with a folder for every system Lodestone knows. Multi-disc games (`.m3u`, `.cue`) show once. ES-DE's `gamelist.xml` names and downloaded covers
   are used when they're there. ROMs stay out of **All games**.
 - **Choosing the emulator.** A system's library has a **Plays with** list, built from EmuDeck's (or ES-DE's)
   launch commands: RetroArch cores and standalone emulators. Lodestone finds emulators installed as Flatpaks,

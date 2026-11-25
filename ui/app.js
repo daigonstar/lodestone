@@ -294,12 +294,7 @@ function filtered() {
     if (q && !g.title.toLowerCase().includes(q)) return false;
     return true;
   });
-  const by = {
-    title: (a, b) => a.title.localeCompare(b.title),
-    recent: (a, b) => b.last_played - a.last_played || a.title.localeCompare(b.title),
-    playtime: (a, b) => b.playtime - a.playtime || a.title.localeCompare(b.title),
-    size: (a, b) => (b.size || 0) - (a.size || 0),
-  }[state.view === "recent" ? "recent" : state.sort];
+  const by = SORTS[state.view === "recent" ? "recent" : currentSort()] || SORTS.title;
   if (mergeOn()) list = mergeList(list);
   if (state.genre) list = list.filter((g) => genresOf(g).has(state.genre));
   if (state.series) list = list.filter((g) => seriesOfGame(g) === state.series);
@@ -767,8 +762,50 @@ const SHOPS = [
   ["ea", "EA"],
   ["ubisoft", "Ubisoft Store"],
 ];
+// ---------- sorting (remembered per library) ----------
+const az = (a, b) => a.title.localeCompare(b.title);
+const TIER_RANK = { native: 0, platinum: 1, gold: 2, silver: 3, bronze: 4, borked: 5 };
+const SORTS = {
+  recent: (a, b) => (b.last_played || 0) - (a.last_played || 0) || az(a, b),
+  title: az,
+  title_desc: (a, b) => b.title.localeCompare(a.title),
+  playtime: (a, b) => (b.playtime || 0) - (a.playtime || 0) || az(a, b),
+  size: (a, b) => (b.size || 0) - (a.size || 0) || az(a, b),
+  protondb: (a, b) => (TIER_RANK[compatOf(a)] ?? 9) - (TIER_RANK[compatOf(b)] ?? 9) || az(a, b),
+  store: (a, b) => storeOrder().indexOf(a.store) - storeOrder().indexOf(b.store) || az(a, b),
+  favorites: (a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0) || az(a, b),
+  ra: (a, b) => (b.ra_id ? 1 : 0) - (a.ra_id ? 1 : 0) || az(a, b),
+};
+const SORT_LABELS = [
+  ["recent", "Recently played"], ["title", "A–Z"], ["title_desc", "Z–A"], ["playtime", "Most played"],
+  ["favorites", "Favorites first"], ["size", "Size on disk"], ["protondb", "ProtonDB rating"], ["store", "Store"],
+  ["ra", "RetroAchievements first"],
+];
+/** Which sorts make sense in this library. */
+function sortChoices() {
+  const sys = state.view.startsWith("sys:");
+  return SORT_LABELS.filter(([k]) => {
+    if (k === "ra") return sys;
+    if (k === "protondb") return !sys && state.view !== "minecraft";
+    if (k === "store") return !sys && !STORES[state.view];
+    return true;
+  });
+}
+function currentSort() {
+  const fallback = state.view.startsWith("sys:") ? "title" : ls.get("sort", "recent");
+  const k = ls.get("sort:" + state.view, fallback);
+  return sortChoices().some(([c]) => c === k) ? k : "title";
+}
+function syncSort() {
+  const el = $("#sort");
+  const cur = currentSort();
+  el.innerHTML = sortChoices().map(([k, l]) => `<option value="${k}" ${k === cur ? "selected" : ""}>${l}</option>`).join("");
+  el.title = "Sort this library (remembered for each library)";
+}
+
 function render() {
   renderNav();
+  syncSort();
   $("#nav-shop").innerHTML = SHOPS.map(([k, l]) => `<button data-view="shop:${k}" class="${state.view === "shop:" + k ? "active" : ""}"><span class="dot" style="background:${store(k).color}"></span>${l}</button>`).join("");
   const shopView = state.view.startsWith("shop:");
   const home = state.view === "home";
@@ -1308,6 +1345,30 @@ $("#mh-all").onchange = async (e) => {
 };
 $("#kiln-play").onchange = async (e) => { await invoke("set_kiln_play", { on: e.target.checked }); state.kilnPlay = e.target.checked; renderHero(); };
 $("#merge-dupes").onchange = (e) => { ls.set("mergeDupes", e.target.checked); render(); };
+/** Settings → Emulation: which ROMs folders Lodestone found, and whether the chosen one has ROM folders. */
+async function renderEmuFolders() {
+  const el = $("#emu-found");
+  try {
+    const f = await invoke("emu_folders");
+    const list = f.found.map((p) => `<code>${esc(p)}</code>`).join(", ");
+    el.innerHTML = (f.chosen && !f.chosen_ok ? `<span class="err-text">${esc(f.chosen)} has no system folders yet. Create folders, or choose another folder.</span><br>` : "")
+      + (f.found.length ? `Found: ${list}` : "No ROMs folder found yet.");
+  } catch (e) { el.textContent = String(e); }
+}
+$("#emu-browse").onclick = async () => {
+  const input = $("#form-settings").emudir;
+  try { const p = await invoke("emu_pick_folder", { start: input.value }); if (p) input.value = p; } catch (e) { toast(String(e), true); }
+};
+$("#emu-create").onclick = async () => {
+  const input = $("#form-settings").emudir;
+  try {
+    const [roms, made] = await invoke("emu_create_folders", { path: input.value });
+    if (!input.value.trim()) input.value = "~/Emulation";
+    toast(made ? `Made ${made} system folders in ${roms}. Put each system's ROMs in its folder, then Rescan.` : `${roms} already has every system folder.`);
+    renderEmuFolders();
+    load(true);
+  } catch (e) { toast(String(e), true); }
+};
 $("#btn-settings").onclick = async () => {
   renderStoreOrder();
   const s = await invoke("get_settings");
@@ -1319,6 +1380,8 @@ $("#btn-settings").onclick = async () => {
   $("#form-settings").sgdb.value = s.steamgriddb_key || "";
   $("#form-settings").rauser.value = s.ra_user || "";
   $("#form-settings").rakey.value = s.ra_key || "";
+  $("#form-settings").emudir.value = s.emulation_dir || "";
+  renderEmuFolders();
   renderProton().catch((e) => toast(String(e), true));
   renderMangohud().catch((e) => toast(String(e), true));
   $("#dlg-settings").showModal();
@@ -1333,6 +1396,8 @@ $("#form-settings").onsubmit = async (e) => {
       toast("Matching your ROMs with RetroAchievements in the background…");
       invoke("ra_sync").catch((err) => toast(String(err), true));
     }
+    const emuChanged = e.target.emudir.value.trim() !== (before.emulation_dir || "");
+    if (emuChanged) await invoke("emu_set_folder", { path: e.target.emudir.value });
     await invoke("set_proton", { path: e.target.proton.value });
     $("#dlg-settings").close();
     toast("Settings saved");
@@ -1341,6 +1406,7 @@ $("#form-settings").onsubmit = async (e) => {
       try { await invoke("store_refresh"); toast("Steam library updated from your account"); } catch (err) { toast(String(err), true); }
       load(true);
     }
+    if (emuChanged) load(true);
     window.mcSettingsChanged && window.mcSettingsChanged();
   } catch (err) {
     toast(String(err), true);
@@ -1472,6 +1538,27 @@ async function menuAction(act) {
   }
 }
 
+// ---------- collapsible sidebar sections (remembered) ----------
+// A collapsed section still shows the library you're in, so you never lose your place.
+function applySections() {
+  const closed = ls.get("navCollapsed", []);
+  document.querySelectorAll(".nav-label[data-section]").forEach((l) => {
+    const shut = closed.includes(l.dataset.section);
+    l.setAttribute("aria-expanded", String(!shut));
+    l.title = shut ? "Show this section" : "Hide this section";
+    $("#" + l.dataset.section).classList.toggle("collapsed", shut);
+  });
+}
+document.querySelectorAll(".nav-label[data-section]").forEach((l) => {
+  l.onclick = () => {
+    const id = l.dataset.section;
+    const closed = ls.get("navCollapsed", []);
+    ls.set("navCollapsed", closed.includes(id) ? closed.filter((x) => x !== id) : [...closed, id]);
+    applySections();
+  };
+});
+applySections();
+
 // ---------- events ----------
 document.addEventListener("click", (e) => {
   const nav = e.target.closest("[data-view]");
@@ -1563,8 +1650,7 @@ $("#search").oninput = (e) => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => { renderGrid(); renderHero(); }, 120);
 };
-$("#sort").value = state.sort;
-$("#sort").onchange = (e) => { state.sort = e.target.value; ls.set("sort", state.sort); render(); };
+$("#sort").onchange = (e) => { ls.set("sort:" + state.view, e.target.value); render(); };
 $("#show-uninstalled").checked = state.showUninstalled;
 $("#show-uninstalled").onchange = (e) => { state.showUninstalled = e.target.checked; ls.set("showUninstalled", state.showUninstalled); render(); };
 $("#minimize").checked = state.minimize;
