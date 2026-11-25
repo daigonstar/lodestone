@@ -107,6 +107,16 @@ const WINDOWS_EMUS: &[(&str, Option<&str>, &[&str])] = &[
     ("SCUMMVM", Some("ScummVM.ScummVM"), &["scummvm.exe"]),
 ];
 
+/// The emulator packages Lodestone installs and can update: (package id, name). Windows: winget IDs;
+/// Linux: Flathub IDs.
+pub fn managed_packages() -> Vec<(&'static str, &'static str)> {
+    if cfg!(windows) {
+        WINDOWS_EMUS.iter().filter_map(|(key, id, _)| Some((id.as_ref().copied()?, EMULATORS.iter().find(|e| e.0 == *key)?.1))).collect()
+    } else {
+        EMULATORS.iter().filter_map(|e| Some((*e.2.first()?, e.1))).collect()
+    }
+}
+
 /// A RetroArch core's file on this system: "snes9x_libretro.so" on Linux, "snes9x_libretro.dll" on
 /// Windows (launch commands and saved choices use the Linux name).
 pub fn core_file(core: &str) -> String {

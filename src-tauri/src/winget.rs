@@ -18,8 +18,7 @@ pub fn install_spec(id: &str) -> LaunchSpec {
     )
 }
 
-/// The command that updates one package to its newest version (for the update buttons to come).
-#[allow(dead_code)]
+/// The command that updates one package to its newest version.
 pub fn upgrade_spec(id: &str) -> LaunchSpec {
     LaunchSpec::new(
         "winget",

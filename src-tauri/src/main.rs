@@ -3,6 +3,7 @@
 mod achievements;
 mod comms_install;
 mod plugins;
+mod program_updates;
 mod downloads;
 mod friends;
 mod gog_setup;
@@ -1391,6 +1392,20 @@ async fn comms_status() -> Result<plugins::Status, String> {
     blocking(plugins::status).await
 }
 
+/// Which of the programs Lodestone installs (emulators; on Windows also store launchers) can be updated.
+/// Only when you ask.
+#[tauri::command]
+async fn program_updates() -> Result<Vec<program_updates::Update>, String> {
+    tauri::async_runtime::spawn_blocking(program_updates::check).await.map_err(|e| e.to_string())?
+}
+
+/// Update one of them (a background job in Downloads).
+#[tauri::command]
+fn program_update(id: String) -> Result<(), String> {
+    let (spec, name) = program_updates::update_spec(&id)?;
+    downloads::start(&format!("program-update:{}", id.to_ascii_lowercase()), &format!("Updating {name}"), &spec, None)
+}
+
 /// Where Lodestone keeps its data on this system (shown in the interface).
 #[tauri::command]
 fn data_folder() -> String {
@@ -1623,6 +1638,8 @@ fn main() {
             comms_check_update,
             ui_error,
             data_folder,
+            program_updates,
+            program_update,
             comms_install,
             comms_start,
             comms_approve,

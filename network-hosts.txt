@@ -97,3 +97,8 @@ tauri.localhost                               # Lodestone's own window, named in
 
 # --- Inside Lodestone only ---
 lodestone.localhost                           # internal address for sign-in hand-offs; never leaves the app
+
+# Windows: Lodestone asks winget (Windows' own package manager) to install or update emulators and store
+# launchers when you press Install or Update. winget reads its package list from Microsoft
+# (cdn.winget.microsoft.com) and downloads each program from its publisher's official site; Lodestone
+# itself doesn't contact these.

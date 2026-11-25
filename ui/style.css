@@ -687,3 +687,12 @@ body.side-collapsed .side-expand:hover { color: var(--text); background: rgba(25
 
 /* Windows: Linux-only settings (Proton, MangoHud) don't apply */
 body.win .linux-only { display: none !important; }
+
+/* The other way round: things only for Windows */
+body:not(.win) .win-only { display: none !important; }
+.ob-launcher { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.ob-launcher .grow { flex: 1; }
+
+.prog-list { display: grid; gap: 4px; margin: 6px 0 10px; }
+.prog-row { display: flex; align-items: center; gap: 10px; }
+.prog-row .grow { flex: 1; }

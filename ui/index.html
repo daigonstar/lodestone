@@ -177,7 +177,7 @@
     <div id="filters" class="filters">
       <select id="f-genre" title="Genre"></select>
       <select id="f-series" title="Series"></select>
-      <select id="f-compat" title="ProtonDB rating"></select>
+      <select id="f-compat" class="linux-only" title="ProtonDB rating"></select>
       <select id="f-ach" class="hidden" title="RetroAchievements"></select>
       <select id="f-region" class="hidden" title="Region (from the ROM's file name)"></select>
       <select id="f-played" class="hidden" title="Played or not"></select>
@@ -460,6 +460,9 @@
       <label class="check"><input type="checkbox" id="mh-all" /> Show MangoHud in every game (turn it off or on per game in the game's ⋯ menu)</label>
       <p class="hint">FPS, frame times, CPU and GPU load over your games. Lodestone uses MangoHud from your system, or sets up the official release in its own folder. It works for games Lodestone starts; for Steam games, add <code>mangohud %command%</code> to the game's launch options in Steam.</p>
       </div>
+      <h3>Programs</h3>
+      <div class="row-line"><span class="muted" id="prog-status">Emulators<span class="win-only"> and store launchers</span> that Lodestone installs. Updates are only looked for when you ask.</span><button type="button" class="ghost" id="prog-check">Check for updates</button></div>
+      <div id="prog-list" class="prog-list"></div>
       <h3>Plug-ins</h3>
       <div class="row-line"><span class="muted">Installed plug-ins, their permissions, and stopping them.</span><button type="button" class="ghost" id="open-plugins">Manage plug-ins…</button></div>
       <h3>Mods</h3>
@@ -508,6 +511,12 @@
       </section>
 
       <section class="ob-step" data-step="2">
+        <div class="win-only">
+        <h2>Your store launchers</h2>
+        <p class="muted">Lodestone starts your games through each store's own launcher. Install the ones you use: Lodestone installs them with winget, Windows' own package manager, from each store's official download. Installing accepts the launcher's licence, as installing it yourself would.</p>
+        <div class="ob-box" id="ob-launchers"></div>
+        </div>
+        <div class="linux-only">
         <h2>Windows games (Proton)</h2>
         <p class="muted">Epic, GOG, Battle.net and Windows games you add run through Proton, the same compatibility layer Steam uses. Lodestone keeps its own runner (umu-launcher), so Steam isn't needed for these.</p>
         <div class="ob-box">
@@ -516,6 +525,7 @@
             <select id="ob-proton" class="proton-select"></select>
           </label>
           <p class="hint">"Automatic" uses the newest GE-Proton on this PC, or downloads one the first time a game needs it.</p>
+        </div>
         </div>
       </section>
 

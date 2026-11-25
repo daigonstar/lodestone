@@ -500,7 +500,7 @@ function renderSystemPanel(el) {
   const status = cur.installed
     ? `Your ${sys.games} ${esc(sys.name)} games play with <b>${esc(cur.label)}</b>.`
     : cur.can_install
-      ? `<b>${esc(cur.label)}</b> isn't installed yet. Install sets it up from Flathub${cur.core ? ", with its core from libretro" : ""}, in the background.`
+      ? `<b>${esc(cur.label)}</b> isn't installed yet. Install sets it up ${WIN ? "with winget, from its official download (installing accepts its licence)" : "from Flathub"}${cur.core ? ", with its core from libretro" : ""}, in the background.`
       : `<b>${esc(cur.label)}</b> isn't installed. Install ${esc(cur.emulator)} yourself, or pick another emulator.`;
   el.innerHTML = `<div><h2>${esc(sys.name)}</h2><p class="muted">${status}</p></div>
     <div class="row-btns emu-pick">
@@ -508,7 +508,8 @@ function renderSystemPanel(el) {
         <select id="emu-choice">${sys.options.map((o) => `<option value="${o.index}" ${o.index === cur.index ? "selected" : ""}>${esc(o.label)}${o.installed ? "" : " (not installed)"}</option>`).join("")}</select>
       </label>
       ${!cur.installed && cur.can_install ? `<button class="play" id="emu-install" ${busy ? "disabled" : ""}>${busy ? "Installing…" : "Install"}</button>` : ""}
-      ${!cur.installed && cur.can_install && cur.in_menu == null ? `<label class="emu-menu" title="Flatpak adds installed apps to your desktop's app menu. Leave this off to only start ${esc(cur.emulator)} from Lodestone.">
+      ${updateFor(cur.emulator) ? `<button class="ghost" data-prog-update="${esc(updateFor(cur.emulator).id)}">Update ${esc(cur.emulator)}${updateFor(cur.emulator).latest ? " to " + esc(updateFor(cur.emulator).latest) : ""}</button>` : ""}
+      ${!WIN && !cur.installed && cur.can_install && cur.in_menu == null ? `<label class="emu-menu" title="Flatpak adds installed apps to your desktop's app menu. Leave this off to only start ${esc(cur.emulator)} from Lodestone.">
         <input type="checkbox" id="emu-menu" ${state.emuMenu ? "checked" : ""}> Add to my app menu</label>` : ""}
       ${cur.in_menu != null ? `<label class="emu-menu" title="Hiding adds a copy of its menu entry marked NoDisplay to ~/.local/share/applications; showing removes it.">
         <input type="checkbox" id="emu-menu-toggle" ${cur.in_menu ? "checked" : ""}> Show ${esc(cur.emulator)} in my app menu</label>` : ""}
@@ -557,7 +558,7 @@ function renderSetup() {
   } else {
     const from = app.found_in ? ` <b>Using the ${c.name} you installed with ${app.found_in}</b>, and the games installed there.` : "";
     el.innerHTML = `<div><h2>${c.name} is set up</h2><p class="muted">${c.owned}${from} ${c.tip}</p></div>
-      <div class="row-btns"><button class="ghost" data-winopen="${app.id}">Open ${c.name}</button><button class="play" data-click="btn-refresh">Rescan</button></div>`;
+      <div class="row-btns">${updateFor(app.name) ? `<button class="ghost" data-prog-update="${esc(updateFor(app.name).id)}">Update${updateFor(app.name).latest ? " to " + esc(updateFor(app.name).latest) : ""}</button>` : ""}<button class="ghost" data-winopen="${app.id}">Open ${c.name}</button><button class="play" data-click="btn-refresh">Rescan</button></div>`;
   }
 }
 
@@ -875,7 +876,7 @@ function sortChoices() {
   const sys = state.view.startsWith("sys:");
   return SORT_LABELS.filter(([k]) => {
     if (k === "ra") return sys;
-    if (k === "protondb") return !sys && state.view !== "minecraft";
+    if (k === "protondb") return !WIN && !sys && state.view !== "minecraft";
     if (k === "store") return !sys && !STORES[state.view];
     return true;
   });
@@ -1633,7 +1634,7 @@ async function menuAction(act) {
     if (act === "uninstall") {
       const own = g.via.startsWith("Lodestone") || (g.store === "steam" && state.steamBg);
       const msg = g.store === "gog" ? `Uninstall ${g.title}? Its folder goes to the trash.`
-        : g.store === "steam" ? `Uninstall ${g.title}? Its game files are deleted. Saves in Steam Cloud and its Proton prefix are kept.`
+        : g.store === "steam" ? `Uninstall ${g.title}? Its game files are deleted. Saves in Steam Cloud${WIN ? "" : " and its Proton prefix"} are kept.`
         : `Uninstall ${g.title}? Its files are deleted.`;
       if (own && !confirm(msg)) return;
       const how = await invoke("uninstall_game", { id: g.id });
@@ -1928,7 +1929,7 @@ $("#form-add").onsubmit = async (e) => {
   err.hidden = true;
   const fail = (msg) => { err.textContent = msg; err.hidden = false; };
   const cmd = String(f.get("command") || "").trim().replace(/^"|"$/g, "");
-  if (f.get("proton") === "on" && !/\.exe$/i.test(cmd)) return fail("Point this at the game's .exe file, e.g. /home/you/Games/MyGame/Game.exe");
+  if (f.get("proton") === "on" && !/\.exe$/i.test(cmd)) return fail("Point this at the game's .exe file, e.g. ~/Games/MyGame/Game.exe");
   try {
     await invoke("add_custom_game", { title: f.get("title"), command: f.get("command"), store: f.get("store"), cover: f.get("cover") || null, proton: f.get("proton") === "on" });
     $("#dlg-add").close();
@@ -1996,6 +1997,17 @@ async function obRenderFound() {
   const o = await invoke("setup_overview");
   const n = (store) => state.games.filter((g) => g.store === store && g.installed).length;
   const row = (ok, name, detail) => `<div class="ob-found-row ${ok ? "ok" : ""}"><span class="mark">${ok ? "✓" : "–"}</span><div><b>${name}</b><br><small class="muted">${detail}</small></div></div>`;
+  if (WIN) {
+    // Windows: the store launchers Lodestone can install with winget.
+    await loadWinapps();
+    const la = (id) => (state.winapps || []).find((a) => a.id === id);
+    $("#ob-found").innerHTML = ["steam", "epic", "gog", "battlenet", "ea", "ubisoft"].map((id) => {
+      const a = la(id);
+      const c = CLIENTS[id] || { name: a ? a.name : id };
+      return row(a && a.installed, c.name, a && a.installed ? `Found. ${n(a.store)} installed games.` : "Not installed. You can install it in the next step.");
+    }).join("");
+    return o;
+  }
   $("#ob-found").innerHTML = [
     row(o.steam.found, "Steam", o.steam.found ? `${o.steam.account ? `Signed in as ${esc(o.steam.account)}. ` : ""}${n("steam")} installed games. Steam stays in the tray; Lodestone launches its games.` : "Not found. Install Steam if you have a Steam library."),
     row(o.heroic, "Heroic", o.heroic ? "Found. Its installed Epic/GOG games show up here. Lodestone can also take over its sign-ins in the next steps, so Heroic isn't needed anymore." : "Not needed: Lodestone handles Epic and GOG itself."),
@@ -2006,6 +2018,20 @@ async function obRenderFound() {
   ].join("");
   return o;
 }
+// Windows guide, step 2: each store's launcher, installed or with an Install (winget) button.
+async function renderObLaunchers() {
+  await loadWinapps();
+  $("#ob-launchers").innerHTML = ["steam", "epic", "gog", "battlenet", "ea", "ubisoft"].map((id) => {
+    const a = (state.winapps || []).find((x) => x.id === id);
+    if (!a) return "";
+    const c = CLIENTS[id] || { name: a.name };
+    const busy = state.setupBusy === id;
+    return `<div class="ob-launcher"><span class="dot" style="background:${store(a.store).color}"></span><span class="grow"><b>${esc(c.name)}</b></span>${a.installed
+      ? '<span class="muted">Installed ✓</span>'
+      : `<button type="button" class="play small" data-winsetup="${id}" ${busy ? "disabled" : ""}>${busy ? "Installing…" : "Install"}</button>`}</div>`;
+  }).join("");
+}
+
 async function obShow(step) {
   obStep = Math.max(0, Math.min(OB_STEPS - 1, step));
   document.querySelectorAll(".ob-step").forEach((s) => s.classList.toggle("on", Number(s.dataset.step) === obStep));
@@ -2015,7 +2041,7 @@ async function obShow(step) {
   $("#ob-next").textContent = obStep === 0 ? "Let's set it up" : obStep === OB_STEPS - 1 ? "Open my library" : "Next";
   try {
     if (obStep === 1) await obRenderFound();
-    if (obStep === 2) await renderProton();
+    if (obStep === 2) await (WIN ? renderObLaunchers() : renderProton());
     if (obStep === 3) {
       renderAccounts();
       $("#ob-steamkey").value = (await invoke("get_settings")).steam_api_key || "";
@@ -2039,7 +2065,7 @@ async function obShow(step) {
   }
 }
 async function obSaveStep() {
-  if (obStep === 2) await invoke("set_proton", { path: $("#ob-proton").value });
+  if (obStep === 2 && !WIN) await invoke("set_proton", { path: $("#ob-proton").value });
   if (obStep === 4) {
     const s = await invoke("get_settings");
     await invoke("save_settings", { curseforgeApiKey: s.curseforge_api_key || "", gamesDir: $("#ob-gamesdir").value, steamApiKey: null });
@@ -2283,7 +2309,8 @@ const TIERS = { platinum: "Platinum", gold: "Gold", silver: "Silver", bronze: "B
 state.compat = new Map();
 let compatBusy = false;
 async function loadCompat() {
-  if (compatBusy) return;
+  // ProtonDB is about running Windows games on Linux: not asked on Windows.
+  if (compatBusy || WIN) return;
   const ids = state.games.filter((g) => !["minecraft", "custom"].includes(g.store) && !state.compat.has(g.id)).map((g) => g.id);
   if (!ids.length) return;
   compatBusy = true;
@@ -2303,6 +2330,7 @@ function compatOf(g) {
   return "";
 }
 function compatBadge(g, cls = "") {
+  if (WIN) return "";
   const t = compatOf(g);
   if (!t || t === "pending") return "";
   const label = t === "native" ? "Native" : TIERS[t] || t;
@@ -2312,6 +2340,7 @@ function compatBadge(g, cls = "") {
 
 function renderCompat(g, d) {
   const el = $("#about-compat");
+  if (WIN) { el.innerHTML = ""; return; }
   const id = g.id;
   const draw = (p) => {
     if (state.selected !== id) return;
@@ -2706,3 +2735,49 @@ function setSidebar(collapsed) {
 $("#side-collapse").onclick = () => setSidebar(true);
 $("#side-expand").onclick = () => setSidebar(false);
 setSidebar(!!ls.get("sideCollapsed", false));
+
+// ---------- updates for the programs Lodestone installs ----------
+// Only when you press "Check for updates" (Settings → Programs). The result also shows as Update
+// buttons on store and emulator pages until Lodestone closes.
+state.updates = [];
+function updateFor(name) {
+  return (state.updates || []).find((u) => u.name === name);
+}
+function renderUpdates() {
+  const el = $("#prog-list");
+  if (!el) return;
+  const list = state.updates || [];
+  el.innerHTML = state.updatesChecked
+    ? list.length
+      ? list.map((u) => `<div class="prog-row"><span class="grow"><b>${esc(u.name)}</b> <small class="muted">${u.have ? esc(u.have) + " → " : ""}${esc(u.latest || "newer version")}</small></span><button type="button" class="ghost small" data-prog-update="${esc(u.id)}">Update</button></div>`).join("")
+        + (list.length > 1 ? '<div class="prog-row"><span class="grow"></span><button type="button" class="play small" id="prog-all">Update all</button></div>' : "")
+      : '<p class="muted small">Everything Lodestone installed is up to date.</p>'
+    : "";
+}
+async function checkUpdates() {
+  const b = $("#prog-check");
+  b.disabled = true;
+  b.textContent = "Checking…";
+  try { state.updates = await invoke("program_updates"); state.updatesChecked = true; }
+  catch (e) { toast(String(e), true); }
+  b.disabled = false;
+  b.textContent = "Check for updates";
+  renderUpdates();
+  render();
+}
+async function updateProgram(id) {
+  const u = (state.updates || []).find((x) => x.id === id);
+  try {
+    await invoke("program_update", { id });
+    state.updates = state.updates.filter((x) => x.id !== id);
+    toast(`Updating ${u ? u.name : id} in the background (see Downloads).`);
+  } catch (e) { toast(String(e), true); }
+  renderUpdates();
+  render();
+}
+$("#prog-check").onclick = checkUpdates;
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-prog-update]");
+  if (b) { b.disabled = true; return updateProgram(b.dataset.progUpdate); }
+  if (e.target.closest("#prog-all")) for (const u of [...(state.updates || [])]) updateProgram(u.id);
+});
