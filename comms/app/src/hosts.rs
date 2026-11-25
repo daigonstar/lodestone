@@ -40,6 +40,11 @@ impl Hosts {
         Self { dir, clients: Mutex::new(clients) }
     }
 
+    /// This app's own preferences (theme, accent), kept beside the hosts list.
+    pub fn prefs_file(&self) -> PathBuf {
+        self.dir.join("prefs.json")
+    }
+
     pub fn all(&self) -> Vec<(String, Arc<Client>)> {
         let mut v: Vec<_> = self.clients.lock().unwrap().iter().map(|(u, c)| (u.clone(), c.clone())).collect();
         v.sort_by(|a, b| a.0.cmp(&b.0));
@@ -82,7 +87,11 @@ pub fn start_sync(app: Shared) {
                 }
                 match c.sync().await {
                     Ok(new) => {
-                        let touched = c.take_touched();
+                        let mut touched = c.take_touched();
+                        if let Some(i) = touched.iter().position(|t| t == "profiles") {
+                            touched.remove(i);
+                            let _ = app.events.send(json!({ "type": "profiles", "host": url }).to_string());
+                        }
                         let mut chans: Vec<&String> = new.iter().map(|m| &m.channel).chain(touched.iter()).collect();
                         chans.sort();
                         chans.dedup();

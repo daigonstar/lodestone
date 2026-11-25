@@ -93,6 +93,23 @@ async fn encrypted_chat_end_to_end() {
         assert!(!raw.windows(text.len()).any(|w| w == text.as_bytes()) && !wal.windows(text.len()).any(|w| w == text.as_bytes()), "the host stored plaintext");
     }
 
+    // Profiles: encrypted like messages, and only ever your own.
+    let mut face = b"\x89PNG\r\n\x1a\n".to_vec();
+    face.extend(b"alice's face");
+    alice.set_profile("Alice ⚔", "#ff8800", Some(&face)).await.unwrap();
+    bob.set_profile("Bobby", "", None).await.unwrap();
+    bob.sync().await.unwrap();
+    alice.sync().await.unwrap();
+    let find = |c: &Client, who: &str| c.profiles().unwrap().into_iter().find(|p| p.0 == who);
+    assert_eq!(find(&bob, "alice"), Some(("alice".into(), "Alice ⚔".into(), "#ff8800".into(), true)));
+    assert_eq!(bob.avatar("alice").await.unwrap(), (face.clone(), "image/png".to_string()));
+    assert_eq!(find(&alice, "bob").map(|p| p.1), Some("Bobby".to_string()));
+    assert!(alice.set_profile("x".repeat(33).as_str(), "", None).await.is_err());
+    assert!(alice.set_profile("ok", "orange", None).await.is_err());
+    assert!(alice.set_profile("ok", "", Some(b"not an image")).await.is_err());
+    let host_raw = std::fs::read(tmp.path().join("host.db-wal")).unwrap_or_default();
+    assert!(!host_raw.windows("Bobby".len()).any(|w| w == b"Bobby"), "the host saw a display name");
+
     // A new channel: its creator makes the group, members are added on sync.
     let raids = alice.create_channel(&space, "raids").await.unwrap();
     alice.sync().await.unwrap();
@@ -108,6 +125,13 @@ async fn encrypted_chat_end_to_end() {
     alice.sync().await.unwrap();
     carol.sync().await.unwrap();
     assert!(bodies(&carol, &general).is_empty(), "older messages were sent before Carol had keys");
+    // But she gets everyone's profile: their apps re-send it when someone joins.
+    alice.sync().await.unwrap();
+    bob.sync().await.unwrap();
+    carol.sync().await.unwrap();
+    assert_eq!(find(&carol, "alice").map(|p| (p.1, p.3)), Some(("Alice ⚔".to_string(), true)));
+    assert_eq!(carol.avatar("alice").await.unwrap().0, face);
+    assert_eq!(find(&carol, "bob").map(|p| p.1), Some("Bobby".to_string()));
     alice.send_text(&general, "welcome carol").await.unwrap();
     carol.sync().await.unwrap();
     assert_eq!(bodies(&carol, &general), vec!["alice: welcome carol"]);

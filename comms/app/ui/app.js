@@ -7,7 +7,7 @@ history.replaceState(null, "", location.pathname); // don't leave the secret in 
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const state = { hosts: [], bridge: false, sel: { host: "", space: "", channel: "" }, me: "", showMembers: true };
+const state = { hosts: [], bridge: false, sel: { host: "", space: "", channel: "" }, me: "", showMembers: true, profiles: {}, prefs: { theme: "lodestone", accent: "" } };
 
 async function api(path, body) {
   const r = await fetch(path, {
@@ -30,6 +30,7 @@ function toast(text, bad) {
 }
 
 function applyTheme(vars) {
+  if (state.prefs.theme !== "lodestone") return; // another theme is chosen
   for (const [k, v] of Object.entries(vars || {})) if (k.startsWith("--") && typeof v === "string") document.documentElement.style.setProperty(k, v);
 }
 
@@ -50,6 +51,7 @@ async function loadState() {
     state.bridge = s.bridge;
     applyTheme(s.theme);
     for (const h of s.hosts) if (h.error) toast(`${h.url}: ${h.error}`, true);
+    await Promise.all(s.hosts.map((h) => loadProfiles(h.url)));
   } catch (e) { toast(e.message, true); }
   const all = spaces();
   if (!all.some((s) => s.host === state.sel.host && s.id === state.sel.space)) {
@@ -143,8 +145,13 @@ async function loadMessages() {
       const time = document.createElement("time");
       time.textContent = new Date(m.sent_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       const who = document.createElement("span");
+      const prof = profileOf(m.sender);
       who.className = "who" + (m.sender === r.me ? " me" : "") + (m.sender.startsWith("⚠") ? " warn" : "");
-      who.textContent = m.sender;
+      who.textContent = prof.name || m.sender;
+      if (prof.color && !m.sender.startsWith("⚠")) who.style.color = prof.color;
+      who.title = "@" + m.sender;
+      row.append(avatarEl(m.sender));
+      if (prof.name && prof.name !== m.sender) { const at = document.createElement("small"); at.className = "at"; at.textContent = "@" + m.sender; who.append(at); }
       if (m.sender.startsWith("⚠")) who.title = "This sender's encryption key doesn't match what the host lists for them";
       const body = document.createElement("span");
       body.className = "body";
@@ -200,8 +207,8 @@ function renderMembers(sp) {
   const sorted = [...sp.members].sort((a, b) => rank[a.role] - rank[b.role] || a.username.localeCompare(b.username));
   const on = sorted.filter((m) => m.presence !== "offline"), off = sorted.filter((m) => m.presence === "offline");
   const row = (m) => `<div class="member ${m.presence}" title="${esc(STATUS_WORDS[m.presence] || m.presence)}${m.status_text ? " · " + esc(m.status_text) : ""}">
-      <span class="dot ${esc(m.presence)}"></span><span class="grow"><span class="mline"><span class="mname">${esc(m.username)}</span>${m.role === "owner" ? '<span class="badge" title="Owner">👑</span>' : m.role === "admin" ? '<span class="badge" title="Admin">🛡</span>' : ""}</span>
-      ${m.status_text ? `<small>${esc(m.status_text)}</small>` : ""}</span></div>`;
+      <span class="av-wrap" data-avatar-user="${esc(m.username)}">${avatarHTML(m.username)}<span class="dot ${esc(m.presence)}"></span></span><span class="grow"><span class="mline"><span class="mname" ${profileOf(m.username).color ? `style="color:${esc(profileOf(m.username).color)}"` : ""}>${esc(profileOf(m.username).name || m.username)}</span>${m.role === "owner" ? '<span class="badge" title="Owner">👑</span>' : m.role === "admin" ? '<span class="badge" title="Admin">🛡</span>' : ""}</span>
+      <small>${profileOf(m.username).name && profileOf(m.username).name !== m.username ? "@" + esc(m.username) + (m.status_text ? " · " : "") : ""}${esc(m.status_text || "")}</small></span></div>`;
   el.innerHTML = `<h4>Online — ${on.length}</h4>${on.map(row).join("")}<h4>Offline — ${off.length}</h4>${off.map(row).join("")}`;
 }
 document.addEventListener("click", (e) => {
@@ -226,6 +233,8 @@ $("#status-menu").onclick = (e) => {
   const h = myHost();
   autoAway = false;
   if (b.dataset.status) return setStatus(b.dataset.status, h.status_text || "");
+  if (b.hasAttribute("data-profile")) return profileDialog();
+  if (b.hasAttribute("data-appearance")) return appearanceDialog();
   ask("Status message", `<label>What are you up to? <span class="muted">(up to 80 characters; empty to clear)</span><input name="text" maxlength="80" value="${esc(h.status_text || "")}"></label>`, "Save", (f) => setStatus(h.status || "online", String(f.get("text") || "")));
 };
 // Away by itself after 15 minutes without using Comms, and back when you return (only from Online).
@@ -237,6 +246,115 @@ for (const ev of ["mousemove", "keydown", "mousedown", "wheel", "focus"]) addEve
 setInterval(() => {
   if (!autoAway && myHost().status === "online" && Date.now() - lastActive > 15 * 60 * 1000) { autoAway = true; setStatus("away", myHost().status_text || ""); }
 }, 30000);
+
+// ---------- profiles ----------
+async function loadProfiles(host) {
+  try {
+    const r = await api(`/api/profiles?host=${encodeURIComponent(host)}`);
+    const map = {};
+    for (const p of r.profiles) map[p.user] = p;
+    if (r.me.user) map[r.me.user] = { ...(map[r.me.user] || {}), user: r.me.user, name: r.me.name, color: r.me.color, has_avatar: r.me.has_avatar };
+    state.profiles[host] = map;
+  } catch {}
+}
+function profileOf(user, host = state.sel.host) {
+  return (state.profiles[host] || {})[user] || {};
+}
+const avatars = new Map();
+function avatarKey(user, host = state.sel.host) { return `${host}|${user}`; }
+function avatarHTML(user) {
+  const p = profileOf(user);
+  const url = avatars.get(avatarKey(user));
+  if (p.has_avatar && url) return `<img class="av" src="${esc(url)}" alt="">`;
+  if (p.has_avatar && !avatars.has(avatarKey(user))) loadAvatar(user);
+  const letter = [...(p.name || user || "?")][0].toUpperCase();
+  return `<span class="av av-letter" style="${p.color ? `background:${esc(p.color)}` : ""}">${esc(letter)}</span>`;
+}
+function avatarEl(user) {
+  const span = document.createElement("span");
+  span.className = "av-wrap";
+  span.dataset.avatarUser = user;
+  span.innerHTML = avatarHTML(user);
+  return span;
+}
+function loadAvatar(user) {
+  const host = state.sel.host, key = avatarKey(user, host);
+  avatars.set(key, "");
+  fetch(`/api/avatar?host=${encodeURIComponent(host)}&user=${encodeURIComponent(user)}`, { headers: { "x-comms-token": TOKEN } })
+    .then((r) => (r.ok ? r.blob() : null))
+    .then((b) => {
+      if (!b) return;
+      avatars.set(key, URL.createObjectURL(b));
+      // Fill in every place this person's picture is shown (keeps any status dot beside it).
+      for (const el of document.querySelectorAll(`[data-avatar-user="${CSS.escape(user)}"]`)) {
+        const old = el.querySelector(".av");
+        if (old) old.outerHTML = avatarHTML(user);
+      }
+    });
+}
+function forgetAvatars(host) {
+  for (const [k, u] of avatars) if (k.startsWith(host + "|")) { if (u) URL.revokeObjectURL(u); avatars.delete(k); }
+}
+
+function profileDialog() {
+  const h = myHost();
+  const me = profileOf(h.username, h.url);
+  let pic; // undefined = keep, "" = remove, base64 = new
+  ask("Your profile", `<div class="row" style="gap:14px;align-items:flex-start">
+      <div class="icon-preview" id="pf-preview">${avatarHTML(h.username)}</div>
+      <div style="flex:1">
+        <label>Display name <span class="muted">(up to 32 characters; empty shows @${esc(h.username)})</span><input name="name" maxlength="32" value="${esc(me.name || "")}"></label>
+        <label>Name colour</label>
+        <div class="row"><input type="color" name="color" value="${esc(me.color || "#7c5cff")}" style="width:60px;padding:2px"><label class="row" style="margin:0"><input type="checkbox" name="nocolor" ${me.color ? "" : "checked"} style="width:auto"> Default colour</label></div>
+        <div class="row" style="margin-top:10px"><button type="button" id="pf-pic">Choose picture…</button><button type="button" class="ghost" id="pf-rm">Remove picture</button></div>
+      </div></div>
+      <p class="muted">Your profile is sent end-to-end encrypted to the people in your servers; the host can't see it. Others always see your @username beside your display name.</p>`,
+    "Save", async (f) => {
+      const body = { name: String(f.get("name") || ""), color: f.get("nocolor") ? "" : String(f.get("color") || "") };
+      if (pic !== undefined) body.avatar = pic;
+      await api("/api/profile", body);
+      forgetAvatars(h.url);
+      await loadProfiles(h.url);
+      render();
+    });
+  $("#pf-pic").onclick = () => $("#avatar-file").click();
+  $("#pf-rm").onclick = () => { pic = ""; $("#pf-preview").innerHTML = `<span class="av av-letter">${esc([...(h.username || "?")][0].toUpperCase())}</span>`; };
+  $("#avatar-file").onchange = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    if (file.size > 256 * 1024) return toast("Profile pictures can be at most 256 KiB", true);
+    pic = await fileBase64(file);
+    $("#pf-preview").innerHTML = `<img class="av" src="${esc(URL.createObjectURL(file))}" alt="">`;
+  };
+}
+
+// ---------- appearance ----------
+const THEMES = [["lodestone", "Lodestone (follows Lodestone's colours)"], ["midnight", "Midnight"], ["light", "Light"], ["contrast", "High contrast"]];
+function applyPrefs() {
+  document.documentElement.dataset.theme = state.prefs.theme;
+  // Lodestone's colours are set inline (they'd beat any theme), so clear them for other themes.
+  if (state.prefs.theme !== "lodestone") for (const k of ["--bg", "--bg-2", "--bg-3", "--line", "--text", "--muted", "--danger"]) document.documentElement.style.removeProperty(k);
+  document.documentElement.style.removeProperty("--accent");
+  if (state.prefs.accent) document.documentElement.style.setProperty("--accent", state.prefs.accent);
+}
+async function loadPrefs() {
+  try { state.prefs = await api("/api/prefs"); } catch {}
+  applyPrefs();
+}
+function appearanceDialog() {
+  ask("Appearance", `<label>Theme<select name="theme">${THEMES.map(([k, l]) => `<option value="${k}" ${state.prefs.theme === k ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+    <label>Accent colour</label>
+    <div class="row"><input type="color" name="accent" value="${esc(state.prefs.accent || "#7c5cff")}" style="width:60px;padding:2px"><label class="row" style="margin:0"><input type="checkbox" name="noaccent" ${state.prefs.accent ? "" : "checked"} style="width:auto"> Theme's own accent</label></div>
+    <p class="muted">Saved on this PC.</p>`, "Save", async (f) => {
+      const prefs = { theme: String(f.get("theme")), accent: f.get("noaccent") ? "" : String(f.get("accent") || "") };
+      await api("/api/prefs", prefs);
+      state.prefs = prefs;
+      if (prefs.theme === "lodestone") for (const k of ["--bg", "--bg-2", "--bg-3", "--line", "--text", "--muted"]) document.documentElement.style.removeProperty(k);
+      applyPrefs();
+      if (prefs.theme === "lodestone") loadState();
+    });
+}
 
 // ---------- attachments ----------
 const MAX_FILE = 10 * 1024 * 1024;
@@ -686,6 +804,7 @@ async function listen() {
           try { ev = JSON.parse(line); } catch { continue; }
           if (ev.type === "state") loadState();
           else if (ev.type === "theme") applyTheme(ev.data);
+          else if (ev.type === "profiles") { forgetAvatars(ev.host); loadProfiles(ev.host).then(render); }
           else if (ev.type === "messages" && ev.host === state.sel.host && ev.channels.includes(state.sel.channel)) loadMessages();
         }
       }
@@ -694,7 +813,7 @@ async function listen() {
   }
 }
 
-loadState();
+loadPrefs().then(loadState);
 listen();
 // Other people's changes (names, channels, roles) show up within a few seconds.
 setInterval(() => { if (!document.querySelector("dialog[open]")) loadState(); }, 15000);

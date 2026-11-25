@@ -36,6 +36,10 @@ pub fn router(app: Shared) -> Router {
         .route("/api/send", post(send))
         .route("/api/react", post(react))
         .route("/api/status", post(set_status))
+        .route("/api/profiles", get(profiles))
+        .route("/api/profile", post(set_profile).layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)))
+        .route("/api/avatar", get(avatar))
+        .route("/api/prefs", get(get_prefs).post(set_prefs))
         .route("/api/upload", post(upload).layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)))
         .route("/api/file", get(open_file))
         .route("/api/friends", get(friends))
@@ -376,6 +380,106 @@ async fn set_status(State(app): State<Shared>, Json(r): Json<StatusReq>) -> R {
     } else {
         Err(Fail(errors.join("; ")))
     }
+}
+
+#[derive(Deserialize)]
+struct HostQuery {
+    host: String,
+}
+
+/// Profiles this device knows on a host, and your own.
+async fn profiles(State(app): State<Shared>, Query(q): Query<HostQuery>) -> R {
+    let c = client(&app, &q.host)?;
+    let (name, color, has_avatar) = c.my_profile();
+    let list: Vec<Value> = c.profiles()?.into_iter().map(|(user, name, color, has)| json!({ "user": user, "name": name, "color": color, "has_avatar": has })).collect();
+    Ok(Json(json!({ "me": { "user": c.username(), "name": name, "color": color, "has_avatar": has_avatar }, "profiles": list })))
+}
+
+#[derive(Deserialize)]
+struct ProfileReq {
+    name: String,
+    #[serde(default)]
+    color: String,
+    /// base64 picture; "" removes it; missing keeps it.
+    avatar: Option<String>,
+}
+
+/// Set your profile on every host you've joined (sent end-to-end encrypted to your servers).
+async fn set_profile(State(app): State<Shared>, Json(r): Json<ProfileReq>) -> R {
+    let avatar = match &r.avatar {
+        None => None,
+        Some(a) if a.is_empty() => Some(Vec::new()),
+        Some(a) => Some(lodestone_comms_client::host::unb64(a).ok_or_else(|| Fail("Bad picture".into()))?),
+    };
+    let mut errors = Vec::new();
+    for (url, c) in app.hosts.all() {
+        if c.username().is_none() {
+            continue;
+        }
+        let res = async {
+            ensure_signed_in(&c).await?;
+            c.set_profile(&r.name, r.color.trim(), avatar.as_deref()).await?;
+            Ok::<_, Fail>(())
+        }
+        .await;
+        if let Err(e) = res {
+            errors.push(format!("{url}: {}", e.0));
+        }
+        let _ = app.events.send(json!({ "type": "profiles", "host": url }).to_string());
+    }
+    if errors.is_empty() { Ok(Json(json!({ "ok": true }))) } else { Err(Fail(errors.join("; "))) }
+}
+
+#[derive(Deserialize)]
+struct AvatarQuery {
+    host: String,
+    user: String,
+}
+
+/// A profile picture, decrypted, served only as an image.
+async fn avatar(State(app): State<Shared>, Query(q): Query<AvatarQuery>) -> Response {
+    let Ok(c) = client(&app, &q.host) else { return StatusCode::NOT_FOUND.into_response() };
+    let _ = ensure_signed_in(&c).await;
+    match c.avatar(&q.user).await {
+        Ok((bytes, mime)) if mime.starts_with("image/") => {
+            let mut r = Response::new(Body::from(bytes));
+            let h = r.headers_mut();
+            h.insert(header::CONTENT_TYPE, HeaderValue::from_str(&mime).unwrap_or(HeaderValue::from_static("image/png")));
+            h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+            h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; sandbox"));
+            h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            r
+        }
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+const THEMES: &[&str] = &["lodestone", "midnight", "light", "contrast"];
+
+/// Theme and accent, saved in Comms's own folder (the page's address changes every launch, so the
+/// browser's own storage wouldn't keep them).
+async fn get_prefs(State(app): State<Shared>) -> R {
+    let p: Value = std::fs::read_to_string(app.hosts.prefs_file()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}));
+    Ok(Json(json!({ "theme": p["theme"].as_str().filter(|t| THEMES.contains(t)).unwrap_or("lodestone"), "accent": p["accent"].as_str().unwrap_or("") })))
+}
+
+#[derive(Deserialize)]
+struct Prefs {
+    theme: String,
+    #[serde(default)]
+    accent: String,
+}
+
+async fn set_prefs(State(app): State<Shared>, Json(r): Json<Prefs>) -> R {
+    if !THEMES.contains(&r.theme.as_str()) {
+        return Err(Fail("Unknown theme".into()));
+    }
+    let accent = r.accent.trim();
+    if !accent.is_empty() && !(accent.len() == 7 && accent.starts_with('#') && accent[1..].bytes().all(|b| b.is_ascii_hexdigit())) {
+        return Err(Fail("Accent colours look like #7c5cff".into()));
+    }
+    std::fs::write(app.hosts.prefs_file(), json!({ "theme": r.theme, "accent": accent }).to_string()).map_err(|e| Fail(e.to_string()))?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 /// Your Steam and Epic friends, through the bridge (needs the friends:read permission in Lodestone).

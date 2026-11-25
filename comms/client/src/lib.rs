@@ -105,6 +105,21 @@ struct Payload {
     /// `file`: { id, name, mime, size, key, nonce } of an encrypted attachment on the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     file: Option<Value>,
+    /// `profile`: the name colour, as #rrggbb.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    color: Option<String>,
+}
+
+/// Largest profile picture.
+pub const MAX_AVATAR: usize = 256 * 1024;
+
+fn valid_color(c: &str) -> bool {
+    c.len() == 7 && c.starts_with('#') && c[1..].bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn clean_display_name(n: &str) -> Option<String> {
+    let n = n.trim();
+    (n.chars().count() <= 32 && !n.chars().any(char::is_control)).then(|| n.to_string())
 }
 
 /// Largest attachment this client sends (the host may allow less).
@@ -156,6 +171,8 @@ pub struct Client {
     dir: std::path::PathBuf,
     op: tokio::sync::Mutex<()>,
     touched: std::sync::Mutex<Vec<String>>,
+    /// Channels where our profile should be (re-)sent: new members can't read anything older.
+    announce: std::sync::Mutex<std::collections::BTreeSet<String>>,
 }
 
 impl Client {
@@ -180,7 +197,7 @@ impl Client {
         let signer = SignatureKeyPair::from_raw(SignatureScheme::ED25519, key.to_bytes().to_vec(), public.clone());
         let storage = MemoryStorage::default();
         *storage.values.write().unwrap() = store.load_mls()?;
-        Ok(Self { store, provider: Provider { crypto: RustCrypto::default(), storage }, host: Host::new(host_url), key, signer, device: b64(&public), dir: dir.to_path_buf(), op: Default::default(), touched: Default::default() })
+        Ok(Self { store, provider: Provider { crypto: RustCrypto::default(), storage }, host: Host::new(host_url), key, signer, device: b64(&public), dir: dir.to_path_buf(), op: Default::default(), touched: Default::default(), announce: Default::default() })
     }
 
     pub fn device_key(&self) -> &str {
@@ -326,8 +343,9 @@ impl Client {
         let epoch = group.epoch().as_u64();
         let seq = self.host.send(channel, "application", epoch, &out.tls_serialize_detached().map_err(local)?).await?.ok_or_else(|| Error::Local("The host refused the message".into()))?;
         let m = Message { channel: channel.into(), seq, sender: self.username().unwrap_or_default(), sender_device: self.device.clone(), body: text.into(), sent_at: now(), attachment: None };
+        // The read position isn't moved here: catching up skips our own messages, and moving it could
+        // jump over someone else's message that arrived just before ours.
         self.store.add_message(&m)?;
-        self.store.set_last_seq(channel, seq)?;
         Ok(m)
     }
 
@@ -359,16 +377,130 @@ impl Client {
         self.persist()?;
         let seq = self.host.send(channel, "application", group.epoch().as_u64(), &out.tls_serialize_detached().map_err(local)?).await?.ok_or_else(|| Error::Local("The host refused the message".into()))?;
         let m = Message { channel: channel.into(), seq, sender: self.username().unwrap_or_default(), sender_device: self.device.clone(), body: caption.into(), sent_at: now(), attachment: Some(file) };
+        // The read position isn't moved here: catching up skips our own messages, and moving it could
+        // jump over someone else's message that arrived just before ours.
         self.store.add_message(&m)?;
-        self.store.set_last_seq(channel, seq)?;
         Ok(self.store.messages(channel, 1)?.into_iter().find(|x| x.seq == seq).unwrap_or(m))
     }
 
-    /// A message's attachment, decrypted: (bytes, mime type, file name). The encrypted copy is kept in
-    /// this device's folder so it isn't downloaded twice.
-    pub async fn open_file(&self, channel: &str, seq: i64) -> Result<(Vec<u8>, String, String)> {
+    /// Your profile: display name (up to 32 characters, empty for your username), name colour
+    /// (#rrggbb or empty) and picture (PNG, JPEG, GIF or WebP up to 256 KiB; `None` keeps the current
+    /// one, `Some(empty)` removes it). It's sent to your servers end-to-end encrypted.
+    pub async fn set_profile(&self, name: &str, color: &str, avatar: Option<&[u8]>) -> Result<()> {
+        let name = clean_display_name(name).ok_or_else(|| Error::Local("Display names can have at most 32 characters".into()))?;
+        if !color.is_empty() && !valid_color(color) {
+            return Err(Error::Local("Colours look like #7c5cff".into()));
+        }
+        if let Some(a) = avatar {
+            if !a.is_empty() && (a.len() > MAX_AVATAR || sniff_image(a).is_none()) {
+                return Err(Error::Local("Profile pictures must be PNG, JPEG, GIF or WebP, up to 256 KiB".into()));
+            }
+            self.store.set("avatar", &b64(a))?;
+            // Each server gets a fresh upload of the new picture.
+            self.store.with(|c| c.execute("DELETE FROM settings WHERE k LIKE 'avatar_ref:%'", []).map(|_| ()))?;
+        }
+        self.store.set("profile", &json!({ "name": name, "color": color }).to_string())?;
+        // Show it on this device straight away, and send it to every channel we're in.
+        let me = self.username().unwrap_or_default();
+        self.store.set_profile(&me, &name, color, None, i64::MAX)?;
+        let all: Vec<String> = self.store.channels()?.into_iter().map(|c| c.0).collect();
+        self.announce.lock().unwrap().extend(all);
+        let _g = self.op.lock().await;
+        self.announce_profile().await
+    }
+
+    /// Your own profile as stored on this device: (display name, colour, has a picture).
+    pub fn my_profile(&self) -> (String, String, bool) {
+        let p: Value = self.store.get("profile").and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+        let has = self.store.get("avatar").is_some_and(|a| !a.is_empty());
+        (p["name"].as_str().unwrap_or_default().to_string(), p["color"].as_str().unwrap_or_default().to_string(), has)
+    }
+
+    /// Everyone's profiles this device knows: (username, display name, colour, has a picture).
+    pub fn profiles(&self) -> Result<Vec<(String, String, String, bool)>> {
+        let me = self.username().unwrap_or_default();
+        Ok(self
+            .store
+            .profiles()?
+            .into_iter()
+            .map(|(u, n, c, a)| {
+                let has = if u == me { self.my_profile().2 } else { a.is_some() };
+                (u, n, c, has)
+            })
+            .collect())
+    }
+
+    /// Someone's profile picture, decrypted (yours comes from this device).
+    pub async fn avatar(&self, user: &str) -> Result<(Vec<u8>, String)> {
+        if Some(user.to_string()) == self.username() {
+            let a = self.store.get("avatar").and_then(|a| unb64(&a)).filter(|a| !a.is_empty()).ok_or_else(|| Error::Local("No picture".into()))?;
+            let mime = sniff_image(&a).unwrap_or("application/octet-stream").to_string();
+            return Ok((a, mime));
+        }
+        let f = self.store.profiles()?.into_iter().find(|p| p.0 == user).and_then(|p| p.3).ok_or_else(|| Error::Local("No picture".into()))?;
+        let (bytes, mime) = self.decrypt_ref(&f).await?;
+        if !mime.starts_with("image/") {
+            return Err(Error::Local("Not a picture".into()));
+        }
+        Ok((bytes, mime))
+    }
+
+    /// Send our profile into every channel waiting for it. Called with the op lock held.
+    async fn announce_profile(&self) -> Result<()> {
+        let Some(profile) = self.store.get("profile").and_then(|t| serde_json::from_str::<Value>(&t).ok()) else {
+            self.announce.lock().unwrap().clear();
+            return Ok(()); // no profile set: nothing to share
+        };
+        let channels: Vec<String> = std::mem::take(&mut *self.announce.lock().unwrap()).into_iter().collect();
+        let known = self.store.channels()?;
+        for channel in channels {
+            let Some(space) = known.iter().find(|c| c.0 == channel).map(|c| c.1.clone()) else { continue };
+            let Some(mut group) = self.group(&channel)? else { continue };
+            let avatar = match self.avatar_ref(&space, &channel).await {
+                Ok(a) => a,
+                Err(e) => {
+                    eprintln!("comms: couldn't upload our profile picture: {e}");
+                    None
+                }
+            };
+            let payload = Payload {
+                t: "profile".into(),
+                body: profile["name"].as_str().unwrap_or_default().to_string(),
+                color: profile["color"].as_str().filter(|c| !c.is_empty()).map(String::from),
+                file: avatar,
+                ..Default::default()
+            };
+            let out = group.create_message(&self.provider, &self.signer, &serde_json::to_vec(&payload).map_err(local)?).map_err(local)?;
+            self.persist()?;
+            match self.host.send(&channel, "application", group.epoch().as_u64(), &out.tls_serialize_detached().map_err(local)?).await {
+                Ok(_) => {}
+                Err(e) => eprintln!("comms: couldn't send our profile to a channel: {e}"),
+            }
+        }
+        Ok(())
+    }
+
+    /// Our encrypted picture for a server, uploaded once per server (files belong to a server).
+    async fn avatar_ref(&self, space: &str, channel: &str) -> Result<Option<Value>> {
         use aes_gcm::aead::{Aead, KeyInit};
-        let f = self.store.attachment(channel, seq).ok_or_else(|| Error::Local("No file on that message".into()))?;
+        let Some(bytes) = self.store.get("avatar").and_then(|a| unb64(&a)).filter(|a| !a.is_empty()) else { return Ok(None) };
+        if let Some(r) = self.store.get(&format!("avatar_ref:{space}")).and_then(|t| serde_json::from_str(&t).ok()) {
+            return Ok(Some(r));
+        }
+        let mut key = [0u8; 32];
+        let mut nonce = [0u8; 12];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce);
+        let sealed = aes_gcm::Aes256Gcm::new_from_slice(&key).map_err(local)?.encrypt(aes_gcm::Nonce::from_slice(&nonce), bytes.as_ref()).map_err(local)?;
+        let up = self.host.post_raw(&format!("/v1/channels/{channel}/blobs"), sealed).await?;
+        let r = json!({ "id": up["id"], "name": "avatar", "mime": sniff_image(&bytes).unwrap_or(""), "size": bytes.len(), "key": b64(&key), "nonce": b64(&nonce) });
+        self.store.set(&format!("avatar_ref:{space}"), &r.to_string())?;
+        Ok(Some(r))
+    }
+
+    /// Download (or read from the local cache) and decrypt a file reference: (bytes, mime by content).
+    async fn decrypt_ref(&self, f: &Value) -> Result<(Vec<u8>, String)> {
+        use aes_gcm::aead::{Aead, KeyInit};
         let id = f["id"].as_str().unwrap_or_default().to_string();
         if !(id.len() == 24 && id.bytes().all(|b| b.is_ascii_hexdigit())) {
             return Err(Error::Local("Bad file reference".into()));
@@ -385,13 +517,19 @@ impl Client {
         };
         let key = f["key"].as_str().and_then(unb64).ok_or_else(|| Error::Local("Bad file key".into()))?;
         let nonce = f["nonce"].as_str().and_then(unb64).filter(|n| n.len() == 12).ok_or_else(|| Error::Local("Bad file key".into()))?;
-        let cipher = aes_gcm::Aes256Gcm::new_from_slice(&key).map_err(local)?;
-        let plain = cipher.decrypt(aes_gcm::Nonce::from_slice(&nonce), sealed.as_ref()).map_err(|_| {
+        let plain = aes_gcm::Aes256Gcm::new_from_slice(&key).map_err(local)?.decrypt(aes_gcm::Nonce::from_slice(&nonce), sealed.as_ref()).map_err(|_| {
             let _ = std::fs::remove_file(&cache);
             Error::Local("The file doesn't match its key (damaged or swapped on the host)".into())
         })?;
-        // The type is decided by the content, not by what the sender claimed.
         let mime = sniff_image(&plain).unwrap_or("application/octet-stream").to_string();
+        Ok((plain, mime))
+    }
+
+    /// A message's attachment, decrypted: (bytes, mime type, file name). The encrypted copy is kept in
+    /// this device's folder so it isn't downloaded twice.
+    pub async fn open_file(&self, channel: &str, seq: i64) -> Result<(Vec<u8>, String, String)> {
+        let f = self.store.attachment(channel, seq).ok_or_else(|| Error::Local("No file on that message".into()))?;
+        let (plain, mime) = self.decrypt_ref(&f).await?;
         Ok((plain, mime, clean_file_name(f["name"].as_str().unwrap_or("file"))))
     }
 
@@ -404,12 +542,11 @@ impl Client {
         let devices = self.space_devices_for(channel).await?;
         self.catch_up(channel, &devices).await?;
         let mut group = self.group(channel)?.ok_or_else(|| Error::Local("You aren't in this channel's encrypted group yet".into()))?;
-        let payload = serde_json::to_vec(&Payload { t: "react".into(), body: emoji.into(), target: Some(target), on: Some(on), file: None }).map_err(local)?;
+        let payload = serde_json::to_vec(&Payload { t: "react".into(), body: emoji.into(), target: Some(target), on: Some(on), file: None, color: None }).map_err(local)?;
         let out = group.create_message(&self.provider, &self.signer, &payload).map_err(local)?;
         self.persist()?;
-        let seq = self.host.send(channel, "application", group.epoch().as_u64(), &out.tls_serialize_detached().map_err(local)?).await?.ok_or_else(|| Error::Local("The host refused it".into()))?;
+        self.host.send(channel, "application", group.epoch().as_u64(), &out.tls_serialize_detached().map_err(local)?).await?.ok_or_else(|| Error::Local("The host refused it".into()))?;
         self.store.set_reaction(channel, target, emoji, &self.username().unwrap_or_default(), on)?;
-        self.store.set_last_seq(channel, seq)?;
         Ok(())
     }
 
@@ -446,6 +583,7 @@ impl Client {
                 self.reconcile(channel, &devices).await?;
             }
         }
+        self.announce_profile().await?;
         self.top_up_key_packages().await?;
         Ok(new)
     }
@@ -473,6 +611,7 @@ impl Client {
                     self.persist()?;
                     let space = self.space_of_channel(channel).await?;
                     self.store.add_channel(channel, &space.0, &space.1, epoch)?;
+                    self.announce.lock().unwrap().insert(channel.to_string());
                 }
                 Err(e) => eprintln!("comms: couldn't use a welcome for a channel: {e:?}"),
             }
@@ -564,6 +703,20 @@ impl Client {
                             f
                         }),
                     }),
+                    Some(p) if p.t == "profile" => {
+                                        // Only a verified sender's own profile is kept (names marked ⚠ don't count).
+                        let ok_avatar = p.file.as_ref().is_none_or(|f| valid_file(f) && f["size"].as_u64().is_some_and(|s| s as usize <= MAX_AVATAR));
+                        let color = p.color.clone().filter(|c| valid_color(c)).unwrap_or_default();
+                        if let (false, Some(display), true) = (name.starts_with('⚠'), clean_display_name(&p.body), ok_avatar) {
+                            if self.store.set_profile(&name, &display, &color, p.file.as_ref(), m["seq"].as_i64().unwrap_or(0) + m["sent_at"].as_i64().unwrap_or(0) * 1_000_000)? {
+                                let mut t = self.touched.lock().unwrap();
+                                if !t.iter().any(|c| c == "profiles") {
+                                    t.push("profiles".to_string());
+                                }
+                            }
+                        }
+                        None
+                    }
                     Some(p) if p.t == "react" && valid_reaction(&p.body) => {
                         if let Some(target) = p.target {
                             self.store.set_reaction(channel, target, &p.body, &name, p.on.unwrap_or(true))?;
@@ -584,7 +737,11 @@ impl Client {
                         eprintln!("comms: a member added a device the host doesn't list for that user");
                     }
                 }
+                let added = staged.add_proposals().count() > 0;
                 group.merge_staged_commit(&self.provider, *staged).map_err(local)?;
+                if added {
+                    self.announce.lock().unwrap().insert(channel.to_string());
+                }
                 None
             }
             ProcessedMessageContent::ProposalMessage(p) => {
@@ -642,6 +799,7 @@ impl Client {
             let kps: Vec<KeyPackage> = add.iter().map(|(_, k)| k.clone()).collect();
             let (commit, welcome, _) = group.add_members(&self.provider, &self.signer, &kps).map_err(local)?;
             if self.commit(&mut group, channel, epoch, &commit).await? {
+                self.announce.lock().unwrap().insert(channel.to_string());
                 let to: Vec<&String> = add.iter().map(|(d, _)| d).collect();
                 self.host.post("/v1/welcomes", json!({ "channel": channel, "to": to, "body": b64(&welcome.tls_serialize_detached().map_err(local)?) })).await?;
             }
@@ -653,10 +811,9 @@ impl Client {
     async fn commit(&self, group: &mut MlsGroup, channel: &str, epoch: u64, commit: &MlsMessageOut) -> Result<bool> {
         self.persist()?;
         match self.host.send(channel, "commit", epoch, &commit.tls_serialize_detached().map_err(local)?).await? {
-            Some(seq) => {
+            Some(_) => {
                 group.merge_pending_commit(&self.provider).map_err(local)?;
                 self.persist()?;
-                self.store.set_last_seq(channel, seq)?;
                 Ok(true)
             }
             None => {

@@ -155,6 +155,15 @@ The message that carries a file is an application message with `t: "file"`, the 
 content (PNG, JPEG, GIF, WebP), never from the sender's claim, and a file changed on the host fails to
 decrypt and isn't shown. The host sees each file's size and when it was uploaded.
 
+## Profiles
+
+A profile (display name up to 32 characters, a name colour `#rrggbb`, a picture up to 256 KiB) is an
+application message with `t: "profile"`, the display name as `body`, `color`, and the picture as an
+encrypted attachment in `file`. The host never sees names or pictures. A client sends its profile to
+every channel when it changes, and again into a channel whenever members are added to it (newcomers
+can't read anything older). Receivers keep only a verified sender's own profile, so nobody can set
+someone else's; clients show the real `@username` beside a display name.
+
 ## Status
 
 - `PUT /v1/me/status` `{ status, text }`: `online`, `away`, `busy` or `invisible`, and an optional message

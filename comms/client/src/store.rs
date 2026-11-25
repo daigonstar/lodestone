@@ -20,6 +20,13 @@ CREATE TABLE IF NOT EXISTS channels (
     joined_epoch INTEGER NOT NULL,
     last_seq INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS profiles (
+    user TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL,
+    avatar TEXT,
+    sent_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS reactions (
     channel TEXT NOT NULL,
     target INTEGER NOT NULL,
@@ -158,6 +165,31 @@ impl Store {
                 c.execute("DELETE FROM reactions WHERE channel = ?1 AND target = ?2 AND emoji = ?3 AND user = ?4", params![channel, target, emoji, user])
             }
             .map(|_| ())
+        })
+    }
+
+    /// Save someone's profile if it's newer than the one we have.
+    pub fn set_profile(&self, user: &str, name: &str, color: &str, avatar: Option<&serde_json::Value>, sent_at: i64) -> rusqlite::Result<bool> {
+        self.with(|c| {
+            let n = c.execute(
+                "INSERT INTO profiles (user, name, color, avatar, sent_at) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(user) DO UPDATE SET name = excluded.name, color = excluded.color, avatar = excluded.avatar, sent_at = excluded.sent_at
+                 WHERE excluded.sent_at >= profiles.sent_at",
+                params![user, name, color, avatar.map(|a| a.to_string()), sent_at],
+            )?;
+            Ok(n > 0)
+        })
+    }
+
+    /// Everyone's profiles: (user, display name, colour, avatar reference with its key).
+    pub fn profiles(&self) -> rusqlite::Result<Vec<(String, String, String, Option<serde_json::Value>)>> {
+        self.with(|c| {
+            c.prepare("SELECT user, name, color, avatar FROM profiles ORDER BY user")?
+                .query_map([], |r| {
+                    let a: Option<String> = r.get(3)?;
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, a.and_then(|x| serde_json::from_str(&x).ok())))
+                })?
+                .collect()
         })
     }
 
