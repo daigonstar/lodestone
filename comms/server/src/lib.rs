@@ -3,7 +3,7 @@
 //! spaces (servers), channels, invites, MLS key packages and the ordered delivery of MLS messages.
 //!
 //! Settings (environment):
-//! - `COMMS_PUBLIC_URL`: the address clients use, e.g. `https://comms.example.com` (signed into every
+//! - `COMMS_PUBLIC_URL`: the address clients use, e.g. `https://comms.yourdomain.example` (signed into every
 //!   sign-in, so it must match what clients connect to). Default `http://localhost:8080`.
 //! - `COMMS_BIND`: where to listen. Default `0.0.0.0:8080` (put HTTPS in front, see compose.yml).
 //! - `COMMS_DATA`: folder for the database. Default `./data`.

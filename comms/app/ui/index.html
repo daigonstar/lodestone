@@ -31,6 +31,12 @@
   </dialog>
   <input type="file" id="icon-file" accept="image/png,image/jpeg,image/gif,image/webp" class="hidden">
   <div id="toast" class="toast hidden" role="status"></div>
+  <div id="picker" class="picker hidden" role="dialog" aria-label="Emoji">
+    <input id="picker-search" placeholder="Search emoji" autocomplete="off" spellcheck="false">
+    <div id="picker-tabs" class="picker-tabs"></div>
+    <div id="picker-grid" class="picker-grid"></div>
+  </div>
+  <script src="emoji.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

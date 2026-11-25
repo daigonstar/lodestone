@@ -92,10 +92,21 @@ fn identity_of(c: &Credential) -> Option<(String, String)> {
 }
 
 /// What's inside an encrypted application message.
-#[derive(serde::Serialize, serde::Deserialize)]
+/// What's inside an encrypted application message: `text` (a chat message) or `react` (add or remove
+/// an emoji on the message with sequence number `target`). Clients ignore kinds they don't know.
+#[derive(serde::Serialize, serde::Deserialize, Default)]
 struct Payload {
     t: String,
     body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    target: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    on: Option<bool>,
+}
+
+/// A reaction is one emoji (possibly several code points, like 👍🏽 or 🏳️‍🌈) or a custom `:name:`.
+pub fn valid_reaction(e: &str) -> bool {
+    !e.is_empty() && e.len() <= 64 && !e.chars().any(|c| c.is_control() || c.is_whitespace())
 }
 
 pub struct Client {
@@ -106,6 +117,7 @@ pub struct Client {
     signer: SignatureKeyPair,
     device: String,
     op: tokio::sync::Mutex<()>,
+    touched: std::sync::Mutex<Vec<String>>,
 }
 
 impl Client {
@@ -130,7 +142,7 @@ impl Client {
         let signer = SignatureKeyPair::from_raw(SignatureScheme::ED25519, key.to_bytes().to_vec(), public.clone());
         let storage = MemoryStorage::default();
         *storage.values.write().unwrap() = store.load_mls()?;
-        Ok(Self { store, provider: Provider { crypto: RustCrypto::default(), storage }, host: Host::new(host_url), key, signer, device: b64(&public), op: Default::default() })
+        Ok(Self { store, provider: Provider { crypto: RustCrypto::default(), storage }, host: Host::new(host_url), key, signer, device: b64(&public), op: Default::default(), touched: Default::default() })
     }
 
     pub fn device_key(&self) -> &str {
@@ -270,7 +282,7 @@ impl Client {
         let devices = self.space_devices_for(channel).await?;
         self.catch_up(channel, &devices).await?;
         let mut group = self.group(channel)?.ok_or_else(|| Error::Local("You aren't in this channel's encrypted group yet; someone in it has to add you (it happens automatically when they're online)".into()))?;
-        let payload = serde_json::to_vec(&Payload { t: "text".into(), body: text.to_string() }).map_err(local)?;
+        let payload = serde_json::to_vec(&Payload { t: "text".into(), body: text.to_string(), ..Default::default() }).map_err(local)?;
         let out = group.create_message(&self.provider, &self.signer, &payload).map_err(local)?;
         self.persist()?;
         let epoch = group.epoch().as_u64();
@@ -279,6 +291,34 @@ impl Client {
         self.store.add_message(&m)?;
         self.store.set_last_seq(channel, seq)?;
         Ok(m)
+    }
+
+    /// Add (`on`) or remove your emoji reaction on a message, end-to-end encrypted like a message.
+    pub async fn react(&self, channel: &str, target: i64, emoji: &str, on: bool) -> Result<()> {
+        if !valid_reaction(emoji) {
+            return Err(Error::Local("Not a reaction".into()));
+        }
+        let _g = self.op.lock().await;
+        let devices = self.space_devices_for(channel).await?;
+        self.catch_up(channel, &devices).await?;
+        let mut group = self.group(channel)?.ok_or_else(|| Error::Local("You aren't in this channel's encrypted group yet".into()))?;
+        let payload = serde_json::to_vec(&Payload { t: "react".into(), body: emoji.into(), target: Some(target), on: Some(on) }).map_err(local)?;
+        let out = group.create_message(&self.provider, &self.signer, &payload).map_err(local)?;
+        self.persist()?;
+        let seq = self.host.send(channel, "application", group.epoch().as_u64(), &out.tls_serialize_detached().map_err(local)?).await?.ok_or_else(|| Error::Local("The host refused it".into()))?;
+        self.store.set_reaction(channel, target, emoji, &self.username().unwrap_or_default(), on)?;
+        self.store.set_last_seq(channel, seq)?;
+        Ok(())
+    }
+
+    /// A channel's reactions: (message seq, emoji, who), as this device knows them.
+    pub fn reactions(&self, channel: &str) -> Result<Vec<(i64, String, Vec<String>)>> {
+        Ok(self.store.reactions(channel)?)
+    }
+
+    /// Channels whose reactions changed since the last call (for live updates).
+    pub fn take_touched(&self) -> Vec<String> {
+        std::mem::take(&mut *self.touched.lock().unwrap())
     }
 
     // ---------- syncing ----------
@@ -409,14 +449,27 @@ impl Client {
                     Some(member) => verified_sender(member, devices),
                     None => ("⚠ unknown".to_string(), String::new()),
                 };
-                payload.filter(|p| p.t == "text").map(|p| Message {
-                    channel: channel.into(),
-                    seq: m["seq"].as_i64().unwrap_or(0),
-                    sender: name,
-                    sender_device: device,
-                    body: p.body,
-                    sent_at: m["sent_at"].as_i64().unwrap_or(0),
-                })
+                match payload {
+                    Some(p) if p.t == "text" => Some(Message {
+                        channel: channel.into(),
+                        seq: m["seq"].as_i64().unwrap_or(0),
+                        sender: name,
+                        sender_device: device,
+                        body: p.body,
+                        sent_at: m["sent_at"].as_i64().unwrap_or(0),
+                    }),
+                    Some(p) if p.t == "react" && valid_reaction(&p.body) => {
+                        if let Some(target) = p.target {
+                            self.store.set_reaction(channel, target, &p.body, &name, p.on.unwrap_or(true))?;
+                            let mut t = self.touched.lock().unwrap();
+                            if !t.iter().any(|c| c == channel) {
+                                t.push(channel.to_string());
+                            }
+                        }
+                        None
+                    }
+                    _ => None,
+                }
             }
             ProcessedMessageContent::StagedCommitMessage(staged) => {
                 for add in staged.add_proposals() {

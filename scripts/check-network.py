@@ -18,7 +18,11 @@ import sys
 from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
-SOURCES = [*(root / "src-tauri/src").rglob("*.rs"), *(root / "ui").glob("*.js"), *(root / "ui").glob("*.html")]
+SOURCES = [
+    *(root / "src-tauri/src").rglob("*.rs"), *(root / "ui").glob("*.js"), *(root / "ui").glob("*.html"),
+    # Lodestone Comms (the plug-in, its client and the self-hosted server)
+    *(root / "comms").glob("*/src/**/*.rs"), *(root / "comms/app/ui").glob("*.js"), *(root / "comms/app/ui").glob("*.html"),
+]
 URL = re.compile(r"""\b(?:https?|wss?)://([A-Za-z0-9{}$._*-]+)""")
 
 

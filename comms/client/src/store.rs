@@ -20,6 +20,13 @@ CREATE TABLE IF NOT EXISTS channels (
     joined_epoch INTEGER NOT NULL,
     last_seq INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS reactions (
+    channel TEXT NOT NULL,
+    target INTEGER NOT NULL,
+    emoji TEXT NOT NULL,
+    user TEXT NOT NULL,
+    PRIMARY KEY (channel, target, emoji, user)
+);
 CREATE TABLE IF NOT EXISTS messages (
     channel TEXT NOT NULL,
     seq INTEGER NOT NULL,
@@ -128,6 +135,32 @@ impl Store {
             )
             .map(|_| ())
         })
+    }
+
+    pub fn set_reaction(&self, channel: &str, target: i64, emoji: &str, user: &str, on: bool) -> rusqlite::Result<()> {
+        self.with(|c| {
+            if on {
+                c.execute("INSERT OR IGNORE INTO reactions (channel, target, emoji, user) VALUES (?1, ?2, ?3, ?4)", params![channel, target, emoji, user])
+            } else {
+                c.execute("DELETE FROM reactions WHERE channel = ?1 AND target = ?2 AND emoji = ?3 AND user = ?4", params![channel, target, emoji, user])
+            }
+            .map(|_| ())
+        })
+    }
+
+    /// A channel's reactions: (message seq, emoji, users), in the order they were first added.
+    pub fn reactions(&self, channel: &str) -> rusqlite::Result<Vec<(i64, String, Vec<String>)>> {
+        let rows: Vec<(i64, String, String)> = self.with(|c| {
+            c.prepare("SELECT target, emoji, user FROM reactions WHERE channel = ?1 ORDER BY target, rowid")?.query_map([channel], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect()
+        })?;
+        let mut out: Vec<(i64, String, Vec<String>)> = Vec::new();
+        for (t, e, u) in rows {
+            match out.iter_mut().find(|x| x.0 == t && x.1 == e) {
+                Some(x) => x.2.push(u),
+                None => out.push((t, e, vec![u])),
+            }
+        }
+        Ok(out)
     }
 
     pub fn messages(&self, channel: &str, limit: i64) -> rusqlite::Result<Vec<Message>> {

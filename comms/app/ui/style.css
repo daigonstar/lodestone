@@ -88,3 +88,23 @@ button.danger { background: transparent; border: 1px solid var(--danger); color:
 .chat header .topic { color: var(--muted); font-size: 13px; font-weight: 400; margin-left: 8px; }
 textarea.desc { height: 80px; resize: vertical; }
 button:disabled { opacity: .4; cursor: default; filter: none; }
+
+/* emoji */
+.compose-row { display: flex; gap: 8px; align-items: stretch; }
+.compose-row textarea { flex: 1; }
+.emoji-btn { font-size: 20px; padding: 0 10px; background: var(--bg-3); }
+.msg { position: relative; padding-right: 40px; }
+.msg:hover { background: #ffffff06; border-radius: 6px; }
+.msg.big-emoji .body { font-size: 32px; line-height: 1.2; }
+.react-add { position: absolute; right: 4px; top: 2px; padding: 1px 6px; font-size: 12px; background: var(--bg-3); color: var(--muted); opacity: 0; }
+.msg:hover .react-add, .react-add:focus { opacity: 1; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 2px; white-space: normal; }
+.chip { padding: 1px 8px; font-size: 13px; border-radius: 99px; background: var(--bg-3); border: 1px solid var(--line); }
+.chip.mine { border-color: var(--accent); background: #7c5cff22; }
+.picker { position: fixed; z-index: 50; width: 340px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 10px 30px #000a; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.picker-tabs { display: flex; gap: 2px; }
+.picker-tabs button { flex: 1; min-width: 0; padding: 4px 0; background: transparent; font-size: 16px; opacity: .6; }
+.picker-tabs button.on { opacity: 1; background: var(--bg-3); }
+.picker-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; height: 240px; overflow-y: auto; align-content: start; }
+.picker-grid button { font-size: 22px; padding: 4px 0; background: transparent; border-radius: 6px; }
+.picker-grid button:hover { background: var(--bg-3); filter: none; }

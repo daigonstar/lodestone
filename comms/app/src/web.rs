@@ -19,6 +19,7 @@ use std::sync::Arc;
 const INDEX: &str = include_str!("../ui/index.html");
 const SCRIPT: &str = include_str!("../ui/app.js");
 const STYLE: &str = include_str!("../ui/style.css");
+const EMOJI: &str = include_str!("../ui/emoji.js");
 
 /// Only this page's own code runs, it only talks to its own plug-in, and only Lodestone may frame it.
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' https: data: blob:; base-uri 'none'; form-action 'none'; frame-ancestors tauri://localhost http://tauri.localhost";
@@ -33,6 +34,7 @@ pub fn router(app: Shared) -> Router {
         .route("/api/invites", post(create_invite))
         .route("/api/messages", get(messages))
         .route("/api/send", post(send))
+        .route("/api/react", post(react))
         .route("/api/friends", get(friends))
         .route("/api/invite-friend", post(invite_friend))
         .route("/api/events", get(events))
@@ -43,6 +45,7 @@ pub fn router(app: Shared) -> Router {
         .route("/", get(|| async { page(INDEX, "text/html; charset=utf-8") }))
         .route("/app.js", get(|| async { page(SCRIPT, "text/javascript; charset=utf-8") }))
         .route("/style.css", get(|| async { page(STYLE, "text/css; charset=utf-8") }))
+        .route("/emoji.js", get(|| async { page(EMOJI, "text/javascript; charset=utf-8") }))
         .merge(api)
         .layer(middleware::from_fn_with_state(app.clone(), host_check))
         .with_state(app)
@@ -240,7 +243,8 @@ struct MessagesQuery {
 
 async fn messages(State(app): State<Shared>, Query(q): Query<MessagesQuery>) -> R {
     let c = client(&app, &q.host)?;
-    Ok(Json(json!({ "messages": c.messages(&q.channel, 300)?, "me": c.username() })))
+    let reactions: Vec<Value> = c.reactions(&q.channel)?.into_iter().map(|(seq, emoji, users)| json!({ "seq": seq, "emoji": emoji, "users": users })).collect();
+    Ok(Json(json!({ "messages": c.messages(&q.channel, 300)?, "reactions": reactions, "me": c.username() })))
 }
 
 #[derive(Deserialize)]
@@ -260,6 +264,23 @@ async fn send(State(app): State<Shared>, Json(r): Json<SendReq>) -> R {
     let m = c.send_text(&r.channel, text).await?;
     let _ = app.events.send(json!({ "type": "messages", "host": r.host, "channels": [r.channel] }).to_string());
     Ok(Json(json!(m)))
+}
+
+#[derive(Deserialize)]
+struct ReactReq {
+    host: String,
+    channel: String,
+    seq: i64,
+    emoji: String,
+    on: bool,
+}
+
+async fn react(State(app): State<Shared>, Json(r): Json<ReactReq>) -> R {
+    let c = client(&app, &r.host)?;
+    ensure_signed_in(&c).await?;
+    c.react(&r.channel, r.seq, &r.emoji, r.on).await?;
+    let _ = app.events.send(json!({ "type": "messages", "host": r.host, "channels": [r.channel] }).to_string());
+    Ok(Json(json!({ "ok": true })))
 }
 
 /// Your Steam and Epic friends, through the bridge (needs the friends:read permission in Lodestone).

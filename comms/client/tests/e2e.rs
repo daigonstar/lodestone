@@ -49,6 +49,20 @@ async fn encrypted_chat_end_to_end() {
     alice.sync().await.unwrap();
     assert_eq!(bodies(&alice, &general), vec!["alice: hello bob", "bob: hi alice"]);
 
+    // Reactions travel encrypted too, and only you can take back your own.
+    let hello_seq = bob.messages(&general, 10).unwrap()[0].seq;
+    alice.react(&general, hello_seq, "👍", true).await.unwrap();
+    bob.react(&general, hello_seq, "👍", true).await.unwrap();
+    bob.sync().await.unwrap();
+    alice.sync().await.unwrap();
+    let r = alice.reactions(&general).unwrap();
+    assert_eq!(r, vec![(hello_seq, "👍".to_string(), vec!["alice".to_string(), "bob".to_string()])]);
+    assert!(bob.take_touched().contains(&general));
+    alice.react(&general, hello_seq, "👍", false).await.unwrap();
+    bob.sync().await.unwrap();
+    assert_eq!(bob.reactions(&general).unwrap(), vec![(hello_seq, "👍".to_string(), vec!["bob".to_string()])]);
+    assert!(alice.react(&general, hello_seq, "not an emoji", true).await.is_err());
+
     // The host only ever stored ciphertext.
     let raw = std::fs::read(tmp.path().join("host.db")).unwrap();
     let wal = std::fs::read(tmp.path().join("host.db-wal")).unwrap_or_default();

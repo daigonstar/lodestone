@@ -89,6 +89,9 @@ dl.flathub.org                                # Flathub's repository file, passe
 
 # --- Plug-ins (only when you open one, such as Lodestone Comms) ---
 127.0.0.1                                     # a plug-in's own page on this PC, shown in Lodestone's window (never leaves the PC)
+tauri.localhost                               # Lodestone's own window, named in Comms's page policy so only Lodestone may show it (never leaves the PC)
+# Lodestone Comms talks only to the Comms hosts you choose (yours or your friends'), so their addresses
+# aren't in the code; you see each one when you set it up or join with an invite.
 
 # --- Inside Lodestone only ---
 lodestone.localhost                           # internal address for sign-in hand-offs; never leaves the app

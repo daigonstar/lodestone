@@ -14,7 +14,7 @@ pub struct Hosts {
     clients: Mutex<HashMap<String, Arc<Client>>>,
 }
 
-/// A folder name for a host URL ("https://comms.example.com" -> "https_comms.example.com").
+/// A folder name for a host URL ("https://comms.yourdomain.example" -> "https_comms.yourdomain.example").
 fn folder(url: &str) -> String {
     url.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect()
 }
@@ -82,7 +82,9 @@ pub fn start_sync(app: Shared) {
                 }
                 match c.sync().await {
                     Ok(new) => {
-                        let mut chans: Vec<&String> = new.iter().map(|m| &m.channel).collect();
+                        let touched = c.take_touched();
+                        let mut chans: Vec<&String> = new.iter().map(|m| &m.channel).chain(touched.iter()).collect();
+                        chans.sort();
                         chans.dedup();
                         if !chans.is_empty() {
                             let _ = app.events.send(json!({ "type": "messages", "host": url, "channels": chans }).to_string());

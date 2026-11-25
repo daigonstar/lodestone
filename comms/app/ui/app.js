@@ -82,11 +82,12 @@ function render() {
   $("#chat").innerHTML = `<header><h3># ${esc(ch.name)}${ch.topic ? `<span class="topic">${esc(ch.topic)}</span>` : ""}</h3><span class="lock" title="Only members' devices can read this channel; the host stores ciphertext.">🔒 end-to-end encrypted</span></header>
     <div class="msgs" id="msgs"></div>
     <div class="composer">${ch.ready
-      ? '<textarea id="text" placeholder="Message (Enter to send, Shift+Enter for a new line)" maxlength="8000"></textarea>'
+      ? '<div class="compose-row"><textarea id="text" placeholder="Message (Enter to send, Shift+Enter for a new line)" maxlength="8000"></textarea><button type="button" class="emoji-btn" id="emoji-btn" title="Emoji">😊</button></div>'
       : '<p class="muted">You\'re a member, but no one in this channel has been online to give your device its keys yet. It happens automatically.</p>'}</div>`;
   loadMessages();
   const t = $("#text");
   if (t) {
+    $("#emoji-btn").onclick = (e) => openPicker(e.currentTarget, (emo) => insertAtCursor(t, emo), false);
     t.focus();
     t.addEventListener("keydown", async (e) => {
       if (e.key !== "Enter" || e.shiftKey) return;
@@ -114,16 +115,46 @@ async function loadMessages() {
     const r = await api(`/api/messages?host=${encodeURIComponent(state.sel.host)}&channel=${encodeURIComponent(ch.id)}`);
     if (state.sel.channel !== ch.id || !box.isConnected) return;
     const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    const reacts = new Map();
+    for (const x of r.reactions || []) { if (!reacts.has(x.seq)) reacts.set(x.seq, []); reacts.get(x.seq).push(x); }
     box.replaceChildren(...r.messages.map((m) => {
       const row = document.createElement("div");
-      row.className = "msg";
+      row.className = "msg" + (isOnlyEmoji(m.body) ? " big-emoji" : "");
+      row.dataset.seq = m.seq;
       const time = document.createElement("time");
       time.textContent = new Date(m.sent_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       const who = document.createElement("span");
       who.className = "who" + (m.sender === r.me ? " me" : "") + (m.sender.startsWith("⚠") ? " warn" : "");
       who.textContent = m.sender;
       if (m.sender.startsWith("⚠")) who.title = "This sender's encryption key doesn't match what the host lists for them";
-      row.append(time, who, document.createTextNode(m.body));
+      const body = document.createElement("span");
+      body.className = "body";
+      body.textContent = m.body;
+      const add = document.createElement("button");
+      add.className = "react-add";
+      add.type = "button";
+      add.title = "Add a reaction";
+      add.textContent = "☺+";
+      add.dataset.reactAdd = m.seq;
+      row.append(time, who, body, add);
+      const list = reacts.get(m.seq);
+      if (list) {
+        const chips = document.createElement("div");
+        chips.className = "chips";
+        for (const x of list) {
+          const c = document.createElement("button");
+          c.type = "button";
+          const mine = x.users.includes(r.me);
+          c.className = "chip" + (mine ? " mine" : "");
+          c.dataset.react = m.seq;
+          c.dataset.emoji = x.emoji;
+          c.dataset.on = mine ? "0" : "1";
+          c.title = x.users.join(", ");
+          c.textContent = `${x.emoji} ${x.users.length}`;
+          chips.append(c);
+        }
+        row.append(chips);
+      }
       return row;
     }));
     if (!r.messages.length) box.innerHTML = '<p class="muted">No messages yet. Messages sent before you joined can\'t be read on this device, by design.</p>';
@@ -131,6 +162,76 @@ async function loadMessages() {
     box.dataset.seen = "1";
   } catch (e) { toast(e.message, true); }
 }
+
+// ---------- emoji ----------
+const isOnlyEmoji = (t) => /^(\p{Extended_Pictographic}|\p{Emoji_Component}|\u200d|\ufe0f|\s){1,24}$/u.test(t) && /\p{Extended_Pictographic}/u.test(t) && [...t.replace(/\s/g, "")].length <= 16;
+
+function insertAtCursor(el, text) {
+  const [a, b] = [el.selectionStart ?? el.value.length, el.selectionEnd ?? el.value.length];
+  el.value = el.value.slice(0, a) + text + el.value.slice(b);
+  el.selectionStart = el.selectionEnd = a + text.length;
+  el.focus();
+}
+
+const QUICK = ["👍", "❤️", "😂", "😮", "😢", "🎉", "🔥", "👀"];
+let pick = null;
+function openPicker(anchor, onPick, quick) {
+  pick = onPick;
+  const p = $("#picker");
+  $("#picker-search").value = "";
+  $("#picker-tabs").innerHTML = (quick ? `<button type="button" data-g="-1" title="Quick">⭐</button>` : "")
+    + EMOJI.map((g, i) => `<button type="button" data-g="${i}" title="${esc(g[0])}">${g[1][0][0]}</button>`).join("");
+  showGroup(quick ? -1 : 0);
+  p.classList.remove("hidden");
+  const r = anchor.getBoundingClientRect();
+  const w = p.offsetWidth, h = p.offsetHeight;
+  p.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + "px";
+  p.style.top = (r.top - h - 6 > 8 ? r.top - h - 6 : Math.min(r.bottom + 6, innerHeight - h - 8)) + "px";
+  $("#picker-search").focus();
+}
+function closePicker() { $("#picker").classList.add("hidden"); pick = null; }
+function emojiButtons(list) {
+  return list.map(([e, n]) => `<button type="button" data-emo="${esc(e)}" title="${esc(n)}">${e}</button>`).join("");
+}
+function showGroup(i) {
+  for (const b of $("#picker-tabs").children) b.classList.toggle("on", b.dataset.g === String(i));
+  $("#picker-grid").innerHTML = i < 0 ? emojiButtons(QUICK.map((e) => [e, ""])) : emojiButtons(EMOJI[i][1]);
+  $("#picker-grid").scrollTop = 0;
+}
+$("#picker-tabs").onclick = (e) => { const b = e.target.closest("[data-g]"); if (b) showGroup(Number(b.dataset.g)); };
+$("#picker-search").oninput = (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  if (!q) return showGroup(0);
+  for (const b of $("#picker-tabs").children) b.classList.remove("on");
+  const hits = EMOJI.flatMap((g) => g[1]).filter(([, n]) => n.includes(q)).slice(0, 200);
+  $("#picker-grid").innerHTML = hits.length ? emojiButtons(hits) : '<p class="muted">No emoji found</p>';
+};
+$("#picker-search").onkeydown = (e) => {
+  if (e.key === "Escape") closePicker();
+  if (e.key === "Enter") { e.preventDefault(); const b = $("#picker-grid [data-emo]"); if (b) b.click(); }
+};
+$("#picker-grid").onclick = (e) => {
+  const b = e.target.closest("[data-emo]");
+  if (!b || !pick) return;
+  const f = pick;
+  closePicker();
+  f(b.dataset.emo);
+};
+document.addEventListener("mousedown", (e) => {
+  if (pick && !e.target.closest("#picker") && !e.target.closest("#emoji-btn") && !e.target.closest("[data-react-add]")) closePicker();
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && pick) closePicker(); });
+
+async function setReaction(seq, emoji, on) {
+  try { await api("/api/react", { host: state.sel.host, channel: state.sel.channel, seq: Number(seq), emoji, on }); loadMessages(); }
+  catch (err) { toast(err.message, true); }
+}
+document.addEventListener("click", (e) => {
+  const add = e.target.closest("[data-react-add]");
+  if (add) return openPicker(add, (emo) => setReaction(add.dataset.reactAdd, emo, true), true);
+  const chip = e.target.closest("[data-react]");
+  if (chip) setReaction(chip.dataset.react, chip.dataset.emoji, chip.dataset.on === "1");
+});
 
 // ---------- server icons ----------
 // Icons come from the host through the plug-in (the page can't send its secret with a plain <img>),
