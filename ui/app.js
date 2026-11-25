@@ -168,6 +168,8 @@ function renderFilters(preLetter) {
   if (state.series && !scount.has(state.series)) series.push([state.series, state.seriesNames.get(state.series) || state.series, 0]);
   $("#f-series").innerHTML = `<option value="">All series</option>` + series.map(([k, name, n]) => `<option value="${esc(k)}" ${k === state.series ? "selected" : ""}>${esc(name)} (${n})</option>`).join("");
   const cc = COMPAT_FILTERS.map(([k, label]) => [k, label, pool.filter((g) => compatMatch(g, k)).length]);
+  $("#f-compat").classList.toggle("hidden", state.view.startsWith("sys:"));
+  if (state.view.startsWith("sys:")) state.compatF = "";
   $("#f-compat").innerHTML = `<option value="">All ratings</option>` + cc.map(([k, label, n]) => `<option value="${k}" ${k === state.compatF ? "selected" : ""}>${label} (${n})</option>`).join("");
   const lc = new Map();
   for (const g of pool) { const l = letterOf(g.title); lc.set(l, (lc.get(l) || 0) + 1); }
@@ -646,8 +648,23 @@ function renderHero() {
   alt.classList.toggle("hidden", !(g.alt_label && g.installed && !run));
   const hud = $('#menu [data-act="mangohud"]');
   hud.textContent = `MangoHud overlay: ${hudOn(g) ? "on" : "off"}`;
-  hud.classList.toggle("hidden", !g.installed || g.store === "steam");
-  $('#menu [data-act="client"]').textContent = g.installed ? `Open ${s.label === "Custom" ? "Lutris" : g.via.split(" ")[0]}` : `Install with ${g.via.split(" ")[0]}`;
+  // ROMs play in an emulator, not through a store: no store app, MangoHud, runtimes or uninstall.
+  const rom = !!g.system;
+  hud.classList.toggle("hidden", rom || !g.installed || g.store === "steam");
+  const client = $('#menu [data-act="client"]');
+  client.classList.toggle("hidden", rom);
+  client.textContent = g.installed ? `Open ${s.label === "Custom" ? "Lutris" : g.via.split(" ")[0]}` : `Install with ${g.via.split(" ")[0]}`;
+  if (rom) {
+    $('#menu [data-act="runtimes"]').classList.add("hidden");
+    $('#menu [data-act="uninstall"]').classList.add("hidden");
+  }
+  // via is "<system> · <emulator>"
+  const emuName = (rom && g.via.split(" · ")[1]) || "the emulator";
+  $('#menu [data-act="emu-open"]').textContent = `Open ${emuName} (settings, controllers)`;
+  $('#menu [data-act="emu-open"]').classList.toggle("hidden", !rom || g.needs_emulator);
+  $('#menu [data-act="emu-system"]').classList.toggle("hidden", !rom);
+  $('#menu [data-act="rom-reveal"]').classList.toggle("hidden", !rom);
+  $('#menu [data-act="ra-page"]').classList.toggle("hidden", !g.ra_id);
   renderMini(g);
 }
 
@@ -1508,6 +1525,10 @@ async function menuAction(act) {
       $("#log-text").textContent = await invoke("read_log", { id: g.id });
       $("#dlg-log").showModal();
     }
+    if (act === "emu-open") { await invoke("emu_open", { id: g.id }); toast("Opening the emulator…"); }
+    if (act === "emu-system") { state.view = "sys:" + g.system; ls.set("view", state.view); render(); }
+    if (act === "rom-reveal") await invoke("rom_reveal", { id: g.id });
+    if (act === "ra-page") await invoke("open_page", { url: `https://retroachievements.org/game/${g.ra_id}`, title: g.title });
     if (act === "client") {
       if (!g.installed && g.can_install) await install(g);
       else await invoke("open_client", { store: g.store });
@@ -2218,7 +2239,10 @@ async function openMeta(g) {
       ? `Only if Lodestone didn't find the game. The folder is handed to ${g.store === "epic" ? "Epic" : "GOG"}'s records, so Play, updates and uninstall work as usual.`
       : "Only if Lodestone didn't find the game. It then counts as installed there; Play still goes through the store app unless you pick a program to run.";
   metaInit = { o, title: f.title.value, genres: f.genres.value, series: f.series.value, steam: f.steam.value, cover: f.cover.value, hero: f.hero.value };
-  $("#meta-hint").textContent = `${store(g.store).label} · ${g.id}. Changes stay in Lodestone; the store's own data isn't touched.`;
+  document.querySelectorAll("#form-meta .store-only").forEach((el) => el.classList.toggle("hidden", !!g.system));
+  $("#meta-hint").textContent = g.system
+    ? `${g.via.split(" · ")[0]} ROM. Changes stay in Lodestone; your ROM file isn't touched.`
+    : `${store(g.store).label} · ${g.id}. Changes stay in Lodestone; the store's own data isn't touched.`;
   $("#art-q").value = g.title;
   metaPreview();
   $("#dlg-meta").showModal();

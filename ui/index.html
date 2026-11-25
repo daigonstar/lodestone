@@ -74,6 +74,10 @@
                 <button data-act="edit">Edit details &amp; artwork…</button>
                 <button data-act="hide">Hide from library</button>
                 <button data-act="play-alt" class="hidden">Play another way</button>
+                <button data-act="emu-open" class="hidden rom-only">Open the emulator</button>
+                <button data-act="emu-system" class="hidden rom-only">Change the emulator for this system</button>
+                <button data-act="rom-reveal" class="hidden rom-only">Show the ROM file</button>
+                <button data-act="ra-page" class="hidden">On RetroAchievements</button>
                 <button data-act="mangohud">MangoHud overlay: off</button>
                 <button data-act="log">View launch log</button>
                 <button data-act="runtimes">Install DirectX &amp; VC++ runtimes</button>
@@ -283,7 +287,7 @@
           <label>Title<input name="title" /></label>
           <label><span>Genres <small>(comma separated)</small></span><input name="genres" placeholder="Action, RPG" /></label>
           <label>Series<input name="series" placeholder="e.g. Final Fantasy" /></label>
-          <label><span>Steam game used for details, news and art <small>(app id or store link)</small></span><input name="steam" placeholder="automatic" /></label>
+          <label class="store-only"><span>Steam game used for details, news and art <small>(app id or store link)</small></span><input name="steam" placeholder="automatic" /></label>
           <label><span>Cover image <small>(link or file path)</small></span><input name="cover" /></label>
           <label><span>Banner image <small>(link or file path)</small></span><input name="hero" /></label>
           <h3>Play time</h3>
@@ -293,10 +297,12 @@
             <button type="button" class="ghost small" id="pt-auto">Count automatically</button>
           </div>
           <p class="hint" id="pt-hint"></p>
+          <div class="store-only">
           <h3>Install location</h3>
           <p class="hint" id="loc-hint">Only if Lodestone didn't find the game where it's installed.</p>
           <label><span>Install folder</span><input name="installdir" spellcheck="false" placeholder="/home/you/Games/World of Warcraft" /></label>
           <label><span>Program to run <small>(optional; .exe runs through Proton)</small></span><input name="exe" spellcheck="false" placeholder="automatic: through the game's store" /></label>
+          </div>
         </div>
         <div class="meta-preview">
           <div class="mp-cover" id="mp-cover"></div>

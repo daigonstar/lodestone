@@ -1375,6 +1375,27 @@ async fn emu_pick_folder(start: String) -> Result<Option<String>, String> {
     blocking(move || stores::emulation::pick_folder(&start)).await?
 }
 
+/// Open the folder a ROM is in, in the file manager.
+#[tauri::command]
+fn rom_reveal(id: String) -> Result<(), String> {
+    let file = stores::emulation::rom_file(&id).ok_or("Lodestone doesn't know this ROM's file; try Rescan")?;
+    let dir = file.parent().ok_or("No folder")?.to_string_lossy().into_owned();
+    launcher::spawn(&LaunchSpec::new("xdg-open", &[&dir]), launcher::log_path("xdg-open")).map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Open the emulator a ROM plays with, without the game (to set up controllers, video and so on).
+#[tauri::command]
+fn emu_open(id: String, inner: State<'_, Shared>) -> Result<(), String> {
+    let launch = inner.games.lock().unwrap().get(&id).and_then(|g| g.launch.clone()).ok_or("No emulator for this game yet")?;
+    let spec = if launch.program == "flatpak" {
+        // "flatpak run <app id> <its arguments and the ROM>": keep only "run <app id>".
+        LaunchSpec { args: launch.args.iter().take(2).cloned().collect(), ..launch.clone() }
+    } else {
+        LaunchSpec { args: Vec::new(), ..launch.clone() }
+    };
+    launcher::spawn(&spec, launcher::log_path(&id)).map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// Show or hide a system's emulator in the desktop's app menu.
 #[tauri::command]
 async fn emu_menu_entry(system: String, index: usize, show: bool) -> Result<(), String> {
@@ -1513,6 +1534,8 @@ fn main() {
             store_achievements,
             emu_menu_entry,
             emu_folders,
+            rom_reveal,
+            emu_open,
             emu_set_folder,
             emu_create_folders,
             emu_pick_folder,

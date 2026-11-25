@@ -836,6 +836,13 @@ fn chosen(system: &str, options: &[EmuOption]) -> Option<usize> {
 
 static SYSTEMS_SEEN: Mutex<Vec<System>> = Mutex::new(Vec::new());
 static ROMS_SEEN: Mutex<Vec<(String, PathBuf)>> = Mutex::new(Vec::new());
+/// Game id -> ROM file, from the last scan.
+static ROM_FILES: Mutex<Option<HashMap<String, PathBuf>>> = Mutex::new(None);
+
+/// The ROM file behind a game id, from the last scan.
+pub fn rom_file(id: &str) -> Option<PathBuf> {
+    ROM_FILES.lock().unwrap().as_ref()?.get(id).cloned()
+}
 
 /// (system, ROM path) of every game in the last scan.
 pub fn roms() -> Vec<(String, PathBuf)> {
@@ -852,6 +859,7 @@ pub fn scan() -> Vec<Game> {
     let mut seen: HashSet<(String, String, u64)> = HashSet::new();
     let mut by_system: HashMap<String, System> = HashMap::new();
     let mut rom_paths: Vec<(String, PathBuf)> = Vec::new();
+    let mut files: HashMap<String, PathBuf> = HashMap::new();
     for roms in roots() {
         let root = roms.parent().map(Path::to_path_buf).unwrap_or_else(|| roms.clone());
         let media = media_roots(&root);
@@ -895,6 +903,7 @@ pub fn scan() -> Vec<Game> {
                     None => es_cover.or_else(|| super::libretro_thumbs::cover(&info.id, &stem, &[&title])),
                 };
                 rom_paths.push((info.id.clone(), rom.path.clone()));
+                files.insert(format!("emu:{}:{}", info.id, rom.rel), rom.path.clone());
                 let launch = ordered.iter().find_map(|c| build_launch(c, &rom.path, &dir, &emus));
                 let no_emulator = launch.is_none();
                 let via = match &launch {
@@ -936,6 +945,7 @@ pub fn scan() -> Vec<Game> {
     list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     *SYSTEMS_SEEN.lock().unwrap() = list;
     *ROMS_SEEN.lock().unwrap() = rom_paths;
+    *ROM_FILES.lock().unwrap() = Some(files);
     out
 }
 
