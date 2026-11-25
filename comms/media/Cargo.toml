@@ -14,7 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 gstreamer = "0.25"
-ashpd = { version = "0.14", default-features = false, features = ["tokio", "screencast"] }
+ashpd = { version = "0.14", default-features = false, features = ["tokio", "screencast", "camera"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 str0m = "0.25"
 aes-gcm = "0.10"

@@ -15,6 +15,8 @@
 //! - `video [seconds] [720p]`: the screen share encoder (1080p30 VP8 by default) fed a moving test
 //!   pattern, end-to-end encrypted and decrypted, then decoded into pictures as a viewer would. Shows
 //!   frame rates and sizes. Nothing is captured from your screen.
+//! - `camera [seconds]`: ask the desktop for the camera (it may ask you to allow it), list the cameras
+//!   it offers, then measure capture and 640x360 VP8 encoding speed. Nothing is saved or sent.
 //! - `screen [seconds]`: share a screen or window through the desktop's portal (it asks you which),
 //!   then measure capture and VP8 encoding speed. Nothing is saved or sent anywhere.
 
@@ -207,13 +209,13 @@ fn voice(secs: u64, mic: Option<&String>, speakers: Option<&String>, open: bool,
 
 fn video(secs: u64, quality: &str) -> Result<(), String> {
     use lodestone_comms_media::frames;
-    use lodestone_comms_media::video::{Quality, ScreenShare, Viewer};
+    use lodestone_comms_media::video::{Quality, Capture, Viewer};
     let q = Quality::parse(quality).unwrap_or(Quality::Full);
     let viewer = Arc::new(std::sync::Mutex::new(Viewer::new()?));
     let (v, base) = (viewer.clone(), [3u8; 32]);
     let bytes = Arc::new(AtomicU64::new(0));
     let (b, counter) = (bytes.clone(), Arc::new(AtomicU64::new(0)));
-    let share = ScreenShare::test_pattern(q, move |frame| {
+    let share = Capture::test_pattern(q, move |frame| {
         // Through the same encryption a call uses, and back.
         let sealed = frames::seal_video(&base, 1, 0, counter.fetch_add(1, Ordering::Relaxed), &frame);
         b.fetch_add(sealed.len() as u64, Ordering::Relaxed);
@@ -230,6 +232,52 @@ fn video(secs: u64, quality: &str) -> Result<(), String> {
     if pictures.0 == 0 {
         return Err("no pictures came out of the decoder".into());
     }
+    Ok(())
+}
+
+async fn camera(secs: u64) -> Result<(), String> {
+    use ashpd::desktop::camera::Camera;
+    let cam = Camera::new().await.map_err(|e| format!("camera portal: {e}"))?;
+    println!("camera present: {:?}", cam.is_present().await);
+    cam.request_access(Default::default()).await.map_err(|e| e.to_string())?.response().map_err(|e| format!("camera access refused: {e}"))?;
+    let remote = cam.open_pipe_wire_remote(Default::default()).await.map_err(|e| e.to_string())?;
+    // The device provider and the capture each get their own copy of the connection.
+    let list_fd = remote.try_clone().map_err(|e| e.to_string())?.into_raw_fd();
+    let fd = remote.into_raw_fd();
+    // List cameras through PipeWire's device provider on the portal's connection.
+    let provider = gst::DeviceProviderFactory::by_name("pipewiredeviceprovider").ok_or("no pipewire device provider")?;
+    if provider.has_property("fd") {
+        provider.set_property("fd", list_fd);
+    } else {
+        println!("  (the device provider can't take the portal's connection; using the default camera)");
+    }
+    provider.start().map_err(|e| format!("can't list cameras: {e}"))?;
+    let cams: Vec<gst::Device> = provider.devices().into_iter().filter(|d| d.has_classes("Video/Source")).collect();
+    provider.stop();
+    for d in &cams {
+        let props = d.properties();
+        let serial = props.as_ref().and_then(|p| p.get::<String>("object.serial").ok().or_else(|| p.get::<u64>("object.serial").ok().map(|x| x.to_string())).or_else(|| p.get::<i32>("object.serial").ok().map(|x| x.to_string())));
+        println!("  camera: {}  (serial {:?})", d.display_name(), serial);
+    }
+    let target = cams.first().and_then(|d| d.properties()).and_then(|p| p.get::<String>("object.serial").ok().or_else(|| p.get::<u64>("object.serial").ok().map(|x| x.to_string())).or_else(|| p.get::<i32>("object.serial").ok().map(|x| x.to_string())));
+    let captured = Arc::new(AtomicU64::new(0));
+    let encoded = Arc::new(AtomicU64::new(0));
+    let p = pipeline(&format!(
+        "pipewiresrc fd={fd}{} do-timestamp=true ! image/jpeg,width=1280,height=720 ! jpegdec ! tee name=t \
+         t. ! queue leaky=downstream max-size-buffers=2 ! fakesink name=raw sync=false signal-handoffs=true \
+         t. ! queue leaky=downstream max-size-buffers=2 ! videoconvert ! videoscale ! video/x-raw,width=640,height=360,pixel-aspect-ratio=1/1 ! videorate drop-only=true ! video/x-raw,framerate=30/1 ! \
+         vp8enc deadline=1 cpu-used=8 target-bitrate=800000 ! fakesink name=enc sync=false signal-handoffs=true",
+        target.map(|t| format!(" target-object={t}")).unwrap_or_default()
+    ))?;
+    for (name, counter) in [("raw", captured.clone()), ("enc", encoded.clone())] {
+        p.by_name(name).ok_or("missing sink")?.connect("handoff", false, move |_| {
+            counter.fetch_add(1, Ordering::Relaxed);
+            None
+        });
+    }
+    let took = run(&p, Duration::from_secs(secs), |_| {})?;
+    let s = took.as_secs_f64();
+    println!("  captured {:.1} frames/s; VP8 640x360 encoded {:.1} frames/s", captured.load(Ordering::Relaxed) as f64 / s, encoded.load(Ordering::Relaxed) as f64 / s);
     Ok(())
 }
 
@@ -293,8 +341,9 @@ async fn main() {
         "loopback" => loopback(secs(1, 15), flag("--mic"), flag("--speakers")),
         "voice" => voice(secs(1, 15), flag("--mic"), flag("--speakers"), args.iter().any(|a| a == "--open"), args.iter().any(|a| a == "--silent")),
         "video" => video(secs(1, 5), args.get(2).map(String::as_str).unwrap_or("1080p")),
+        "camera" => camera(secs(1, 5)).await,
         "screen" => screen(secs(1, 10)).await,
-        other => Err(format!("unknown mode {other}: use check, devices, loopback, voice, video or screen")),
+        other => Err(format!("unknown mode {other}: use check, devices, loopback, voice, video, camera or screen")),
     };
     if let Err(e) = res {
         eprintln!("FAILED: {e}");

@@ -59,6 +59,8 @@ pub fn router(app: Shared) -> Router {
         .route("/v1/channels/{channel}/voice/leave", post(crate::voice::leave))
         .route("/v1/channels/{channel}/voice/share", post(crate::voice::share))
         .route("/v1/channels/{channel}/voice/watch", post(crate::voice::watch))
+        .route("/v1/channels/{channel}/voice/camera", post(crate::voice::camera))
+        .route("/v1/channels/{channel}/voice/cameras", post(crate::voice::cameras))
         .route("/v1/welcomes", post(send_welcome).get(take_welcomes))
         .route("/v1/live", get(crate::live::connect))
         .route("/join/{code}", get(join_page))

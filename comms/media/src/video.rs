@@ -54,7 +54,7 @@ fn pipeline(desc: &str) -> Result<gst::Pipeline, String> {
 }
 
 /// Your screen share, while it lasts.
-pub struct ScreenShare {
+pub struct Capture {
     pipeline: gst::Pipeline,
     encoder: gst::Element,
     /// Ended by itself (you stopped it from the desktop, or the window closed).
@@ -66,7 +66,7 @@ pub struct ScreenShare {
     close: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
-impl ScreenShare {
+impl Capture {
     /// Ask the desktop which screen or window to share, then start encoding. Each encoded frame goes
     /// to `out` (for the call engine). Fails if you cancel the desktop's dialog.
     pub async fn start(quality: Quality, out: impl Fn(Vec<u8>) + Send + Sync + 'static) -> Result<Self, String> {
@@ -100,22 +100,47 @@ impl ScreenShare {
 
         let (w, h) = fit(stream.size(), quality);
         let source = format!("pipewiresrc fd={fd} path={} do-timestamp=true keepalive-time=1000 always-copy=true", stream.pipe_wire_node_id());
-        Self::encode(&source, (w, h), quality, out, Some(close))
+        Self::encode(&source, (w, h), quality.bounds().2, out, Some(close))
     }
 
     /// The same encoder fed a moving test pattern instead of your screen (for the media check tool).
     pub fn test_pattern(quality: Quality, out: impl Fn(Vec<u8>) + Send + Sync + 'static) -> Result<Self, String> {
         gst::init().map_err(|e| format!("GStreamer didn't start: {e}"))?;
         let (w, h) = fit(None, quality);
-        Self::encode("videotestsrc is-live=true pattern=ball", (w, h), quality, out, None)
+        Self::encode("videotestsrc is-live=true pattern=ball", (w, h), quality.bounds().2, out, None)
     }
 
-    fn encode(source: &str, (w, h): (i32, i32), quality: Quality, out: impl Fn(Vec<u8>) + Send + Sync + 'static, close: Option<tokio::sync::oneshot::Sender<()>>) -> Result<Self, String> {
-        let (_, _, bitrate) = quality.bounds();
+    /// Your camera, through the desktop's camera portal (it may ask you to allow it): 640x360, 30
+    /// frames a second, about 800 kbps. `which` picks a camera by its id from `cameras()`; the first
+    /// otherwise. Cameras differ in what they offer, so a few formats are tried in turn.
+    pub async fn camera(which: Option<&str>, out: impl Fn(Vec<u8>) + Send + Sync + Clone + 'static) -> Result<Self, String> {
+        let (remote, list) = camera_remote().await?;
+        let target = which.filter(|w| list.iter().any(|c| c.id == *w)).map(str::to_string).or_else(|| list.first().map(|c| c.id.clone()));
+        let target = target.map(|t| format!(" target-object={t}")).unwrap_or_default();
+        let mut last = String::from("No camera found");
+        for caps in ["image/jpeg,width=1280,height=720 ! jpegdec", "image/jpeg,width=640,height=480 ! jpegdec", "video/x-raw,width=640,height=480", "video/x-raw"] {
+            let fd = remote.try_clone().map_err(|e| e.to_string())?.into_raw_fd();
+            let source = format!("pipewiresrc fd={fd}{target} do-timestamp=true ! {caps}");
+            match Self::encode(&source, (640, 360), 800_000, out.clone(), None) {
+                Ok(c) => {
+                    // Some formats are refused only once the camera starts: give it a moment.
+                    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+                    if !c.ended.load(Ordering::Relaxed) {
+                        return Ok(c);
+                    }
+                    last = "The camera didn't start".into();
+                }
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
+    }
+
+    fn encode(source: &str, (w, h): (i32, i32), bitrate: u32, out: impl Fn(Vec<u8>) + Send + Sync + 'static, close: Option<tokio::sync::oneshot::Sender<()>>) -> Result<Self, String> {
         // Your own preview: half size, 10 pictures a second (it only shows you what you're sharing).
         let (pw, ph) = ((w / 4 * 2).max(2), (h / 4 * 2).max(2));
         let p = pipeline(&format!(
-            "{source} ! videoconvert ! videoscale ! \
+            "{source} ! videoconvert ! videoscale add-borders=true ! \
              video/x-raw,width={w},height={h},pixel-aspect-ratio=1/1 ! videorate drop-only=true ! video/x-raw,framerate=30/1 ! tee name=t \
              t. ! queue leaky=downstream max-size-buffers=1 ! videorate drop-only=true ! video/x-raw,framerate=10/1 ! videoscale ! \
              video/x-raw,width={pw},height={ph} ! jpegenc quality=75 ! appsink name=preview sync=false max-buffers=1 drop=true \
@@ -183,7 +208,7 @@ impl ScreenShare {
     }
 }
 
-impl Drop for ScreenShare {
+impl Drop for Capture {
     fn drop(&mut self) {
         self.ended.store(true, Ordering::Relaxed);
         let _ = self.pipeline.set_state(gst::State::Null);
@@ -191,6 +216,49 @@ impl Drop for ScreenShare {
             let _ = c.send(());
         }
     }
+}
+
+/// A camera the desktop offers: its name, and the id to choose it by.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct CameraInfo {
+    pub label: String,
+    pub id: String,
+}
+
+/// Access to the cameras through the desktop's portal, and the list of them.
+async fn camera_remote() -> Result<(std::os::fd::OwnedFd, Vec<CameraInfo>), String> {
+    use ashpd::desktop::camera::Camera;
+    gst::init().map_err(|e| format!("GStreamer didn't start: {e}"))?;
+    let cam = Camera::new().await.map_err(|e| format!("The desktop's camera portal isn't available: {e}"))?;
+    if !cam.is_present().await.unwrap_or(false) {
+        return Err("No camera found".into());
+    }
+    cam.request_access(Default::default()).await.map_err(|e| e.to_string())?.response().map_err(|_| "Camera access wasn't allowed".to_string())?;
+    let remote = cam.open_pipe_wire_remote(Default::default()).await.map_err(|e| e.to_string())?;
+    let mut list = Vec::new();
+    if let Some(provider) = gst::DeviceProviderFactory::by_name("pipewiredeviceprovider") {
+        if provider.has_property("fd") {
+            provider.set_property("fd", remote.try_clone().map_err(|e| e.to_string())?.into_raw_fd());
+            if provider.start().is_ok() {
+                for d in provider.devices().into_iter().filter(|d| d.has_classes("Video/Source")) {
+                    let props = d.properties();
+                    let id = props.as_ref().and_then(|p| p.get::<String>("object.serial").ok().or_else(|| p.get::<u64>("object.serial").ok().map(|x| x.to_string())).or_else(|| p.get::<i32>("object.serial").ok().map(|x| x.to_string())));
+                    if let Some(id) = id.filter(|i| i.chars().all(|c| c.is_ascii_digit())) {
+                        if !list.iter().any(|c: &CameraInfo| c.id == id) {
+                            list.push(CameraInfo { label: d.display_name().to_string(), id });
+                        }
+                    }
+                }
+                provider.stop();
+            }
+        }
+    }
+    Ok((remote, list))
+}
+
+/// The cameras you can choose from (asks the desktop for camera access first, if it hasn't been given).
+pub async fn cameras() -> Result<Vec<CameraInfo>, String> {
+    Ok(camera_remote().await?.1)
 }
 
 /// The newest picture of a share you're watching, for the page.

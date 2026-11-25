@@ -151,7 +151,11 @@ async fn screen_share_reaches_only_watchers_encrypted() {
     let got_b: Arc<Mutex<Vec<(usize, Vec<u8>)>>> = Default::default();
     let got_c: Arc<Mutex<Vec<(usize, Vec<u8>)>>> = Default::default();
     for (call, got) in [(&call_b, got_b.clone()), (&call_c, got_c.clone())] {
-        *call.controls.video_in.lock().unwrap() = Some(Box::new(move |slot, f| got.lock().unwrap().push((slot, f))));
+        *call.controls.video_in.lock().unwrap() = Some(Box::new(move |slot, cam, f| {
+            if !cam {
+                got.lock().unwrap().push((slot, f));
+            }
+        }));
     }
     tokio::time::sleep(Duration::from_secs(1)).await;
 
@@ -194,6 +198,59 @@ async fn screen_share_reaches_only_watchers_encrypted() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(got_b.lock().unwrap().len(), before, "nothing after unwatching");
 
+    for c in [call_a, call_b, call_c] {
+        c.stop();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cameras_reach_people_with_the_call_view_open() {
+    let tmp = tempfile::tempdir().unwrap();
+    let port = std::net::UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let db = Db::open(&tmp.path().join("host.db")).unwrap();
+    let setup = db.setup_code_if_new().unwrap().unwrap();
+    let media = format!("127.0.0.1:{port}");
+    let state = app(Config { public_url: url.clone(), admin_only_spaces: false, blob_dir: tmp.path().join("blobs"), max_file: 1 << 20, space_quota: 1 << 20, media_addr: Some(media.clone()), media_bind: media }, db);
+    tokio::spawn(serve(listener, state));
+    let alice = Client::open(&tmp.path().join("alice"), &url).unwrap();
+    alice.register("alice", &setup).await.unwrap();
+    let space = alice.create_space("Raid night").await.unwrap();
+    let voice = alice.create_voice_channel(&space, "Lounge").await.unwrap();
+    let invite = alice.create_invite(&space, 2, 3600).await.unwrap();
+    let bob = Client::open(&tmp.path().join("bob"), &url).unwrap();
+    bob.register("bob", invite["code"].as_str().unwrap()).await.unwrap();
+    let carol = Client::open(&tmp.path().join("carol"), &url).unwrap();
+    carol.register("carol", invite["code"].as_str().unwrap()).await.unwrap();
+    alice.sync().await.unwrap();
+    bob.sync().await.unwrap();
+    carol.sync().await.unwrap();
+
+    let (call_a, _, slot_a) = join(&alice, &voice, "alice").await;
+    let (call_b, _, _) = join(&bob, &voice, "bob").await;
+    let (call_c, _, _) = join(&carol, &voice, "carol").await;
+    let got: Vec<Arc<Mutex<Vec<(usize, bool, Vec<u8>)>>>> = vec![Default::default(), Default::default()];
+    for (call, g) in [(&call_b, got[0].clone()), (&call_c, got[1].clone())] {
+        *call.controls.video_in.lock().unwrap() = Some(Box::new(move |slot, cam, f| g.lock().unwrap().push((slot, cam, f))));
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    alice.voice_camera(&voice, true).await.unwrap();
+    bob.voice_cameras(&voice, true).await.unwrap(); // Bob's call view is open; Carol's isn't.
+    let mut keyframes = 0;
+    for n in 0..45u64 {
+        let key = n == 0 || call_a.controls.cam_keyframe_wanted.swap(false, Ordering::Relaxed);
+        keyframes += key as u32;
+        call_a.controls.cam_out.lock().unwrap().push_back(fake_vp8(n, key));
+        tokio::time::sleep(Duration::from_millis(33)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let b = got[0].lock().unwrap().clone();
+    assert!(b.len() > 30, "Bob sees Alice's camera: {}", b.len());
+    assert!(b.iter().all(|(slot, cam, _)| *cam && *slot as u64 == slot_a), "as a camera, in Alice's slot");
+    assert!(keyframes >= 2, "the relay asked Alice's camera for a keyframe when Bob opened the call view");
+    assert!(got[1].lock().unwrap().is_empty(), "Carol's call view is closed: no cameras");
+    assert_eq!(alice.voice_info(&voice).await.unwrap()["participants"].as_array().unwrap().iter().filter(|p| p["camera"] == true).count(), 1);
     for c in [call_a, call_b, call_c] {
         c.stop();
     }

@@ -64,6 +64,9 @@ pub fn router(app: Shared) -> Router {
         .route("/api/voice/share", post(voice_share))
         .route("/api/voice/watch", post(voice_watch))
         .route("/api/voice/picture", get(voice_picture))
+        .route("/api/voice/camera", post(voice_camera))
+        .route("/api/voice/see-cameras", post(voice_see_cameras))
+        .route("/api/voice/cameras", get(voice_cameras))
         .route_layer(middleware::from_fn_with_state(app.clone(), guard));
     Router::new()
         .route("/", get(|| async { page(INDEX, "text/html; charset=utf-8") }))
@@ -777,13 +780,29 @@ async fn voice_watch(State(app): State<Shared>, Json(r): Json<WatchReq>) -> R {
 #[derive(Deserialize)]
 struct SlotQuery {
     slot: usize,
+    #[serde(default)]
+    cam: bool,
+}
+
+async fn voice_camera(State(app): State<Shared>, Json(r): Json<OnOff>) -> R {
+    crate::voice::set_camera(&app, r.on).await.map_err(Fail)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn voice_see_cameras(State(app): State<Shared>, Json(r): Json<OnOff>) -> R {
+    crate::voice::see_cameras(&app, r.on).await.map_err(Fail)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn voice_cameras(State(_app): State<Shared>) -> R {
+    Ok(Json(json!({ "cameras": crate::voice::cameras().await.map_err(Fail)? })))
 }
 
 /// A share you're watching, as a stream of JPEG pictures, each preceded by its length (4 bytes, big
 /// endian). The page reads it with fetch (so the per-launch secret stays in a header) and shows each
 /// picture as it arrives. Ends when you stop watching.
 async fn voice_picture(State(app): State<Shared>, Query(q): Query<SlotQuery>) -> Response {
-    let Some(pic) = crate::voice::picture(&app, q.slot).await else {
+    let Some(pic) = crate::voice::picture(&app, q.slot, q.cam).await else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "You're not watching that share" }))).into_response();
     };
     let stream = futures_util::stream::unfold((pic, 0u64), |(pic, last)| async move {

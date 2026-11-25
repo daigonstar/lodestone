@@ -1,6 +1,6 @@
 # Lodestone Comms protocol (draft, version 1)
 
-Lodestone Comms is text chat, voice calls and screen sharing (webcams later) on servers people host themselves.
+Lodestone Comms is text chat, voice calls, cameras and screen sharing on servers people host themselves.
 This document is the contract between the Comms host program and its clients. It's public so anyone can
 check exactly what a host sees and stores. Status: **draft**, it will change before the first release.
 
@@ -27,7 +27,7 @@ stores ciphertext it can't read.
 | the size of attached files and when they were sent | what's in attached files, their names or types |
 | your chosen status and status message, and when your app last checked in | |
 | who is in which call, mute and deafen state, and the size and timing of encrypted audio | what anyone says in a call |
-| who is sharing their screen and who is watching, the size and timing of encrypted video, and each frame's readable VP8 header (keyframe or not, and the picture's width and height) | what's on anyone's screen |
+| who has their camera on and who is seeing cameras, who is sharing their screen and who is watching, the size and timing of encrypted video, and each frame's readable VP8 header (keyframe or not, and the picture's width and height) | what's on anyone's screen or camera |
 
 The host's logs never contain session tokens or invite codes.
 
@@ -220,8 +220,13 @@ without decoding it. Clients encrypt every audio frame before sending, so the re
 - `POST /v1/channels/{channel}/voice/watch` `{ slot, on }`: start or stop receiving the share of the
   participant in `slot`. Screen shares are only forwarded to people watching them, so a share costs the
   host upload per viewer, not per person in the call.
+- `POST /v1/channels/{channel}/voice/camera` `{ on }`: your camera is on (participants show `camera`).
+- `POST /v1/channels/{channel}/voice/cameras` `{ on }`: start or stop receiving everyone's cameras.
+  Clients turn this on while their call view is open, so cameras cost the host upload only for people
+  looking at them.
 - Screen shares: the join offer also has one send-only video track and 16 receive-only ones (after the
-  audio tracks), VP8, slots matching the audio ones. When someone starts watching, or a viewer reports
+  audio tracks), VP8, slots matching the audio ones. Cameras: another send-only video track and 16
+  receive-only ones after those (640x360, 30 frames a second, about 800 kbps). When someone starts watching, or a viewer reports
   a lost frame, the relay asks the sharer for a keyframe (RTCP PLI).
 - Video frames are encrypted with the same sender keys, but laid out differently so the transport can
   still tell keyframes apart: the first bytes of the VP8 frame stay readable (10 on a keyframe, 3
@@ -249,6 +254,6 @@ without decoding it. Clients encrypt every audio frame before sending, so the re
 
 ## Later (not in version 1 yet)
 
-- Webcams through the same relay (screen sharing is done).
+- Sound from shared windows; choosing which camera with a preview.
 - Message edits and deletes (as encrypted application messages).
 - Safety-number checks between members (comparing everyone's keys out of band).

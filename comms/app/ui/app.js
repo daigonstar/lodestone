@@ -67,18 +67,10 @@ async function loadState() {
 // ---------- rendering ----------
 function render() {
   const all = spaces();
-  $("#servers").innerHTML = all.map((s) => `<button class="srv ${s.host === state.sel.host && s.id === state.sel.space ? "on" : ""}" data-space="${esc(s.id)}" data-host="${esc(s.host)}" title="${esc(s.name)}">${iconHTML(s)}</button>`).join("")
+  $("#servers").innerHTML = `<button class="srv home ${state.home || !all.length ? "on" : ""}" id="home-btn" title="Home: join or create servers">⌂</button><div class="srv-sep"></div>` + all.map((s) => `<button class="srv ${!state.home && s.host === state.sel.host && s.id === state.sel.space ? "on" : ""}" data-space="${esc(s.id)}" data-host="${esc(s.host)}" title="${esc(s.name)}">${iconHTML(s)}</button>`).join("")
     + `<button class="srv add" id="add-server" title="Join or create a server">+</button>`;
   const { sp, ch } = current();
-  if (!sp) {
-    $("#members").classList.add("hidden");
-    $("#channels").innerHTML = "";
-    $("#chat").innerHTML = `<div class="empty"><h2>Lodestone Comms</h2>
-      <p class="muted">End-to-end encrypted chat on servers you or your friends host. Messages are encrypted on your PC; the host only passes them on.</p>
-      <div class="row"><button class="primary" data-act="join">Join with an invite</button><button class="ghost" data-act="pair">Sign in with another device</button><button class="ghost" data-act="setup">Set up a new host</button></div>
-      ${(state.pairing || []).map((p) => `<p class="muted">Waiting for approval as <b>${esc(p.username)}</b> on ${esc(p.url.replace(/^https?:\/\//, ""))}… Your other device should show <code>${esc(p.fingerprint)}</code>.</p>`).join("")}</div>`;
-    return;
-  }
+  if (!sp || state.home) return renderHome();
   const admin = sp.your_role === "owner" || sp.your_role === "admin";
   $("#channels").innerHTML = `<h2><span>${esc(sp.name)}</span><button class="gear" data-act="settings" title="Server settings">⚙</button></h2><div class="host" title="${esc(sp.host)}">${esc(sp.me)} · ${esc(sp.host.replace(/^https?:\/\//, ""))}</div>
     <div class="chlist">${sp.channels.filter((c) => c.kind !== "voice").map((c) => `<button class="ch ${c.id === state.sel.channel ? "on" : ""}" data-channel="${esc(c.id)}"># ${esc(c.name)}${c.ready ? "" : ' <span class="wait">(waiting for keys)</span>'}</button>`).join("")}
@@ -128,6 +120,80 @@ function render() {
       t.focus();
     });
   }
+}
+
+// ---------- home ----------
+// The welcome page: what this is, joining and creating servers, your hosts. Shown on first run and from
+// the ⌂ button.
+function renderHome() {
+  $("#members").classList.add("hidden");
+  const all = spaces();
+  const hosts = state.hosts.filter((h) => h.username);
+  $("#channels").innerHTML = `<h2><span>Home</span></h2><div class="host">Lodestone Comms</div>
+    <div class="chlist">${all.length ? '<h4 class="chhead">Your servers</h4>' : ""}${all.map((s) => `<button class="ch" data-space="${esc(s.id)}" data-host="${esc(s.host)}">${esc(s.name)}</button>`).join("")}</div>
+    <div id="callbar"></div>${hosts.length ? meBar() : ""}`;
+  renderVoice();
+  $("#chat").innerHTML = `<div class="home-page">
+    <div class="test-banner"><b>🧪 Test build</b><span>This is an early test version of Lodestone Comms for testers. Expect rough edges and missing pieces, and things may change or need resetting between builds. Messages, files, calls, cameras and screen shares are end-to-end encrypted, but please don't rely on it for anything important yet. If something breaks or feels wrong, tell whoever invited you.</span></div>
+    <h1>Welcome to Comms</h1>
+    <p class="muted">Chat, voice calls, cameras and screen sharing with your friends, on servers you or they host. Everything is encrypted on your PC; the host only passes it on.</p>
+    <div class="home-cards">
+      <section class="card">
+        <h3>Join a server</h3>
+        <p class="muted">Paste the invite link a friend sent you.</p>
+        <form id="home-join" class="stack">
+          <input name="link" placeholder="comms.example.com/join/…" autocomplete="off" spellcheck="false" required>
+          <input name="username" placeholder="Your username (first time on that host)" autocomplete="off" spellcheck="false">
+          <button class="primary">Join</button>
+        </form>
+      </section>
+      <section class="card">
+        <h3>Create a server</h3>
+        ${hosts.length ? `<p class="muted">Make your own server with text and voice channels, then invite people.</p>
+          <form id="home-create" class="stack">
+            <input name="name" maxlength="64" placeholder="Server name, e.g. Friday raids" required>
+            ${hosts.length > 1 ? `<select name="host">${hosts.map((h) => `<option value="${esc(h.url)}">on ${esc(h.url.replace(/^https?:\/\//, ""))}</option>`).join("")}</select>` : `<input type="hidden" name="host" value="${esc(hosts[0].url)}"><small class="muted">on ${esc(hosts[0].url.replace(/^https?:\/\//, ""))}</small>`}
+            <button class="primary">Create</button>
+          </form>` : `<p class="muted">Servers live on a host. Join one with an invite first, or set up your own host below.</p>`}
+      </section>
+    </div>
+    <div class="home-more">
+      <button type="button" class="ghost" data-act="pair">Sign in with another device</button>
+      <button type="button" class="ghost" data-act="setup">Set up your own host</button>
+    </div>
+    ${(state.pairing || []).map((p) => `<p class="muted">Waiting for approval as <b>${esc(p.username)}</b> on ${esc(p.url.replace(/^https?:\/\//, ""))}… Your other device should show <code>${esc(p.fingerprint)}</code>.</p>`).join("")}
+    <h3>Getting around</h3>
+    <ul class="tips">
+      <li><b>Servers</b> are on the left; <b>right-click</b> one to invite people, open its settings or leave it.</li>
+      <li><b>Voice channels</b> (🔊) are calls: click one to join, and click it again to see everyone.</li>
+      <li>In a call, the bar at the bottom left has <b>mute</b>, <b>deafen</b>, <b>camera</b> 📷, <b>screen share</b> 🖥 and <b>leave</b>. ⚙ picks your microphone, speakers and camera.</li>
+      <li>Someone sharing their screen shows <span class="live">LIVE</span>: click it to watch.</li>
+      <li>Your status, profile, look and devices are under your name at the bottom left.</li>
+    </ul>
+  </div>`;
+  $("#home-join").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      const r = await api("/api/join", { link: f.get("link"), username: f.get("username") || null });
+      state.home = false;
+      state.sel = { host: r.host, space: r.space, channel: "" };
+      await loadState();
+    } catch (err) { toast(err.message, true); }
+  };
+  const create = $("#home-create");
+  if (create) create.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      const host = f.get("host");
+      const r = await api("/api/spaces", { host, name: f.get("name") });
+      state.home = false;
+      state.sel = { host, space: r.space, channel: "" };
+      await loadState();
+      toast("Server created. Invite people from the left, or right-click its icon.");
+    } catch (err) { toast(err.message, true); }
+  };
 }
 
 function initials(name) {
@@ -666,16 +732,66 @@ function tabOverview(sp, admin) {
     if (rm) rm.onclick = () => { forgetIcon(sp); after("overview", () => manage("DELETE", `/v1/spaces/${sp.id}/icon`)); };
   }
   const del = $("#s-delete");
-  if (del) del.onclick = async () => {
-    if (!(await confirmBox(`This deletes "${sp.name}", its channels and all their messages for everyone.`, "Delete server", sp.name))) return;
-    after("overview", () => manage("DELETE", `/v1/spaces/${sp.id}`));
-  };
+  if (del) del.onclick = () => deleteServer(sp);
   const leave = $("#s-leave");
-  if (leave) leave.onclick = async () => {
-    if (!(await confirmBox(`Leave "${sp.name}"? You'll need a new invite to come back.`, "Leave"))) return;
-    after("overview", () => manage("DELETE", `/v1/spaces/${sp.id}/members/${encodeURIComponent(sp.me)}`));
-  };
+  if (leave) leave.onclick = () => leaveServer(sp);
 }
+
+// Leaving or deleting a server, from its settings or its right-click menu.
+async function leaveServer(sp) {
+  if (sp.your_role === "owner") return toast("You own this server: make someone else the owner first (Server settings → Members), or delete it.", true);
+  if (!(await confirmBox(`Leave "${sp.name}"? You'll need a new invite to come back.`, "Leave server"))) return;
+  await endServer(sp, "DELETE", `/v1/spaces/${sp.id}/members/${encodeURIComponent(sp.me)}`, `You left ${sp.name}.`);
+}
+async function deleteServer(sp) {
+  if (!(await confirmBox(`This deletes "${sp.name}", its channels and all their messages for everyone.`, "Delete server", sp.name))) return;
+  await endServer(sp, "DELETE", `/v1/spaces/${sp.id}`, `${sp.name} was deleted.`);
+}
+async function endServer(sp, method, path, done) {
+  try {
+    if (voice.call && voice.call.host === sp.host && sp.channels.some((c) => c.id === voice.call.channel)) await callAction("leave");
+    await api("/api/manage", { host: sp.host, method, path });
+    if ($("#settings").open) $("#settings").close();
+    forgetIcon(sp);
+    if (state.sel.space === sp.id) state.sel = { host: "", space: "", channel: "" };
+    toast(done);
+    await loadState();
+  } catch (e) { toast(e.message, true); }
+}
+
+// Right-click a server for its menu.
+document.addEventListener("contextmenu", (e) => {
+  const b = e.target.closest(".srv[data-space]");
+  const menu = $("#srv-menu");
+  if (!b) { menu.classList.add("hidden"); return; }
+  e.preventDefault();
+  const sp = spaces().find((s) => s.host === b.dataset.host && s.id === b.dataset.space);
+  if (!sp) return;
+  const owner = sp.your_role === "owner";
+  menu.innerHTML = `<div class="menu-title">${esc(sp.name)}<small>${esc(sp.host.replace(/^https?:\/\//, ""))}</small></div>
+    <button type="button" data-srv="invite">Invite people</button>
+    <button type="button" data-srv="settings">Server settings</button>
+    <hr>
+    ${owner ? '<button type="button" class="danger-text" data-srv="delete">Delete server…</button><small class="menu-note">You own it: to leave, make someone else the owner first.</small>'
+      : '<button type="button" class="danger-text" data-srv="leave">Leave server</button>'}`;
+  menu.classList.remove("hidden");
+  menu.style.left = Math.min(e.clientX, innerWidth - menu.offsetWidth - 8) + "px";
+  menu.style.top = Math.min(e.clientY, innerHeight - menu.offsetHeight - 8) + "px";
+  menu.onclick = async (ev) => {
+    const act = ev.target.closest("[data-srv]")?.dataset.srv;
+    if (!act) return;
+    menu.classList.add("hidden");
+    if (act === "leave") return leaveServer(sp);
+    if (act === "delete") return deleteServer(sp);
+    // Invite and settings act on the selected server: select this one first.
+    state.sel = { host: sp.host, space: sp.id, channel: "" };
+    await loadState();
+    if (act === "invite") inviteDialog();
+    else openSettings("overview");
+  };
+});
+document.addEventListener("click", (e) => { if (!e.target.closest("#srv-menu")) $("#srv-menu").classList.add("hidden"); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("#srv-menu").classList.add("hidden"); });
 
 function tabChannels(sp) {
   const chans = sp.channels;
@@ -861,7 +977,8 @@ function channelDialog() {
 
 document.addEventListener("click", (e) => {
   const s = e.target.closest("[data-space]");
-  if (s) { state.sel = { host: s.dataset.host, space: s.dataset.space, channel: "" }; return loadState(); }
+  if (s) { state.home = false; state.sel = { host: s.dataset.host, space: s.dataset.space, channel: "" }; return loadState(); }
+  if (e.target.closest("#home-btn")) { state.home = true; voice.view = false; renderStage(); return render(); }
   const c = e.target.closest("[data-channel]");
   if (c) { state.sel.channel = c.dataset.channel; voice.view = false; renderStage(); return render(); }
   const v = e.target.closest("[data-voice]");
@@ -908,7 +1025,7 @@ async function listen() {
 // ---------- calls ----------
 // One call at a time. The call's sound runs in the Comms program, not in this page; the page shows who's
 // there and who's speaking, and holds push-to-talk while it has focus.
-const voice = { call: null, audio: null, timer: null, busy: false, ptt: false, view: false };
+const voice = { call: null, audio: null, timer: null, busy: false, ptt: false, view: false, camsOn: false };
 async function pollVoice() {
   try {
     const v = await api("/api/voice");
@@ -945,6 +1062,7 @@ function renderVoice() {
     <div class="call-btns">
       <button type="button" data-call="mute" class="${call.muted ? "active" : ""}" title="${call.muted ? "Unmute" : "Mute"}"><span class="${call.muted ? "muted-mic" : ""}">🎙</span></button>
       <button type="button" data-call="deafen" class="${call.deafened ? "active" : ""}" title="${call.deafened ? "Undeafen" : "Deafen (hear no one, and mute)"}">${call.deafened ? "🔇" : "🎧"}</button>
+      <button type="button" data-call="camera" class="${call.camera ? "active share-on" : ""}" title="${call.camera ? "Turn your camera off" : "Turn your camera on"}">📷</button>
       <button type="button" data-call="share" class="${call.sharing ? "active share-on" : ""}" title="${call.sharing ? "Stop sharing your screen" : "Share your screen"}">🖥</button>
       <button type="button" data-call="sound" title="Sound and sharing settings">⚙</button>
       <button type="button" data-call="leave" class="leave" title="Leave the call">✕</button>
@@ -983,9 +1101,14 @@ async function callAction(act) {
       await api("/api/voice/share", { on: !c.sharing });
       if (!c.sharing) toast("You're sharing. People in the call can choose to watch.");
     }
+    if (act === "camera") {
+      if (!c.camera) toast("Starting your camera… (your desktop may ask to allow it)");
+      await api("/api/voice/camera", { on: !c.camera });
+      if (!c.camera) { voice.view = true; toast("Your camera is on. People see it with the call open."); }
+    }
     if (act === "leave") {
       // Gone from the screen at once; the call closes in the background.
-      voice.call = null; voice.view = false;
+      voice.call = null; voice.view = false; voice.camsOn = false;
       renderVoice(); renderStage();
       await api("/api/voice/leave", {});
     }
@@ -1018,13 +1141,14 @@ async function soundDialog() {
   try { voice.audio = (await api("/api/voice")).audio; } catch {}
   const s = voice.audio?.settings || { mic: "", speakers: "", mode: "voice", threshold: -45 };
   const opts = (kind, cur) => `<option value="">System default</option>` + list.filter((d) => d.kind === kind).map((d) => `<option value="${esc(d.name)}" ${d.name === cur ? "selected" : ""}>${esc(d.label)}</option>`).join("");
-  ask("Sound and sharing", `<div id="sound-dlg">
+  ask("Sound, camera and sharing", `<div id="sound-dlg">
     <label>Microphone<select name="mic">${opts("microphone", s.mic)}</select></label>
     <label>Speakers<select name="speakers">${opts("speakers", s.speakers)}</select></label>
     <label>Send my voice<select name="mode">
       <option value="voice" ${s.mode === "voice" ? "selected" : ""}>When I talk (voice activity)</option>
       <option value="ptt" ${s.mode === "ptt" ? "selected" : ""}>While I hold \` (push to talk, while Comms has focus)</option>
       <option value="open" ${s.mode === "open" ? "selected" : ""}>All the time</option></select></label>
+    <label>Camera<span class="row"><select name="camera" id="cam-select"><option value="${esc(s.camera || "")}">${s.camera ? "Chosen camera" : "First camera"}</option></select><button type="button" class="ghost" id="cam-find" title="Lists your cameras (your desktop may ask to allow camera access)">Find cameras</button></span></label>
     <label>Screen share quality<select name="share_quality">
       <option value="1080p" ${s.share_quality !== "720p" ? "selected" : ""}>1080p, 30 frames a second (about 5 Mbps per viewer)</option>
       <option value="720p" ${s.share_quality === "720p" ? "selected" : ""}>720p, 30 frames a second (about 2.5 Mbps per viewer)</option></select></label>
@@ -1036,13 +1160,21 @@ async function soundDialog() {
   const form = $("#dlg-form");
   const save = async () => {
     const f = new FormData(form);
-    const body = { mic: f.get("mic"), speakers: f.get("speakers"), mode: f.get("mode"), threshold: Number(f.get("threshold")), share_quality: f.get("share_quality") };
+    const body = { mic: f.get("mic"), speakers: f.get("speakers"), mode: f.get("mode"), threshold: Number(f.get("threshold")), share_quality: f.get("share_quality"), camera: f.get("camera") || "" };
     $("#thr-val").textContent = `${body.threshold} dB`;
     try { await api("/api/voice/settings", body); if (voice.audio) voice.audio.settings = body; } catch (e) { toast(e.message, true); }
     soundMeter();
   };
   form.querySelectorAll("#sound-dlg select").forEach((el) => (el.onchange = save));
   form.querySelector("[name=threshold]").oninput = save;
+  $("#cam-find").onclick = async () => {
+    try {
+      const list = (await api("/api/voice/cameras")).cameras;
+      const cur = $("#cam-select").value;
+      $("#cam-select").innerHTML = `<option value="">First camera</option>` + list.map((c) => `<option value="${esc(c.id)}" ${c.id === cur ? "selected" : ""}>${esc(c.label)}</option>`).join("");
+      if (!list.length) toast("Your desktop didn't offer any cameras.", true);
+    } catch (e) { toast(e.message, true); }
+  };
   $("#mic-test").onclick = async () => {
     if (voice.call) return toast("You're in a call: the meter already shows your microphone.");
     try { await api("/api/voice/test", { on: !voice.audio?.testing }); } catch (e) { toast(e.message, true); }
@@ -1068,26 +1200,29 @@ function soundMeter() {
 // ---------- screen shares you watch ----------
 // Each watched share is a stream of JPEG pictures from the Comms program (decoded there; this page
 // has no video decoder of its own), read with fetch so the per-launch secret stays in a header.
-const streams = new Map(); // slot -> { abort, url }
+const streams = new Map(); // "s<slot>" (screen) or "c<slot>" (camera) -> { abort, url }
 const ending = new Set(); // shares that ended, being unwatched
 async function watchShare(slot, on) {
   try { await api("/api/voice/watch", { slot, on }); } catch (e) { return toast(e.message, true); }
-  if (!on) stopStream(slot);
+  if (!on) stopStream(`s${slot}`);
   pollVoice();
 }
-function stopStream(slot) {
-  const s = streams.get(slot);
+function stopStream(key) {
+  const s = streams.get(key);
   if (!s) return;
   s.abort.abort();
   if (s.url) URL.revokeObjectURL(s.url);
-  streams.delete(slot);
+  streams.delete(key);
 }
-async function readStream(slot) {
+// Pictures come from the Comms program as a stream of JPEGs, each preceded by its length; the newest
+// one is shown in every <img data-stream="key">.
+async function readStream(key) {
   const abort = new AbortController();
   const entry = { abort, url: "" };
-  streams.set(slot, entry);
+  streams.set(key, entry);
+  const cam = key[0] === "c", slot = Number(key.slice(1));
   try {
-    const r = await fetch(`/api/voice/picture?slot=${slot}`, { headers: { "x-comms-token": TOKEN }, signal: abort.signal });
+    const r = await fetch(`/api/voice/picture?slot=${slot}&cam=${cam}`, { headers: { "x-comms-token": TOKEN }, signal: abort.signal });
     if (!r.ok) throw new Error();
     const reader = r.body.getReader();
     let buf = new Uint8Array(0);
@@ -1103,56 +1238,81 @@ async function readStream(slot) {
         newest = buf.slice(4, 4 + len);
         buf = buf.slice(4 + len);
       }
-      if (newest) {
-        const img = document.querySelector(`#stage img[data-slot="${slot}"]`);
-        if (!img) continue;
-        const url = URL.createObjectURL(new Blob([newest], { type: "image/jpeg" }));
-        const old = entry.url;
-        entry.url = url;
-        img.src = url;
-        if (old) setTimeout(() => URL.revokeObjectURL(old), 1000);
-      }
+      if (!newest) continue;
+      const url = URL.createObjectURL(new Blob([newest], { type: "image/jpeg" }));
+      const old = entry.url;
+      entry.url = url;
+      for (const img of document.querySelectorAll(`img[data-stream="${key}"]`)) img.src = url;
+      if (old) setTimeout(() => URL.revokeObjectURL(old), 1000);
     }
   } catch {}
-  if (streams.get(slot) === entry) streams.delete(slot);
+  if (streams.get(key) === entry) streams.delete(key);
+}
+// Cameras only flow while the call view is open (they cost the host upload per person seeing them).
+async function seeCameras(on) {
+  if (voice.camsOn === on || !voice.call) return;
+  voice.camsOn = on;
+  try { await api("/api/voice/see-cameras", { on }); } catch { voice.camsOn = !on; }
 }
 function renderStage() {
   const stage = $("#stage");
   const call = voice.call;
   if (call && call.watching.length) voice.view = true;
   const show = !!(call && voice.view);
-  // Pictures to stream: shares you watch, and the preview of your own.
-  const videos = show ? [...(call.sharing ? [call.slot] : []), ...call.watching] : [];
-  for (const slot of [...streams.keys()]) if (!videos.includes(slot)) stopStream(slot);
-  if (!show) { stage.classList.add("hidden"); stage.classList.remove("focus"); setHTML(stage, ""); return; }
+  if (call) seeCameras(show); else voice.camsOn = false;
+  // Screens: shares you watch, and the preview of your own. Cameras: everyone's that is on.
+  const screens = show ? [...(call.sharing ? [call.slot] : []), ...call.watching] : [];
+  const cams = show ? call.participants.filter((p) => p.me ? call.camera : p.camera && call.cameras.includes(p.slot)).map((p) => p.slot) : [];
+  const keys = [...screens.map((x) => `s${x}`), ...cams.map((x) => `c${x}`)];
+  for (const key of [...streams.keys()]) if (!keys.includes(key)) stopStream(key);
+  if (!show) { stage.classList.add("hidden"); stage.classList.remove("focus"); setHTML(stage, ""); stage.dataset.videos = ""; return; }
   stage.classList.remove("hidden");
   const ch = spaces().find((x) => x.host === call.host)?.channels.find((c) => c.id === call.channel);
   const who = (p) => esc(profileOf(p.username).name || p.username);
   const person = (slot) => call.participants.find((x) => x.slot === slot);
-  // The video area is rebuilt only when the set of pictures changes (so pictures don't flicker).
-  const key = videos.join();
+  // The screens area is rebuilt only when the set of screens changes (so pictures don't flicker).
+  const key = screens.join();
   if (stage.dataset.videos !== key || !stage.querySelector(".stage-people")) {
     stage.dataset.videos = key;
     stage.innerHTML = `<header class="stage-head"><b>🔊 ${esc(ch?.name || "Call")}</b><span class="lock">🔒 end-to-end encrypted</span><span class="grow"></span>
         <button type="button" class="ghost" data-stage="close" title="Back to the chat (you stay in the call)">Back to chat</button></header>
-      ${videos.length ? `<div class="stage-grid n${Math.min(videos.length, 4)}">${videos.map((slot) => {
+      ${screens.length ? `<div class="stage-grid n${Math.min(screens.length, 4)}">${screens.map((slot) => {
         const mine = slot === call.slot;
         const p = person(slot);
         return `<figure data-slot="${slot}">
-        <img data-slot="${slot}" alt="${mine ? "Preview of your screen share" : "Screen share"}">
+        <img data-stream="s${slot}" alt="${mine ? "Preview of your screen share" : "Screen share"}">
         <figcaption><span class="live">LIVE</span> <b>${mine ? "Your screen" : p ? who(p) : "Someone"}</b>${mine ? '<small class="muted">preview: what others see, smaller</small>' : ""}<span class="grow"></span>
           <button type="button" class="ghost" data-stage="focus" title="Fill the Comms window (double-click the picture for full screen)">⤢</button>
           ${mine ? '<button type="button" class="ghost" data-call="share" title="Stop sharing">Stop sharing</button>' : `<button type="button" class="ghost" data-watch="${slot}" title="Stop watching">✕</button>`}</figcaption></figure>`;
       }).join("")}</div>` : ""}
-      <div class="stage-people ${videos.length ? "strip" : ""}"></div>`;
+      <div class="stage-people ${screens.length ? "strip" : ""}"></div>`;
   }
-  setHTML(stage.querySelector(".stage-people"), call.participants.map((p) => {
+  // Tiles are kept and updated in place, so camera pictures don't flicker when someone talks.
+  const people = stage.querySelector(".stage-people");
+  const want = call.participants.map((p) => String(p.slot));
+  for (const t of [...people.children]) if (!want.includes(t.dataset.tile)) t.remove();
+  for (const p of call.participants) {
+    let t = people.querySelector(`[data-tile="${p.slot}"]`);
+    if (!t) {
+      t = document.createElement("div");
+      t.className = "tile";
+      t.dataset.tile = p.slot;
+      t.innerHTML = '<div class="tile-media"></div><div class="tile-foot"><b></b><span class="tile-state"></span></div>';
+      people.appendChild(t);
+    }
+    const camOn = cams.includes(p.slot);
+    t.classList.toggle("speaking", !!p.speaking);
+    t.classList.toggle("has-cam", camOn);
+    setHTML(t.querySelector(".tile-media"), camOn ? `<img data-stream="c${p.slot}" alt="${who(p)}'s camera">` : avatarHTML(p.username));
+    setHTML(t.querySelector("b"), `${who(p)}${p.me ? " (you)" : ""}`);
     const watching = call.watching.includes(p.slot);
     const live = p.sharing && !p.me ? `<button type="button" class="live ${watching ? "on" : ""}" data-watch="${p.slot}">${watching ? "Watching" : "Watch"}</button>` : p.sharing ? '<span class="live">LIVE</span>' : "";
-    return `<div class="tile ${p.speaking ? "speaking" : ""}">${avatarHTML(p.username)}<b>${who(p)}${p.me ? " (you)" : ""}</b>
-      <span class="tile-state">${p.deafened ? '<span title="Deafened">🔇</span>' : p.muted ? '<span title="Muted" class="muted-mic">🎙</span>' : ""}${live}</span></div>`;
-  }).join(""));
-  for (const slot of videos) if (!streams.has(slot)) readStream(slot);
+    setHTML(t.querySelector(".tile-state"), `${p.deafened ? '<span title="Deafened">🔇</span>' : p.muted ? '<span title="Muted" class="muted-mic">🎙</span>' : ""}${live}`);
+  }
+  for (const k of keys) {
+    if (!streams.has(k)) readStream(k);
+    else { const u = streams.get(k).url; if (u) for (const img of document.querySelectorAll(`img[data-stream="${k}"]`)) if (!img.src) img.src = u; }
+  }
   // A share that ended: stop watching it.
   for (const slot of call.watching) {
     if (call.participants.some((p) => p.slot === slot && p.sharing) || ending.has(slot)) continue;

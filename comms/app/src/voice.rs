@@ -8,7 +8,7 @@ use crate::Shared;
 use lodestone_comms_client::Client;
 use lodestone_comms_media::audio::{self, Gate, GstAudio, Levels, Options};
 use lodestone_comms_media::call::{self, Call, Controls};
-use lodestone_comms_media::video::{Picture, Quality, ScreenShare, Viewer};
+use lodestone_comms_media::video::{self, Capture, Picture, Quality, Viewer};
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -30,6 +30,9 @@ pub struct Settings {
     /// Voice activity threshold in dB.
     #[serde(default = "threshold")]
     pub threshold: f64,
+    /// Your camera's id (from the camera list); the first camera if empty.
+    #[serde(default)]
+    pub camera: String,
     /// Screen share quality: "1080p" (the default) or "720p".
     #[serde(default = "full")]
     pub share_quality: String,
@@ -48,7 +51,7 @@ fn threshold() -> f64 {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { mic: String::new(), speakers: String::new(), mode: voice(), threshold: threshold(), share_quality: full() }
+        Self { mic: String::new(), speakers: String::new(), mode: voice(), threshold: threshold(), camera: String::new(), share_quality: full() }
     }
 }
 
@@ -69,11 +72,15 @@ struct Session {
     video: Arc<Video>,
 }
 
-/// Your screen share and the shares you're watching.
+/// Your screen share and camera, the shares you're watching and the cameras you see.
 #[derive(Default)]
 struct Video {
-    share: Mutex<Option<ScreenShare>>,
+    share: Mutex<Option<Capture>>,
     viewers: Mutex<HashMap<usize, Viewer>>,
+    camera: Mutex<Option<Capture>>,
+    /// Cameras are coming in (your call view is open).
+    cams_on: AtomicBool,
+    cams: Mutex<HashMap<usize, Viewer>>,
 }
 
 struct MicTest {
@@ -104,6 +111,9 @@ impl Voice {
     pub fn set_settings(&self, s: Settings) -> Result<(), String> {
         if Gate::parse(&s.mode).is_none() {
             return Err("Unknown microphone mode".into());
+        }
+        if !s.camera.chars().all(|c| c.is_ascii_digit()) {
+            return Err("That isn't a camera id".into());
         }
         if Quality::parse(&s.share_quality).is_none() {
             return Err("Unknown screen share quality".into());
@@ -242,8 +252,27 @@ pub async fn join(app: &Shared, c: Arc<Client>, host: &str, channel: &str, muted
     let participants = Arc::new(Mutex::new(joined["participants"].clone()));
     let video = Arc::new(Video::default());
     let v2 = video.clone();
-    *controls.video_in.lock().unwrap() = Some(Box::new(move |slot, frame| {
-        if let Some(view) = v2.viewers.lock().unwrap().get_mut(&slot) {
+    *controls.video_in.lock().unwrap() = Some(Box::new(move |slot, cam, frame| {
+        if !cam {
+            if let Some(view) = v2.viewers.lock().unwrap().get_mut(&slot) {
+                view.push(frame);
+            }
+            return;
+        }
+        // Cameras: a decoder per person, made when their first frame arrives.
+        if !v2.cams_on.load(Ordering::Relaxed) {
+            return;
+        }
+        let mut cams = v2.cams.lock().unwrap();
+        if !cams.contains_key(&slot) {
+            match Viewer::new() {
+                Ok(v) => {
+                    cams.insert(slot, v);
+                }
+                Err(_) => return,
+            }
+        }
+        if let Some(view) = cams.get_mut(&slot) {
             view.push(frame);
         }
     }));
@@ -264,7 +293,7 @@ pub async fn join(app: &Shared, c: Arc<Client>, host: &str, channel: &str, muted
     // Keyframes: the relay asks for one of your share; a viewer here asks for one of someone's.
     let (ctl2, app2) = (ctl.clone(), app.clone());
     tokio::spawn(async move {
-        let mut last_ask: HashMap<usize, std::time::Instant> = HashMap::new();
+        let mut last_ask: HashMap<(usize, bool), std::time::Instant> = HashMap::new();
         while !ctl2.stop.load(Ordering::Relaxed) {
             tokio::time::sleep(Duration::from_millis(100)).await;
             let mut ended = false;
@@ -277,12 +306,25 @@ pub async fn join(app: &Shared, c: Arc<Client>, host: &str, channel: &str, muted
             if ended {
                 let _ = stop_share(&app2).await;
             }
+            let mut cam_ended = false;
+            if let Some(cam) = video.camera.lock().unwrap().as_ref() {
+                if ctl2.cam_keyframe_wanted.swap(false, Ordering::Relaxed) {
+                    cam.keyframe();
+                }
+                cam_ended = cam.ended.load(Ordering::Relaxed);
+            }
+            if cam_ended {
+                let _ = set_camera(&app2, false).await;
+            }
             let mut ask = Vec::new();
-            for (slot, view) in video.viewers.lock().unwrap().iter() {
-                let recent = last_ask.get(slot).is_some_and(|t| t.elapsed() < Duration::from_millis(500));
-                if !recent && view.wants_keyframe.swap(false, Ordering::Relaxed) {
-                    ask.push(*slot);
-                    last_ask.insert(*slot, std::time::Instant::now());
+            for (cam, list) in [(false, &video.viewers), (true, &video.cams)] {
+                for (slot, view) in list.lock().unwrap().iter() {
+                    let key = (*slot, cam);
+                    let recent = last_ask.get(&key).is_some_and(|t| t.elapsed() < Duration::from_millis(500));
+                    if !recent && view.wants_keyframe.swap(false, Ordering::Relaxed) {
+                        ask.push(key);
+                        last_ask.insert(key, std::time::Instant::now());
+                    }
                 }
             }
             ctl2.keyframe_from.lock().unwrap().extend(ask);
@@ -389,6 +431,8 @@ pub async fn status(app: &Shared) -> Value {
             "undecryptable": ctl.undecryptable.load(Ordering::Relaxed),
             "sharing": sess.video.share.lock().unwrap().as_ref().map(|s| json!({ "width": s.size.0, "height": s.size.1, "frames": s.frames.load(Ordering::Relaxed) })),
             "watching": sess.video.viewers.lock().unwrap().keys().collect::<Vec<_>>(),
+            "camera": sess.video.camera.lock().unwrap().is_some(),
+            "cameras": sess.video.cams.lock().unwrap().keys().collect::<Vec<_>>(),
             "slot": sess.slot,
             "video_sent": ctl.video_sent.load(Ordering::Relaxed),
             "video_received": ctl.video_received.load(Ordering::Relaxed),
@@ -409,7 +453,7 @@ pub async fn start_share(app: &Shared) -> Result<(), String> {
     };
     let quality = Quality::parse(&app.voice.settings().share_quality).unwrap_or(Quality::Full);
     let ctl = controls.clone();
-    let share = ScreenShare::start(quality, move |frame| {
+    let share = Capture::start(quality, move |frame| {
         let mut q = ctl.video_out.lock().unwrap();
         // If sending falls behind, drop the oldest rather than build up delay.
         while q.len() >= 4 {
@@ -463,16 +507,72 @@ pub async fn watch(app: &Shared, slot: usize, on: bool) -> Result<(), String> {
     r
 }
 
-/// The newest picture of a share you're watching.
-pub async fn picture(app: &Shared, slot: usize) -> Option<Arc<Picture>> {
+/// The newest picture of a share you're watching (or of someone's camera, with `cam`).
+pub async fn picture(app: &Shared, slot: usize, cam: bool) -> Option<Arc<Picture>> {
     let g = app.voice.session.lock().await;
     let s = g.as_ref()?;
-    // Your own slot: the preview of what you're sharing.
+    // Your own slot: the preview of what you're sharing, or of your camera.
     if slot as u64 == s.slot {
-        return s.video.share.lock().unwrap().as_ref().map(|sh| sh.preview.clone());
+        let own = if cam { &s.video.camera } else { &s.video.share };
+        return own.lock().unwrap().as_ref().map(|c| c.preview.clone());
+    }
+    if cam {
+        return s.video.cams.lock().unwrap().get(&slot).map(|v| v.picture.clone());
     }
     let v = s.video.viewers.lock().unwrap();
     v.get(&slot).map(|v| v.picture.clone())
+}
+
+/// Turn your camera on or off in the call.
+pub async fn set_camera(app: &Shared, on: bool) -> Result<(), String> {
+    let (client, channel, controls, video) = {
+        let g = app.voice.session.lock().await;
+        let s = g.as_ref().ok_or("Join a voice channel first")?;
+        (s.client.clone(), s.channel.clone(), s.call.controls.clone(), s.video.clone())
+    };
+    if !on {
+        let old = video.camera.lock().unwrap().take();
+        if old.is_none() {
+            return Ok(());
+        }
+        drop(old);
+        return client.voice_camera(&channel, false).await.map_err(|e| e.to_string());
+    }
+    if video.camera.lock().unwrap().is_some() {
+        return Ok(());
+    }
+    let which = Some(app.voice.settings().camera).filter(|c| !c.is_empty());
+    let ctl = controls.clone();
+    let cam = Capture::camera(which.as_deref(), move |frame| {
+        let mut q = ctl.cam_out.lock().unwrap();
+        while q.len() >= 4 {
+            q.pop_front();
+        }
+        q.push_back(frame);
+    })
+    .await?;
+    cam.keyframe();
+    *video.camera.lock().unwrap() = Some(cam);
+    client.voice_camera(&channel, true).await.map_err(|e| e.to_string())
+}
+
+/// Start or stop receiving everyone's cameras (the page does this while the call view is open).
+pub async fn see_cameras(app: &Shared, on: bool) -> Result<(), String> {
+    let (client, channel, video) = {
+        let g = app.voice.session.lock().await;
+        let s = g.as_ref().ok_or("You're not in a call")?;
+        (s.client.clone(), s.channel.clone(), s.video.clone())
+    };
+    video.cams_on.store(on, Ordering::Relaxed);
+    if !on {
+        video.cams.lock().unwrap().clear();
+    }
+    client.voice_cameras(&channel, on).await.map_err(|e| e.to_string())
+}
+
+/// The cameras you can choose from.
+pub async fn cameras() -> Result<Vec<video::CameraInfo>, String> {
+    video::cameras().await
 }
 
 /// Hold or release push to talk (from the page while it has focus; a desktop-wide key comes later).

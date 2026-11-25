@@ -314,6 +314,18 @@ impl Client {
         Ok(())
     }
 
+    /// Say your camera is on (or off) in the call.
+    pub async fn voice_camera(&self, channel: &str, on: bool) -> Result<()> {
+        self.host.post(&format!("/v1/channels/{channel}/voice/camera"), json!({ "on": on })).await?;
+        Ok(())
+    }
+
+    /// Start or stop receiving everyone's cameras (while the call view is open).
+    pub async fn voice_cameras(&self, channel: &str, on: bool) -> Result<()> {
+        self.host.post(&format!("/v1/channels/{channel}/voice/cameras"), json!({ "on": on })).await?;
+        Ok(())
+    }
+
     /// Start or stop receiving the share of the participant in `slot`.
     pub async fn voice_watch(&self, channel: &str, slot: u64, on: bool) -> Result<()> {
         self.host.post(&format!("/v1/channels/{channel}/voice/watch"), json!({ "slot": slot, "on": on })).await?;
