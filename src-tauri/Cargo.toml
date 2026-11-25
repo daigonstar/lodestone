@@ -15,15 +15,15 @@ tauri = { version = "2", features = ["protocol-asset", "unstable"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 rusqlite = { version = "0.43", features = ["bundled"] }
-dirs = "5"
+dirs = "7"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-sha1 = "0.10"
-sha2 = "0.10"
+sha1 = "0.11"
+sha2 = "0.11"
 # RetroArch cores come as .zip files from libretro's build server; only plain (deflate) zips are needed.
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 crc32fast = "1"
 # RetroAchievements identifies ROMs by MD5 (same RustCrypto family as sha2).
-md-5 = "0.10"
+md-5 = "0.11"
 urlencoding = "2"
 tokio = { version = "1", features = ["sync", "time"] }
 
