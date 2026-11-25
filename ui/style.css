@@ -250,6 +250,11 @@ button.upd { color: var(--ok); border-color: #3ddc9755; white-space: nowrap; }
 .setup h2 { margin: 0 0 6px; font-size: 20px; }
 .setup p { margin: 0; max-width: 760px; }
 .setup .row-btns { display: flex; gap: 10px; flex: none; }
+/* System libraries: the emulator panel wraps under the text on narrow windows instead of squeezing it. */
+#setup { flex-wrap: wrap; }
+#setup > div:first-child { flex: 1 1 320px; min-width: 0; }
+.setup .emu-pick { flex: 0 1 auto; flex-wrap: wrap; justify-content: flex-end; }
+.emu-label select { max-width: 100%; }
 .setup button { flex: none; }
 dialog h3 { margin: 18px 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
 dialog select { width: 100%; }

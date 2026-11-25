@@ -2,6 +2,7 @@
 # Install Lodestone for the current user: binary in ~/.local/bin, icons in the hicolor theme,
 # and a launcher entry (with "Minecraft" and "Modded games" quick actions).
 # Run after `cargo tauri build --no-bundle`. Re-run any time to update.
+# `--binary-only` installs just the program (for testing alongside the Flatpak).
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,6 +14,12 @@ dest_bin="$HOME/.local/bin/lodestone"
 [ -x "$bin" ] || { echo "Build first: (cd \"$root\" && cargo tauri build --no-bundle)" >&2; exit 1; }
 
 install -Dm755 "$bin" "$dest_bin"
+
+# --binary-only: just the program, for testing next to an installed Flatpak (no second menu entry).
+if [ "${1:-}" = "--binary-only" ]; then
+  echo "Installed: $dest_bin (binary only, no launcher entry)."
+  exit 0
+fi
 
 for s in 16 24 32 48 64 128 256 512; do
   out="$data/icons/hicolor/${s}x${s}/apps/lodestone.png"
