@@ -226,7 +226,7 @@ without decoding it. Clients encrypt every audio frame before sending, so the re
   looking at them.
 - Screen shares: the join offer also has one send-only video track and 16 receive-only ones (after the
   audio tracks), VP8, slots matching the audio ones. Cameras: another send-only video track and 16
-  receive-only ones after those (640x360, 30 frames a second, about 800 kbps). When someone starts watching, or a viewer reports
+  receive-only ones after those (1280x720, 30 frames a second, about 1.5 Mbps). When someone starts watching, or a viewer reports
   a lost frame, the relay asks the sharer for a keyframe (RTCP PLI).
 - Video frames are encrypted with the same sender keys, but laid out differently so the transport can
   still tell keyframes apart: the first bytes of the VP8 frame stay readable (10 on a keyframe, 3

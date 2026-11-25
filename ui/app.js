@@ -1828,8 +1828,25 @@ $("#f-region").onchange = (e) => { state.regionF = e.target.value; state.letter 
 $("#f-played").onchange = (e) => { state.playedF = e.target.value; state.letter = ""; renderGrid(); };
 $("#f-clear").onclick = () => { state.genre = state.series = state.compatF = state.letter = state.achF = state.regionF = state.playedF = ""; renderGrid(); };
 let searchTimer;
+// Close the search: clear it, and go back to where you searched from (Comms, say).
+function closeSearch() {
+  $("#search").value = "";
+  state.search = "";
+  $("#search").blur();
+  $("#search-close").classList.add("hidden");
+  if (state.searchFrom) { state.view = state.searchFrom; ls.set("view", state.view); state.searchFrom = null; }
+  render();
+}
+$("#search-close").onclick = closeSearch;
 $("#search").oninput = (e) => {
   state.search = e.target.value;
+  $("#search-close").classList.toggle("hidden", !state.search && !state.searchFrom);
+  // Searching from a page without the game grid (Comms, Plug-ins…) shows the results in the library;
+  // closing the search comes back here.
+  if (state.search && ["comms", "plugins", "downloads", "home"].includes(state.view)) {
+    state.searchFrom = state.view;
+    state.view = "all"; ls.set("view", "all"); render();
+  }
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => { renderGrid(); renderHero(); }, 120);
 };
@@ -1870,8 +1887,11 @@ document.addEventListener("keydown", (e) => {
   if (document.querySelector("dialog[open]") || !$("#onboard").classList.contains("hidden")) return;
   if (state.view === "minecraft" || state.view.startsWith("shop:")) return;
   const inSearch = document.activeElement === $("#search");
-  if (e.key === "/" && !inSearch) { e.preventDefault(); return $("#search").focus(); }
-  if (e.key === "Escape" && inSearch) { $("#search").value = ""; state.search = ""; $("#search").blur(); return render(); }
+  if (e.key === "/" && !inSearch) {
+    e.preventDefault();
+    return $("#search").focus();
+  }
+  if (e.key === "Escape" && (inSearch || state.searchFrom)) return closeSearch();
   if (e.key === "Escape" && state.open && !friends.open) { e.preventDefault(); return closeDetail(); }
   if ((e.ctrlKey && e.key === "r") || e.key === "F5") { e.preventDefault(); return load(); }
   if (e.key === "Enter") { e.preventDefault(); return play(state.selected); }
@@ -2619,3 +2639,12 @@ for (const id of ["dlg-settings", "dlg-accounts", "dlg-log", "dlg-shot", "dlg-wo
   d.addEventListener("mousedown", (e) => { downOutside = outside(e); });
   d.addEventListener("click", (e) => { if (downOutside && outside(e)) d.close(); downOutside = false; });
 }
+
+// The sidebar folds away for more room (remembered).
+function setSidebar(collapsed) {
+  document.body.classList.toggle("side-collapsed", collapsed);
+  ls.set("sideCollapsed", collapsed);
+}
+$("#side-collapse").onclick = () => setSidebar(true);
+$("#side-expand").onclick = () => setSidebar(false);
+setSidebar(!!ls.get("sideCollapsed", false));

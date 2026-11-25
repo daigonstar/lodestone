@@ -667,3 +667,20 @@ main.comms-open { overflow: hidden; }
 .perm-list { margin: 0 0 12px; padding: 0; list-style: none; display: grid; gap: 6px; }
 .perm { display: inline-block; min-width: 92px; font-size: 11px; padding: 2px 8px; border-radius: 6px; background: var(--bg-3); color: var(--muted); text-align: center; margin-right: 6px; }
 .perm.on { background: #7c5cff33; color: #c9b8ff; }
+
+/* Search box with its close button */
+.search-box { position: relative; display: flex; flex: 1; min-width: 180px; }
+.search-box input { flex: 1; padding-right: 30px; }
+.search-close { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; border: 0; border-radius: 50%; background: var(--bg-3, rgba(255,255,255,.08)); color: var(--muted); display: grid; place-items: center; font-size: 12px; padding: 0; }
+.search-close:hover { color: var(--text); }
+
+/* Collapsible sidebar: folds to a thin strip with » to bring it back */
+.side-collapse { border: 0; background: transparent; color: var(--muted); font-size: 12px; padding: 4px 6px; border-radius: 6px; }
+.side-collapse:hover { color: var(--text); background: rgba(255,255,255,.06); }
+.side-expand { display: none; }
+body.side-collapsed { grid-template-columns: 34px 1fr; }
+body.side-collapsed .sidebar { padding: 10px 0; overflow: hidden; align-items: center; }
+body.side-collapsed .sidebar > *:not(.side-expand) { display: none !important; }
+body.side-collapsed .side-expand { display: block; border: 0; background: transparent; color: var(--muted); font-size: 16px; padding: 4px 6px; border-radius: 6px; }
+body.side-collapsed .side-expand:hover { color: var(--text); background: rgba(255,255,255,.06); }
+#search { padding-right: 30px; }

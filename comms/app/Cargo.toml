@@ -15,3 +15,8 @@ serde_json = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 getrandom = "0.2"
 base64 = "0.22"
+
+# Windows: Comms' own window (there's no Lodestone there). The same window libraries Tauri uses.
+[target.'cfg(windows)'.dependencies]
+tao = "0.37"
+wry = "0.57"

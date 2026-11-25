@@ -33,9 +33,16 @@ pub struct Settings {
     /// Your camera's id (from the camera list); the first camera if empty.
     #[serde(default)]
     pub camera: String,
+    /// Speaker volume in percent (100 = as received; up to 200).
+    #[serde(default = "hundred")]
+    pub volume: f64,
     /// Screen share quality: "1080p" (the default) or "720p".
     #[serde(default = "full")]
     pub share_quality: String,
+}
+
+fn hundred() -> f64 {
+    100.0
 }
 
 fn full() -> String {
@@ -51,7 +58,7 @@ fn threshold() -> f64 {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { mic: String::new(), speakers: String::new(), mode: voice(), threshold: threshold(), camera: String::new(), share_quality: full() }
+        Self { mic: String::new(), speakers: String::new(), mode: voice(), threshold: threshold(), camera: String::new(), volume: hundred(), share_quality: full() }
     }
 }
 
@@ -93,6 +100,8 @@ pub struct Voice {
     test: Mutex<Option<MicTest>>,
     settings: Mutex<Settings>,
     file: std::path::PathBuf,
+    devices: Mutex<Option<Vec<audio::Device>>>,
+    listing: AtomicBool,
 }
 
 impl Voice {
@@ -100,7 +109,7 @@ impl Voice {
         let settings: Settings = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         let levels = Arc::new(Levels::default());
         apply(&levels, &settings);
-        Self { levels, session: Default::default(), test: Mutex::new(None), settings: Mutex::new(settings), file }
+        Self { levels, session: Default::default(), test: Mutex::new(None), settings: Mutex::new(settings), file, devices: Mutex::new(None), listing: AtomicBool::new(false) }
     }
 
     pub fn settings(&self) -> Settings {
@@ -108,18 +117,20 @@ impl Voice {
     }
 
     /// Save new settings. Mode and threshold apply at once; devices from the next call (or mic test).
-    pub fn set_settings(&self, s: Settings) -> Result<(), String> {
+    pub fn set_settings(&self, mut s: Settings) -> Result<(), String> {
+        s.volume = if s.volume.is_finite() { s.volume.clamp(0.0, 200.0) } else { 100.0 };
+        s.threshold = if s.threshold.is_finite() { s.threshold.clamp(-80.0, 0.0) } else { -45.0 };
         if Gate::parse(&s.mode).is_none() {
             return Err("Unknown microphone mode".into());
         }
-        if !s.camera.chars().all(|c| c.is_ascii_digit()) {
+        if !audio::valid_device(&s.camera) {
             return Err("That isn't a camera id".into());
         }
         if Quality::parse(&s.share_quality).is_none() {
             return Err("Unknown screen share quality".into());
         }
         for d in [&s.mic, &s.speakers] {
-            if !d.chars().all(|c| c.is_ascii_alphanumeric() || "._-:@".contains(c)) {
+            if !audio::valid_device(d) {
                 return Err("That isn't a sound device name".into());
             }
         }
@@ -133,10 +144,42 @@ impl Voice {
 fn apply(levels: &Levels, s: &Settings) {
     levels.set_gate(Gate::parse(&s.mode).unwrap_or(Gate::VoiceActivity));
     levels.set_threshold(s.threshold);
+    levels.set_volume(s.volume);
 }
 
-pub fn devices() -> Result<Vec<audio::Device>, String> {
-    audio::devices()
+/// Sound devices, from a list kept up to date in the background: opening the settings never waits on
+/// the sound system (a slow or stuck one used to freeze the dialog). Listing is given up on after 5 s.
+pub async fn devices(app: &Shared) -> Result<Vec<audio::Device>, String> {
+    let cached = app.voice.devices.lock().unwrap().clone();
+    let refresh = refresh_devices(app.clone());
+    match cached {
+        Some(list) => {
+            tokio::spawn(refresh);
+            Ok(list)
+        }
+        None => refresh.await,
+    }
+}
+
+/// List sound devices again (at most one listing at a time), and keep the result.
+pub async fn refresh_devices(app: Shared) -> Result<Vec<audio::Device>, String> {
+    if app.voice.listing.swap(true, Ordering::Relaxed) {
+        return app.voice.devices.lock().unwrap().clone().ok_or_else(|| "Still looking for your sound devices; try again in a moment".to_string());
+    }
+    let job = tokio::task::spawn_blocking(audio::devices);
+    let got = match tokio::time::timeout(Duration::from_secs(5), job).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Err("Your sound system didn't answer, so the device list may be out of date".into()),
+    };
+    // A listing that timed out may still finish; until then, don't start another.
+    if got.is_ok() || !matches!(&got, Err(e) if e.starts_with("Your sound system")) {
+        app.voice.listing.store(false, Ordering::Relaxed);
+    }
+    if let Ok(list) = &got {
+        *app.voice.devices.lock().unwrap() = Some(list.clone());
+    }
+    got
 }
 
 /// Start or stop the microphone test (the level meter in settings). Nothing is sent or kept.
@@ -441,8 +484,9 @@ pub async fn status(app: &Shared) -> Value {
     })
 }
 
-/// Share your screen in the call. The desktop asks which screen or window first.
-pub async fn start_share(app: &Shared) -> Result<(), String> {
+/// Share your screen in the call. On Linux the desktop asks which screen or window; on Windows the
+/// page has already asked (`source`, from `screen_sources`).
+pub async fn start_share(app: &Shared, source: Option<String>) -> Result<(), String> {
     let (client, channel, controls, video) = {
         let g = app.voice.session.lock().await;
         let s = g.as_ref().ok_or("Join a voice channel first")?;
@@ -453,7 +497,7 @@ pub async fn start_share(app: &Shared) -> Result<(), String> {
     };
     let quality = Quality::parse(&app.voice.settings().share_quality).unwrap_or(Quality::Full);
     let ctl = controls.clone();
-    let share = Capture::start(quality, move |frame| {
+    let share = Capture::start(quality, source.as_deref(), move |frame| {
         let mut q = ctl.video_out.lock().unwrap();
         // If sending falls behind, drop the oldest rather than build up delay.
         while q.len() >= 4 {
@@ -465,6 +509,11 @@ pub async fn start_share(app: &Shared) -> Result<(), String> {
     share.keyframe();
     *video.share.lock().unwrap() = Some(share);
     client.voice_share(&channel, true).await.map_err(|e| e.to_string())
+}
+
+/// What you can share (Windows: monitors and windows; empty on Linux, where the desktop asks).
+pub fn screen_sources() -> Vec<video::ScreenSource> {
+    video::screen_sources()
 }
 
 /// Stop sharing your screen.

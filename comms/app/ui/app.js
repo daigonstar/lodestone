@@ -1097,9 +1097,16 @@ async function callAction(act) {
   if (!c) return;
   try {
     if (act === "share") {
-      if (!c.sharing) toast("Your desktop will ask which screen or window to share…");
-      await api("/api/voice/share", { on: !c.sharing });
-      if (!c.sharing) toast("You're sharing. People in the call can choose to watch.");
+      if (c.sharing) await api("/api/voice/share", { on: false });
+      else {
+        // Windows: Comms lists your screens and windows. Linux: the desktop's own dialog asks.
+        const { sources } = await api("/api/voice/screens");
+        const source = sources.length ? await pickScreen(sources) : null;
+        if (sources.length && !source) return;
+        if (!sources.length) toast("Your desktop will ask which screen or window to share…");
+        await api("/api/voice/share", { on: true, source });
+        toast("You're sharing. People in the call can choose to watch.");
+      }
     }
     if (act === "camera") {
       if (!c.camera) toast("Starting your camera… (your desktop may ask to allow it)");
@@ -1116,6 +1123,21 @@ async function callAction(act) {
     else if (act === "deafen") await api("/api/voice/state", { muted: !c.deafened, deafened: !c.deafened });
   } catch (e) { toast(e.message, true); }
   pollVoice();
+}
+
+// Choose a screen or window to share (Windows).
+function pickScreen(sources) {
+  return new Promise((done) => {
+    let chosen = null;
+    const group = (kind, title) => {
+      const list = sources.filter((x) => x.kind === kind);
+      return list.length ? `<h4 class="chhead">${title}</h4><div class="pick-list">${list.map((x) => `<label class="pick"><input type="radio" name="src" value="${esc(x.id)}">${esc(x.label)}</label>`).join("")}</div>` : "";
+    };
+    ask("Share your screen", `${group("monitor", "Screens")}${group("window", "Windows")}<p class="muted small">Windows shows a yellow border around what's being shared.</p>`, "Share", (f) => { chosen = f.get("src"); if (!chosen) throw new Error("Pick a screen or window"); });
+    const first = $("#dlg-body input[name=src]");
+    if (first) first.checked = true;
+    $("#dlg").addEventListener("close", () => done(chosen), { once: true });
+  });
 }
 
 // Push-to-talk: hold the key while this page has focus. (A key that works everywhere needs the
@@ -1136,14 +1158,15 @@ addEventListener("keyup", (e) => { if (e.key === PTT_KEY) setPtt(false); });
 addEventListener("blur", () => setPtt(false));
 
 async function soundDialog() {
-  let list = [];
-  try { list = (await api("/api/voice/devices")).devices; } catch (e) { toast(e.message, true); }
   try { voice.audio = (await api("/api/voice")).audio; } catch {}
-  const s = voice.audio?.settings || { mic: "", speakers: "", mode: "voice", threshold: -45 };
-  const opts = (kind, cur) => `<option value="">System default</option>` + list.filter((d) => d.kind === kind).map((d) => `<option value="${esc(d.name)}" ${d.name === cur ? "selected" : ""}>${esc(d.label)}</option>`).join("");
+  const s = voice.audio?.settings || { mic: "", speakers: "", mode: "voice", threshold: -45, volume: 100 };
+  // The dialog opens at once; the device lists fill in when they arrive (never wait on the sound system).
+  const opts = (list, kind, cur) => `<option value="">System default</option>` + list.filter((d) => d.kind === kind).map((d) => `<option value="${esc(d.name)}" ${d.name === cur ? "selected" : ""}>${esc(d.label)}</option>`).join("")
+    + (cur && !list.some((d) => d.name === cur) ? `<option value="${esc(cur)}" selected>${list.length ? "Chosen device (not connected?)" : "Chosen device"}</option>` : "");
   ask("Sound, camera and sharing", `<div id="sound-dlg">
-    <label>Microphone<select name="mic">${opts("microphone", s.mic)}</select></label>
-    <label>Speakers<select name="speakers">${opts("speakers", s.speakers)}</select></label>
+    <label>Microphone<select name="mic">${opts([], "microphone", s.mic)}</select></label>
+    <label>Speakers<select name="speakers">${opts([], "speakers", s.speakers)}</select></label>
+    <label>Speaker volume: <b id="vol-val">${Math.round(s.volume ?? 100)}%</b><input type="range" name="volume" min="0" max="200" step="5" value="${s.volume ?? 100}"></label>
     <label>Send my voice<select name="mode">
       <option value="voice" ${s.mode === "voice" ? "selected" : ""}>When I talk (voice activity)</option>
       <option value="ptt" ${s.mode === "ptt" ? "selected" : ""}>While I hold \` (push to talk, while Comms has focus)</option>
@@ -1160,13 +1183,21 @@ async function soundDialog() {
   const form = $("#dlg-form");
   const save = async () => {
     const f = new FormData(form);
-    const body = { mic: f.get("mic"), speakers: f.get("speakers"), mode: f.get("mode"), threshold: Number(f.get("threshold")), share_quality: f.get("share_quality"), camera: f.get("camera") || "" };
+    const body = { mic: f.get("mic"), speakers: f.get("speakers"), mode: f.get("mode"), threshold: Number(f.get("threshold")), share_quality: f.get("share_quality"), camera: f.get("camera") || "", volume: Number(f.get("volume")) };
+    $("#vol-val").textContent = `${body.volume}%`;
     $("#thr-val").textContent = `${body.threshold} dB`;
     try { await api("/api/voice/settings", body); if (voice.audio) voice.audio.settings = body; } catch (e) { toast(e.message, true); }
     soundMeter();
   };
   form.querySelectorAll("#sound-dlg select").forEach((el) => (el.onchange = save));
   form.querySelector("[name=threshold]").oninput = save;
+  form.querySelector("[name=volume]").oninput = save;
+  api("/api/voice/devices").then(({ devices }) => {
+    if (!$("#sound-dlg")) return;
+    const mic = form.querySelector("[name=mic]"), spk = form.querySelector("[name=speakers]");
+    mic.innerHTML = opts(devices, "microphone", mic.value);
+    spk.innerHTML = opts(devices, "speakers", spk.value);
+  }).catch((e) => toast(e.message, true));
   $("#cam-find").onclick = async () => {
     try {
       const list = (await api("/api/voice/cameras")).cameras;

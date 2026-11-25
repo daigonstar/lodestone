@@ -1,7 +1,9 @@
-//! Screen shares, through GStreamer and the desktop's screen-cast portal.
+//! Screen shares and cameras, through GStreamer.
 //!
-//! - Sharing: the portal asks you which screen or window (Comms never sees anything you didn't pick),
-//!   PipeWire hands over the picture, and it's scaled to fit 1920x1080 (or 1280x720), 30 frames a
+//! - Sharing on Linux: the desktop's screen-cast portal asks you which screen or window (Comms never
+//!   sees anything you didn't pick) and PipeWire hands over the picture. On Windows, Comms lists your
+//!   monitors and windows for you to pick, and Windows Graphics Capture provides the picture (Windows
+//!   shows its yellow border around what's captured). Then the picture is and it's scaled to fit 1920x1080 (or 1280x720), 30 frames a
 //!   second, and encoded as VP8. Encoded frames go to the call engine, which encrypts them.
 //! - Watching: decrypted VP8 frames from a slot are decoded and turned into JPEG pictures for the Comms
 //!   page to show. If the decoder loses track (a lost packet), it asks the sharer for a keyframe.
@@ -11,6 +13,7 @@
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app::{AppSink, AppSinkCallbacks, AppSrc};
+#[cfg(target_os = "linux")]
 use std::os::fd::IntoRawFd;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -49,6 +52,10 @@ fn fit(size: Option<(i32, i32)>, q: Quality) -> (i32, i32) {
     (even(w as f64 * scale), even(h as f64 * scale))
 }
 
+/// Cameras: 1280x720 so they stay sharp in the call view's big tiles; about 1.5 Mbps.
+const CAMERA_SIZE: (i32, i32) = (1280, 720);
+const CAMERA_BITRATE: u32 = 1_500_000;
+
 fn pipeline(desc: &str) -> Result<gst::Pipeline, String> {
     gst::parse::launch(desc).map_err(|e| format!("video setup failed: {e}"))?.downcast::<gst::Pipeline>().map_err(|_| "video setup failed".to_string())
 }
@@ -66,10 +73,12 @@ pub struct Capture {
     close: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
+#[cfg(target_os = "linux")]
 impl Capture {
     /// Ask the desktop which screen or window to share, then start encoding. Each encoded frame goes
-    /// to `out` (for the call engine). Fails if you cancel the desktop's dialog.
-    pub async fn start(quality: Quality, out: impl Fn(Vec<u8>) + Send + Sync + 'static) -> Result<Self, String> {
+    /// to `out` (for the call engine). Fails if you cancel the desktop's dialog. (`_source` is for
+    /// Windows, where Comms does the picking.)
+    pub async fn start(quality: Quality, _source: Option<&str>, out: impl Fn(Vec<u8>) + Send + Sync + 'static) -> Result<Self, String> {
         use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
         use ashpd::desktop::PersistMode;
         gst::init().map_err(|e| format!("GStreamer didn't start: {e}"))?;
@@ -100,18 +109,11 @@ impl Capture {
 
         let (w, h) = fit(stream.size(), quality);
         let source = format!("pipewiresrc fd={fd} path={} do-timestamp=true keepalive-time=1000 always-copy=true", stream.pipe_wire_node_id());
-        Self::encode(&source, (w, h), quality.bounds().2, out, Some(close))
+        Self::encode(&source, &[], (w, h), quality.bounds().2, out, Some(close))
     }
 
-    /// The same encoder fed a moving test pattern instead of your screen (for the media check tool).
-    pub fn test_pattern(quality: Quality, out: impl Fn(Vec<u8>) + Send + Sync + 'static) -> Result<Self, String> {
-        gst::init().map_err(|e| format!("GStreamer didn't start: {e}"))?;
-        let (w, h) = fit(None, quality);
-        Self::encode("videotestsrc is-live=true pattern=ball", (w, h), quality.bounds().2, out, None)
-    }
-
-    /// Your camera, through the desktop's camera portal (it may ask you to allow it): 640x360, 30
-    /// frames a second, about 800 kbps. `which` picks a camera by its id from `cameras()`; the first
+    /// Your camera, through the desktop's camera portal (it may ask you to allow it): 1280x720, 30
+    /// frames a second, about 1.5 Mbps. `which` picks a camera by its id from `cameras()`; the first
     /// otherwise. Cameras differ in what they offer, so a few formats are tried in turn.
     pub async fn camera(which: Option<&str>, out: impl Fn(Vec<u8>) + Send + Sync + Clone + 'static) -> Result<Self, String> {
         let (remote, list) = camera_remote().await?;
@@ -121,7 +123,7 @@ impl Capture {
         for caps in ["image/jpeg,width=1280,height=720 ! jpegdec", "image/jpeg,width=640,height=480 ! jpegdec", "video/x-raw,width=640,height=480", "video/x-raw"] {
             let fd = remote.try_clone().map_err(|e| e.to_string())?.into_raw_fd();
             let source = format!("pipewiresrc fd={fd}{target} do-timestamp=true ! {caps}");
-            match Self::encode(&source, (640, 360), 800_000, out.clone(), None) {
+            match Self::encode(&source, &[], CAMERA_SIZE, CAMERA_BITRATE, out.clone(), None) {
                 Ok(c) => {
                     // Some formats are refused only once the camera starts: give it a moment.
                     tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
@@ -135,8 +137,19 @@ impl Capture {
         }
         Err(last)
     }
+}
 
-    fn encode(source: &str, (w, h): (i32, i32), bitrate: u32, out: impl Fn(Vec<u8>) + Send + Sync + 'static, close: Option<tokio::sync::oneshot::Sender<()>>) -> Result<Self, String> {
+impl Capture {
+    /// The encoder fed a moving test pattern instead of your screen (for the media check tool).
+    pub fn test_pattern(quality: Quality, out: impl Fn(Vec<u8>) + Send + Sync + 'static) -> Result<Self, String> {
+        gst::init().map_err(|e| format!("GStreamer didn't start: {e}"))?;
+        let (w, h) = fit(None, quality);
+        Self::encode("videotestsrc is-live=true pattern=ball", &[], (w, h), quality.bounds().2, out, None)
+    }
+
+    /// Start the encoder on `source` (a pipeline description), after setting `props` (element name,
+    /// property, value) on its elements: device ids are set this way, never written into the text.
+    fn encode(source: &str, props: &[(&str, &str, String)], (w, h): (i32, i32), bitrate: u32, out: impl Fn(Vec<u8>) + Send + Sync + 'static, close: Option<tokio::sync::oneshot::Sender<()>>) -> Result<Self, String> {
         // Your own preview: half size, 10 pictures a second (it only shows you what you're sharing).
         let (pw, ph) = ((w / 4 * 2).max(2), (h / 4 * 2).max(2));
         let p = pipeline(&format!(
@@ -148,6 +161,9 @@ impl Capture {
              vp8enc name=enc deadline=1 cpu-used=8 threads=4 end-usage=cbr target-bitrate={bitrate} keyframe-max-dist=300 lag-in-frames=0 error-resilient=default ! \
              appsink name=out sync=false max-buffers=4 drop=true"
         ))?;
+        for (el, prop, value) in props {
+            p.by_name(el).ok_or("video setup failed")?.set_property_from_str(prop, value);
+        }
         let encoder = p.by_name("enc").ok_or("video setup failed")?;
         let sink = p.by_name("out").and_then(|e| e.downcast::<AppSink>().ok()).ok_or("video setup failed")?;
         let preview = Arc::new(Picture::default());
@@ -226,6 +242,7 @@ pub struct CameraInfo {
 }
 
 /// Access to the cameras through the desktop's portal, and the list of them.
+#[cfg(target_os = "linux")]
 async fn camera_remote() -> Result<(std::os::fd::OwnedFd, Vec<CameraInfo>), String> {
     use ashpd::desktop::camera::Camera;
     gst::init().map_err(|e| format!("GStreamer didn't start: {e}"))?;
@@ -257,8 +274,140 @@ async fn camera_remote() -> Result<(std::os::fd::OwnedFd, Vec<CameraInfo>), Stri
 }
 
 /// The cameras you can choose from (asks the desktop for camera access first, if it hasn't been given).
+#[cfg(target_os = "linux")]
 pub async fn cameras() -> Result<Vec<CameraInfo>, String> {
     Ok(camera_remote().await?.1)
+}
+
+/// Something you can share: a monitor or a window. On Linux the desktop's portal does the picking, so
+/// the list is empty there.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ScreenSource {
+    pub id: String,
+    pub label: String,
+    pub kind: &'static str,
+}
+
+#[cfg(not(windows))]
+pub fn screen_sources() -> Vec<ScreenSource> {
+    Vec::new()
+}
+
+#[cfg(windows)]
+pub use win::{cameras, screen_sources};
+
+/// Windows: monitors and windows to share (Windows Graphics Capture), and cameras (Media Foundation).
+#[cfg(windows)]
+mod win {
+    use super::*;
+    use windows_sys::core::BOOL;
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT};
+    use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows_sys::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsIconic, IsWindowVisible, GWL_EXSTYLE, GW_OWNER, WS_EX_TOOLWINDOW};
+
+    unsafe extern "system" fn on_monitor(m: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> BOOL {
+        let list = &mut *(data as *mut Vec<ScreenSource>);
+        let mut info: MONITORINFOEXW = std::mem::zeroed();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        let (mut w, mut h) = (0, 0);
+        if GetMonitorInfoW(m, &mut info as *mut MONITORINFOEXW as *mut MONITORINFO) != 0 {
+            let r = info.monitorInfo.rcMonitor;
+            (w, h) = (r.right - r.left, r.bottom - r.top);
+        }
+        let primary = info.monitorInfo.dwFlags & 1 != 0;
+        let n = list.iter().filter(|s| s.kind == "monitor").count() + 1;
+        list.push(ScreenSource { id: format!("m:{}", m as usize), label: format!("Screen {n}{} ({w}x{h})", if primary { ", main" } else { "" }), kind: "monitor" });
+        1
+    }
+
+    unsafe extern "system" fn on_window(hwnd: HWND, data: LPARAM) -> BOOL {
+        let list = &mut *(data as *mut Vec<ScreenSource>);
+        if IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 || !GetWindow(hwnd, GW_OWNER).is_null() {
+            return 1;
+        }
+        if GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW != 0 {
+            return 1;
+        }
+        let mut cloaked: u32 = 0;
+        if DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED as u32, &mut cloaked as *mut u32 as *mut _, 4) == 0 && cloaked != 0 {
+            return 1;
+        }
+        let len = GetWindowTextLengthW(hwnd);
+        if len <= 0 {
+            return 1;
+        }
+        let mut buf = vec![0u16; len as usize + 1];
+        let got = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+        let title = String::from_utf16_lossy(&buf[..got.max(0) as usize]);
+        if !title.trim().is_empty() && title != "Program Manager" {
+            list.push(ScreenSource { id: format!("w:{}", hwnd as usize), label: title, kind: "window" });
+        }
+        1
+    }
+
+    /// Your monitors, then your open windows.
+    pub fn screen_sources() -> Vec<ScreenSource> {
+        let mut list: Vec<ScreenSource> = Vec::new();
+        unsafe {
+            EnumDisplayMonitors(std::ptr::null_mut(), std::ptr::null(), Some(on_monitor), &mut list as *mut _ as LPARAM);
+            EnumWindows(Some(on_window), &mut list as *mut _ as LPARAM);
+        }
+        list
+    }
+
+    /// Cameras Media Foundation offers.
+    pub async fn cameras() -> Result<Vec<CameraInfo>, String> {
+        gst::init().map_err(|e| format!("GStreamer didn't start: {e}"))?;
+        // Media Foundation's own lister only (not DirectShow, kernel streaming and the rest).
+        let provider = gst::DeviceProviderFactory::by_name("mfdeviceprovider").ok_or("Cameras can't be listed here")?;
+        let found = provider.devices();
+        let list = found
+            .iter()
+            .filter(|d| d.has_classes("Video/Source") && d.has_property("device-path"))
+            .filter_map(|d| Some(CameraInfo { label: d.display_name().to_string(), id: d.property_value("device-path").get::<String>().ok()? }))
+            .collect();
+        Ok(list)
+    }
+
+    impl Capture {
+        /// Share the monitor or window `source` (an id from `screen_sources()`).
+        pub async fn start(quality: Quality, source: Option<&str>, out: impl Fn(Vec<u8>) + Send + Sync + 'static) -> Result<Self, String> {
+            gst::init().map_err(|e| format!("GStreamer didn't start: {e}"))?;
+            let source = source.ok_or("Pick a screen or window to share")?;
+            let known = screen_sources();
+            if !known.iter().any(|s| s.id == source) {
+                return Err("That screen or window isn't there any more".into());
+            }
+            let (kind, handle) = source.split_once(':').ok_or("Pick a screen or window to share")?;
+            let handle: u64 = handle.parse().map_err(|_| "Pick a screen or window to share")?;
+            let prop = if kind == "w" { "window-handle" } else { "monitor-handle" };
+            let props = [("cap", prop, handle.to_string()), ("cap", "capture-api", "wgc".to_string())];
+            let (w, h) = fit(None, quality);
+            Self::encode("d3d11screencapturesrc name=cap show-cursor=true ! d3d11download", &props, (w, h), quality.bounds().2, out, None)
+        }
+
+        /// Your camera, through Media Foundation: 1280x720, 30 frames a second, about 1.5 Mbps.
+        pub async fn camera(which: Option<&str>, out: impl Fn(Vec<u8>) + Send + Sync + Clone + 'static) -> Result<Self, String> {
+            let list = cameras().await?;
+            let id = which.filter(|w| list.iter().any(|c| c.id == *w)).map(str::to_string).or_else(|| list.first().map(|c| c.id.clone())).ok_or("No camera found")?;
+            let mut last = String::from("No camera found");
+            for caps in ["image/jpeg,width=1280,height=720 ! jpegdec", "video/x-raw,width=1280,height=720", "video/x-raw,width=640,height=480", "video/x-raw"] {
+                let props = [("cam", "device-path", id.clone())];
+                match Self::encode(&format!("mfvideosrc name=cam ! {caps}"), &props, CAMERA_SIZE, CAMERA_BITRATE, out.clone(), None) {
+                    Ok(c) => {
+                        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+                        if !c.ended.load(Ordering::Relaxed) {
+                            return Ok(c);
+                        }
+                        last = "The camera didn't start".into();
+                    }
+                    Err(e) => last = e,
+                }
+            }
+            Err(last)
+        }
+    }
 }
 
 /// The newest picture of a share you're watching, for the page.

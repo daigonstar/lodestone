@@ -9,6 +9,7 @@
 </head>
 <body>
   <aside class="sidebar">
+    <button id="side-expand" class="side-expand" title="Show the sidebar">»</button>
     <div class="brand"><img class="brand-icon" src="lodestone.svg" alt="" />Lodestone<a href="#" class="app-version" id="app-version" title="What's new in this version"></a></div>
     <nav id="nav-library" class="nav"></nav>
     <button type="button" class="nav-label" data-section="nav-stores" aria-expanded="true">Stores</button>
@@ -24,12 +25,13 @@
       <button id="btn-refresh" class="ghost" title="Rescan all libraries (Ctrl+R)">⟳ Rescan</button>
       <button id="btn-accounts" class="ghost">👤 Accounts</button>
       <button id="btn-settings" class="ghost">⚙ Settings</button>
+      <button id="side-collapse" class="side-collapse" title="Fold the sidebar away for more room">« Hide sidebar</button>
     </div>
   </aside>
 
   <main>
     <header class="topbar">
-      <input id="search" type="search" placeholder="Search your games   ( / )" autocomplete="off" spellcheck="false" />
+      <div class="search-box"><input id="search" type="search" placeholder="Search your games   ( / )" autocomplete="off" spellcheck="false" /><button id="search-close" class="search-close hidden" title="Close the search (Esc)">✕</button></div>
       <select id="sort" title="Sort">
         <option value="recent">Recently played</option>
         <option value="title">A–Z</option>

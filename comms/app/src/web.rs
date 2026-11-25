@@ -62,6 +62,7 @@ pub fn router(app: Shared) -> Router {
         .route("/api/voice/test", post(voice_test))
         .route("/api/voice/ptt", post(voice_ptt))
         .route("/api/voice/share", post(voice_share))
+        .route("/api/voice/screens", get(voice_screens))
         .route("/api/voice/watch", post(voice_watch))
         .route("/api/voice/picture", get(voice_picture))
         .route("/api/voice/camera", post(voice_camera))
@@ -735,8 +736,8 @@ async fn voice_state(State(app): State<Shared>, Json(r): Json<VoiceState>) -> R 
     Ok(Json(json!({ "ok": true })))
 }
 
-async fn voice_devices(State(_app): State<Shared>) -> R {
-    let list = tokio::task::spawn_blocking(crate::voice::devices).await?.map_err(Fail)?;
+async fn voice_devices(State(app): State<Shared>) -> R {
+    let list = crate::voice::devices(&app).await.map_err(Fail)?;
     Ok(Json(json!({ "devices": list })))
 }
 
@@ -761,9 +762,21 @@ async fn voice_ptt(State(app): State<Shared>, Json(r): Json<OnOff>) -> R {
     Ok(Json(json!({ "ok": true })))
 }
 
-async fn voice_share(State(app): State<Shared>, Json(r): Json<OnOff>) -> R {
-    if r.on { crate::voice::start_share(&app).await } else { crate::voice::stop_share(&app).await }.map_err(Fail)?;
+#[derive(Deserialize)]
+struct ShareReq {
+    on: bool,
+    #[serde(default)]
+    source: Option<String>,
+}
+
+async fn voice_share(State(app): State<Shared>, Json(r): Json<ShareReq>) -> R {
+    if r.on { crate::voice::start_share(&app, r.source).await } else { crate::voice::stop_share(&app).await }.map_err(Fail)?;
     Ok(Json(json!({ "ok": true })))
+}
+
+async fn voice_screens(State(_app): State<Shared>) -> R {
+    let list = tokio::task::spawn_blocking(crate::voice::screen_sources).await?;
+    Ok(Json(json!({ "sources": list })))
 }
 
 #[derive(Deserialize)]

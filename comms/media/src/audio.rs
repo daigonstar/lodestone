@@ -89,6 +89,8 @@ pub struct Levels {
     /// The gate is open (you're being sent, unless muted).
     talking: AtomicBool,
     heard: Mutex<[Option<Instant>; SLOTS]>,
+    /// Speaker volume in percent (100 = as received, up to 200).
+    volume: AtomicI32,
     error: Mutex<Option<String>>,
     pub frames_in: AtomicU64,
 }
@@ -102,6 +104,7 @@ impl Default for Levels {
             mic: AtomicI32::new(-1000),
             talking: AtomicBool::new(false),
             heard: Mutex::new([None; SLOTS]),
+            volume: AtomicI32::new(100),
             error: Mutex::new(None),
             frames_in: AtomicU64::new(0),
         }
@@ -125,6 +128,10 @@ impl Levels {
     /// The microphone's current level in dB (-100 when silent or not running).
     pub fn mic_db(&self) -> f64 {
         self.mic.load(Ordering::Relaxed) as f64 / 10.0
+    }
+    /// Speaker volume, 0 to 200 percent. Applies at once, also during a call.
+    pub fn set_volume(&self, percent: f64) {
+        self.volume.store(percent.clamp(0.0, 200.0) as i32, Ordering::Relaxed);
     }
     pub fn talking(&self) -> bool {
         self.talking.load(Ordering::Relaxed)
@@ -152,32 +159,56 @@ pub struct Device {
 }
 
 /// Microphones and speakers the system offers (monitors of outputs left out).
+/// Only the system's sound server is asked (PulseAudio/PipeWire, or WASAPI): asking every lister
+/// GStreamer has also pokes raw hardware (ALSA, OSS), which can hang while a call has the mic open.
+#[cfg(not(windows))]
+const SOUND_LISTER: &str = "pulsedeviceprovider";
+#[cfg(windows)]
+const SOUND_LISTER: &str = "wasapi2deviceprovider";
+
 pub fn devices() -> Result<Vec<Device>, String> {
     gst::init().map_err(|e| format!("GStreamer didn't start: {e}"))?;
-    let monitor = gst::DeviceMonitor::new();
-    monitor.add_filter(Some("Audio/Source"), None);
-    monitor.add_filter(Some("Audio/Sink"), None);
-    monitor.start().map_err(|e| format!("can't list sound devices: {e}"))?;
-    let mut list: Vec<Device> = monitor
-        .devices()
+    let provider = gst::DeviceProviderFactory::by_name(SOUND_LISTER).ok_or("This system's sound devices can't be listed")?;
+    // Without starting it, the lister probes once and answers (some, like WASAPI's, only fill in
+    // later when started).
+    let found = provider.devices();
+    let mut list: Vec<Device> = found
         .iter()
+        .filter(|d| d.device_class() == "Audio/Source" || d.device_class() == "Audio/Sink")
+        // Windows also offers each speaker as a "loopback" recording of what it plays, and the
+        // default devices again: neither belongs in the list (System default is its own choice).
+        .filter(|d| {
+            let props = d.properties();
+            let flag = |k: &str| props.as_ref().and_then(|p| p.get::<bool>(k).ok()).unwrap_or(false);
+            !flag("wasapi2.device.loopback") && !(flag("device.default") && props.as_ref().and_then(|p| p.get::<String>("device.api").ok()).as_deref() == Some("wasapi2"))
+        })
         .map(|d| Device {
-            kind: if d.has_classes("Audio/Source") { "microphone" } else { "speakers" },
+            kind: if d.device_class() == "Audio/Source" { "microphone" } else { "speakers" },
             label: d.display_name().to_string(),
-            name: d.property_value("internal-name").get::<String>().unwrap_or_default(),
+            // PulseAudio/PipeWire names its devices; WASAPI gives an endpoint id.
+            name: ["internal-name", "device"].iter().find(|p| d.has_property(p)).and_then(|p| d.property_value(p).get::<String>().ok()).unwrap_or_default(),
         })
         .filter(|d| !d.name.is_empty() && !d.name.ends_with(".monitor"))
         .collect();
-    monitor.stop();
     list.sort_by(|a, b| (a.kind, &a.label).cmp(&(b.kind, &b.label)));
     Ok(list)
 }
 
-/// A device name goes into a pipeline description inside quotes, so only safe characters are allowed.
-fn device_prop(name: Option<&str>) -> Result<String, String> {
-    match name {
-        None | Some("") => Ok(String::new()),
-        Some(n) if n.chars().all(|c| c.is_ascii_alphanumeric() || "._-:@".contains(c)) => Ok(format!(" device=\"{n}\"")),
+/// A sound device id: names on Linux, endpoint ids (with `\\ ? # { }`) on Windows. It's set on the
+/// element as a property, never written into a pipeline description.
+pub fn valid_device(name: &str) -> bool {
+    name.len() <= 512 && name.chars().all(|c| c.is_ascii_graphic() && c != '"' && c != '\'' || c == ' ')
+}
+
+/// Choose a device on the element called `el`, if one was picked.
+fn set_device(p: &gst::Pipeline, el: &str, name: Option<&str>) -> Result<(), String> {
+    match name.filter(|n| !n.is_empty()) {
+        None => Ok(()),
+        Some(n) if valid_device(n) => {
+            let e = p.by_name(el).ok_or("sound setup failed")?;
+            e.set_property_from_str("device", n);
+            Ok(())
+        }
         Some(_) => Err("That isn't a sound device name".into()),
     }
 }
@@ -207,6 +238,8 @@ pub struct GstAudio {
     pcm: AppSink,
     encoder: Option<(gst::Pipeline, AppSrc, AppSink)>,
     playback: Option<(gst::Pipeline, Vec<AppSrc>)>,
+    outvol: Option<gst::Element>,
+    applied_volume: i32,
     levels: Arc<Levels>,
     pending: Vec<i16>,
     preroll: VecDeque<Vec<i16>>,
@@ -234,9 +267,9 @@ impl GstAudio {
         // Playback first: the echo canceller looks its reference (the probe) up by name when it starts.
         let playback = if full {
             let mut desc = format!(
-                "audiomixer name=mix latency=20000000 ! audioconvert ! audioresample ! {raw} ! webrtcechoprobe name={probe} ! audioconvert ! audioresample ! {} \
+                "audiomixer name=mix latency=20000000 ! audioconvert ! audioresample ! {raw} ! volume name=outvol ! webrtcechoprobe name={probe} ! audioconvert ! audioresample ! {} \
                  audiotestsrc wave=silence is-live=true samplesperbuffer=960 ! {raw} ! mix. ",
-                if opts.silent { "fakesink sync=true".to_string() } else { format!("{SPEAKERS}{}", device_prop(opts.speakers.as_deref())?) }
+                if opts.silent { "fakesink sync=true".to_string() } else { format!("{SPEAKERS} name=speakers") }
             );
             for i in 0..SLOTS {
                 desc.push_str(&format!(
@@ -246,6 +279,9 @@ impl GstAudio {
                 ));
             }
             let p = pipeline(&desc)?;
+            if !opts.silent {
+                set_device(&p, "speakers", opts.speakers.as_deref())?;
+            }
             let srcs = (0..SLOTS).map(|i| by_name::<AppSrc>(&p, &format!("s{i}"))).collect::<Result<Vec<_>, _>>()?;
             p.set_state(gst::State::Playing).map_err(|_| "Couldn't open your speakers".to_string())?;
             Some((p, srcs))
@@ -259,9 +295,9 @@ impl GstAudio {
             "webrtcdsp echo-cancel=false noise-suppression=true noise-suppression-level=high gain-control=true".to_string()
         };
         let capture = pipeline(&format!(
-            "{MIC}{} ! queue ! audioconvert ! audioresample ! {raw} ! {dsp} ! audioconvert ! {raw} ! appsink name=pcm sync=false max-buffers=100 drop=true",
-            device_prop(opts.mic.as_deref())?
+            "{MIC} name=mic ! queue ! audioconvert ! audioresample ! {raw} ! {dsp} ! audioconvert ! {raw} ! appsink name=pcm sync=false max-buffers=100 drop=true"
         ))?;
+        set_device(&capture, "mic", opts.mic.as_deref())?;
         let pcm = by_name::<AppSink>(&capture, "pcm")?;
         if capture.set_state(gst::State::Playing).is_err() {
             if let Some((p, _)) = &playback {
@@ -281,7 +317,8 @@ impl GstAudio {
             None
         };
 
-        Ok(Self { capture, pcm, encoder, playback, levels, pending: Vec::new(), preroll: VecDeque::new(), open_for: 0, encoded: 0, next_pts: [None; SLOTS] })
+        let outvol = playback.as_ref().and_then(|(p, _)| p.by_name("outvol"));
+        Ok(Self { capture, pcm, encoder, playback, outvol, applied_volume: -1, levels, pending: Vec::new(), preroll: VecDeque::new(), open_for: 0, encoded: 0, next_pts: [None; SLOTS] })
     }
 
     /// Note the first pipeline error for the interface.
@@ -346,6 +383,13 @@ impl GstAudio {
 impl Audio for GstAudio {
     fn take_captured(&mut self) -> Vec<Vec<u8>> {
         self.check_bus();
+        let v = self.levels.volume.load(Ordering::Relaxed);
+        if v != self.applied_volume {
+            if let Some(e) = &self.outvol {
+                e.set_property("volume", v as f64 / 100.0);
+            }
+            self.applied_volume = v;
+        }
         let frames = self.gate_frames();
         let Some((_, src, out)) = &self.encoder else { return Vec::new() };
         for f in frames {

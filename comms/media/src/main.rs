@@ -22,11 +22,13 @@
 
 use gstreamer as gst;
 use gstreamer::prelude::*;
+#[cfg(target_os = "linux")]
 use std::os::fd::IntoRawFd;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[cfg(not(windows))]
 const NEEDED: &[(&str, &str)] = &[
     ("pulsesrc", "microphone"),
     ("pulsesink", "speakers"),
@@ -38,7 +40,37 @@ const NEEDED: &[(&str, &str)] = &[
     ("vp8enc", "video encoding (software)"),
     ("vp8dec", "video decoding"),
     ("jpegenc", "video preview in the Comms page"),
+    ("volume", "speaker volume"),
+    ("audiomixer", "mixing everyone's voices"),
+    ("appsrc", "call audio and video in"),
+    ("appsink", "call audio and video out"),
+    ("videoconvert", "video conversion"),
+    ("videoscale", "video scaling"),
+    ("videorate", "video frame rate"),
+    ("jpegdec", "camera pictures (MJPEG)"),
     ("level", "speaking indicator"),
+];
+#[cfg(windows)]
+const NEEDED: &[(&str, &str)] = &[
+    ("wasapi2src", "microphone"),
+    ("wasapi2sink", "speakers"),
+    ("webrtcdsp", "echo cancellation, noise suppression"),
+    ("webrtcechoprobe", "echo reference for the canceller"),
+    ("opusenc", "voice encoding"),
+    ("opusdec", "voice decoding"),
+    ("d3d11screencapturesrc", "screen capture"),
+    ("mfvideosrc", "camera"),
+    ("vp8enc", "video encoding (software)"),
+    ("vp8dec", "video decoding"),
+    ("jpegenc", "video pictures in the Comms page"),
+    ("volume", "speaker volume"),
+    ("audiomixer", "mixing everyone's voices"),
+    ("appsrc", "call audio and video in"),
+    ("appsink", "call audio and video out"),
+    ("videoconvert", "video conversion"),
+    ("videoscale", "video scaling"),
+    ("videorate", "video frame rate"),
+    ("jpegdec", "camera pictures (MJPEG)"),
 ];
 const OPTIONAL: &[(&str, &str)] = &[("vah264enc", "hardware H.264 encoding (VA-API)"), ("vaav1enc", "hardware AV1 encoding (VA-API)"), ("dav1ddec", "AV1 decoding")];
 
@@ -94,7 +126,11 @@ fn check() -> Result<(), String> {
     println!("  Opus + noise suppression: 10 s of audio processed in {:.0} ms ({:.0}x real time)", took.as_secs_f64() * 1000.0, 10.0 / took.as_secs_f64());
 
     // The microphone's level for two seconds: proves capture works in this sandbox. Nothing is kept.
-    let p = pipeline("pulsesrc ! audioconvert ! level interval=200000000 post-messages=true ! fakesink sync=false")?;
+    #[cfg(not(windows))]
+    let mic = "pulsesrc";
+    #[cfg(windows)]
+    let mic = "wasapi2src";
+    let p = pipeline(&format!("{mic} ! audioconvert ! level interval=200000000 post-messages=true ! fakesink sync=false"))?;
     let mut peak = f64::MIN;
     let res = run(&p, Duration::from_secs(2), |s| {
         if s.name() == "level" {
@@ -119,6 +155,7 @@ fn check() -> Result<(), String> {
 }
 
 /// A device name is passed to GStreamer inside quotes, so it may only contain safe characters.
+#[cfg(target_os = "linux")]
 fn device_arg(name: Option<&String>) -> Result<String, String> {
     match name {
         None => Ok(String::new()),
@@ -127,30 +164,15 @@ fn device_arg(name: Option<&String>) -> Result<String, String> {
     }
 }
 
-/// Microphones and speakers PulseAudio/PipeWire offers inside this sandbox.
+/// Microphones and speakers the system offers, with the names to choose them by.
 fn devices() -> Result<(), String> {
-    let monitor = gst::DeviceMonitor::new();
-    monitor.add_filter(Some("Audio/Source"), None);
-    monitor.add_filter(Some("Audio/Sink"), None);
-    monitor.start().map_err(|e| format!("can't list devices: {e}"))?;
-    let mut list: Vec<(String, String, String)> = monitor
-        .devices()
-        .iter()
-        .map(|d| {
-            let kind = if d.has_classes("Audio/Source") { "microphone" } else { "speakers" };
-            let name = d.property_value("internal-name").get::<String>().unwrap_or_default();
-            (kind.to_string(), d.display_name().to_string(), name)
-        })
-        .filter(|(_, _, n)| !n.ends_with(".monitor"))
-        .collect();
-    monitor.stop();
-    list.sort();
-    for (kind, label, name) in list {
-        println!("  {kind:<10} {label}\n             --{} {name}", if kind == "microphone" { "mic" } else { "speakers" });
+    for d in lodestone_comms_media::audio::devices()? {
+        println!("  {:<10} {}\n             --{} {}", d.kind, d.label, if d.kind == "microphone" { "mic" } else { "speakers" }, d.name);
     }
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn loopback(secs: u64, mic: Option<&String>, speakers: Option<&String>) -> Result<(), String> {
     println!("Speak: you'll hear yourself for {secs} s through echo cancellation, noise suppression and Opus.");
     println!("(microphone: {}; speakers: {})", mic.map(String::as_str).unwrap_or("system default"), speakers.map(String::as_str).unwrap_or("system default"));
@@ -235,6 +257,7 @@ fn video(secs: u64, quality: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 async fn camera(secs: u64) -> Result<(), String> {
     use ashpd::desktop::camera::Camera;
     let cam = Camera::new().await.map_err(|e| format!("camera portal: {e}"))?;
@@ -281,6 +304,7 @@ async fn camera(secs: u64) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 async fn screen(secs: u64) -> Result<(), String> {
     use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
     use ashpd::desktop::PersistMode;
@@ -338,10 +362,13 @@ async fn main() {
     let res = match args.first().map(String::as_str).unwrap_or("check") {
         "check" => check(),
         "devices" => devices(),
+        #[cfg(target_os = "linux")]
         "loopback" => loopback(secs(1, 15), flag("--mic"), flag("--speakers")),
         "voice" => voice(secs(1, 15), flag("--mic"), flag("--speakers"), args.iter().any(|a| a == "--open"), args.iter().any(|a| a == "--silent")),
         "video" => video(secs(1, 5), args.get(2).map(String::as_str).unwrap_or("1080p")),
+        #[cfg(target_os = "linux")]
         "camera" => camera(secs(1, 5)).await,
+        #[cfg(target_os = "linux")]
         "screen" => screen(secs(1, 10)).await,
         other => Err(format!("unknown mode {other}: use check, devices, loopback, voice, video, camera or screen")),
     };

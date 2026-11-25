@@ -14,8 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 gstreamer = "0.25"
-ashpd = { version = "0.14", default-features = false, features = ["tokio", "screencast", "camera"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 str0m = "0.25"
 aes-gcm = "0.10"
 hkdf = "0.12"
@@ -28,3 +27,11 @@ serde = { version = "1.0.229", features = ["derive"] }
 lodestone-comms-server = { path = "../server" }
 lodestone-comms-client = { path = "../client" }
 tempfile = "3"
+
+# The desktop's portals (screen sharing, camera): Linux only.
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.14", default-features = false, features = ["tokio", "screencast", "camera"] }
+
+# Listing monitors and windows to share on Windows.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_WindowsAndMessaging"] }

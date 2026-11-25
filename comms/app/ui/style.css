@@ -259,3 +259,24 @@ button.live.on { background: var(--accent); }
 .home-more { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .tips { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.8; }
 .tips b { color: var(--text); }
+
+/* screen picker (Windows) */
+.pick-list { display: grid; gap: 4px; max-height: 260px; overflow-y: auto; }
+.pick { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 8px; background: var(--bg-3); color: var(--text); margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pick input { width: auto; }
+
+/* call view: big tiles in a grid that fills the space; compact under a screen share */
+.stage-people:not(.strip) { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 640px)); justify-content: center; align-content: center; gap: 12px; }
+.stage-people:not(.strip) .tile { width: auto; height: auto; aspect-ratio: 16 / 9; }
+.stage-people:not(.strip) .tile:not(.has-cam) .av { width: 64px; height: 64px; font-size: 26px; }
+.stage-people.strip .tile { width: 200px; height: 112px; }
+.tile.has-cam .tile-media img { cursor: zoom-in; }
+
+/* The page is exactly the window: one row the window's height, and long content (the welcome page,
+   the call view) scrolls inside its own column instead of growing the page. */
+.layout { grid-template-rows: minmax(0, 1fr); }
+.servers, .channels, .chat, .members, .stage { min-height: 0; }
+html, body { overflow: hidden; }
+.chat > .home-page { flex: 1; min-height: 0; overflow-y: auto; max-width: none; }
+.home-page > * { max-width: 900px; }
+.stage-people { overflow-y: auto; }
