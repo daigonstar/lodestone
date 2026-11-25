@@ -60,7 +60,7 @@ async function loadState() {
     state.sel = first ? { host: first.host, space: first.id, channel: "" } : { host: "", space: "", channel: "" };
   }
   const { sp } = current();
-  if (sp && !sp.channels.some((c) => c.id === state.sel.channel)) state.sel.channel = (sp.channels.find((c) => c.ready) || sp.channels[0] || {}).id || "";
+  if (sp && !sp.channels.some((c) => c.id === state.sel.channel && c.kind !== "voice")) { const text = sp.channels.filter((c) => c.kind !== "voice"); state.sel.channel = (text.find((c) => c.ready) || text[0] || {}).id || ""; }
   render();
 }
 
@@ -81,9 +81,13 @@ function render() {
   }
   const admin = sp.your_role === "owner" || sp.your_role === "admin";
   $("#channels").innerHTML = `<h2><span>${esc(sp.name)}</span><button class="gear" data-act="settings" title="Server settings">⚙</button></h2><div class="host" title="${esc(sp.host)}">${esc(sp.me)} · ${esc(sp.host.replace(/^https?:\/\//, ""))}</div>
-    <div class="chlist">${sp.channels.map((c) => `<button class="ch ${c.id === state.sel.channel ? "on" : ""}" data-channel="${esc(c.id)}"># ${esc(c.name)}${c.ready ? "" : ' <span class="wait">(waiting for keys)</span>'}</button>`).join("")}</div>
+    <div class="chlist">${sp.channels.filter((c) => c.kind !== "voice").map((c) => `<button class="ch ${c.id === state.sel.channel ? "on" : ""}" data-channel="${esc(c.id)}"># ${esc(c.name)}${c.ready ? "" : ' <span class="wait">(waiting for keys)</span>'}</button>`).join("")}
+    ${sp.channels.some((c) => c.kind === "voice") ? '<h4 class="chhead">Voice</h4>' : ""}
+    ${sp.channels.filter((c) => c.kind === "voice").map((c) => `<button class="ch vc" data-voice="${esc(c.id)}" title="${c.ready ? "Join the call" : "Waiting for this device's keys"}">🔊 ${esc(c.name)}${c.ready ? "" : ' <span class="wait">(waiting for keys)</span>'}</button><div class="vc-people" data-vc="${esc(c.id)}"></div>`).join("")}</div>
     <div class="side-actions"><button data-act="invite">Invite people</button>${admin ? '<button class="ghost" data-act="channel">New channel</button>' : ""}</div>
+    <div id="callbar"></div>
     ${meBar()}`;
+  renderVoice();
   renderMembers(sp);
   if (!ch) { $("#chat").innerHTML = ""; return; }
   $("#chat").innerHTML = `<header><h3># ${esc(ch.name)}${ch.topic ? `<span class="topic">${esc(ch.topic)}</span>` : ""}</h3><button class="gear" id="toggle-members" title="Show or hide members">👥</button><span class="lock" title="Only members' devices can read this channel; the host stores ciphertext.">🔒 end-to-end encrypted</span></header>
@@ -238,6 +242,7 @@ $("#status-menu").onclick = (e) => {
   if (b.hasAttribute("data-profile")) return profileDialog();
   if (b.hasAttribute("data-appearance")) return appearanceDialog();
   if (b.hasAttribute("data-devices")) return devicesDialog();
+  if (b.hasAttribute("data-sound")) return soundDialog();
   ask("Status message", `<label>What are you up to? <span class="muted">(up to 80 characters; empty to clear)</span><input name="text" maxlength="80" value="${esc(h.status_text || "")}"></label>`, "Save", (f) => setStatus(h.status || "online", String(f.get("text") || "")));
 };
 // Away by itself after 15 minutes without using Comms, and back when you return (only from Online).
@@ -845,9 +850,11 @@ async function inviteDialog() {
 
 function channelDialog() {
   const { sp } = current();
-  ask("New channel", `<label>Name<input name="name" maxlength="64" required placeholder="raids"></label>`, "Create", async (f) => {
-    const r = await api("/api/channels", { host: sp.host, space: sp.id, name: f.get("name") });
-    state.sel.channel = r.channel;
+  ask("New channel", `<label>Name<input name="name" maxlength="64" required placeholder="raids"></label>
+    <label>Kind<select name="kind"><option value="text">Text: messages, files, reactions</option><option value="voice">Voice: calls (end-to-end encrypted)</option></select></label>`, "Create", async (f) => {
+    const kind = f.get("kind");
+    const r = await api("/api/channels", { host: sp.host, space: sp.id, name: f.get("name"), kind });
+    if (kind !== "voice") state.sel.channel = r.channel;
     await loadState();
   });
 }
@@ -857,6 +864,10 @@ document.addEventListener("click", (e) => {
   if (s) { state.sel = { host: s.dataset.host, space: s.dataset.space, channel: "" }; return loadState(); }
   const c = e.target.closest("[data-channel]");
   if (c) { state.sel.channel = c.dataset.channel; return render(); }
+  const v = e.target.closest("[data-voice]");
+  if (v) return joinVoice(v.dataset.voice);
+  const cb = e.target.closest("[data-call]");
+  if (cb) return callAction(cb.dataset.call);
   if (e.target.closest("#add-server")) return addDialog();
   const a = e.target.closest("[data-act]");
   if (!a) return;
@@ -892,7 +903,143 @@ async function listen() {
   }
 }
 
+// ---------- calls ----------
+// One call at a time. The call's sound runs in the Comms program, not in this page; the page shows who's
+// there and who's speaking, and holds push-to-talk while it has focus.
+const voice = { call: null, audio: null, timer: null, busy: false, ptt: false };
+async function pollVoice() {
+  try {
+    const v = await api("/api/voice");
+    voice.call = v.call; voice.audio = v.audio;
+  } catch { voice.call = null; }
+  renderVoice();
+  soundMeter();
+  clearTimeout(voice.timer);
+  // Fast while in a call (speaking rings) or while the sound settings are open; otherwise not at all.
+  if (voice.call || voice.audio?.testing || $("#sound-dlg")) voice.timer = setTimeout(pollVoice, voice.call ? 250 : 120);
+}
+function renderVoice() {
+  const { sp } = current();
+  const call = voice.call;
+  for (const el of document.querySelectorAll("[data-vc]")) {
+    const id = el.dataset.vc;
+    const ch = sp?.channels.find((c) => c.id === id);
+    const mine = call && call.channel === id && call.host === state.sel.host;
+    const people = mine ? call.participants : (ch?.in_call || []).map((u) => ({ username: u }));
+    el.innerHTML = people.map((p) => `<div class="vc-person ${p.speaking ? "speaking" : ""}">${avatarHTML(p.username)}<span class="grow">${esc(profileOf(p.username).name || p.username)}</span>${p.deafened ? '<span title="Deafened">🔇</span>' : p.muted ? '<span title="Muted" class="muted-mic">🎙</span>' : ""}</div>`).join("");
+    el.previousElementSibling?.classList.toggle("on", !!mine);
+  }
+  const bar = $("#callbar");
+  if (!bar) return;
+  if (!call) { bar.innerHTML = ""; return; }
+  const ch = spaces().find((x) => x.host === call.host)?.channels.find((c) => c.id === call.channel);
+  const trouble = voice.audio?.error;
+  bar.innerHTML = `<div class="callbar">
+    <div class="call-info"><b class="${call.connected ? "ok" : "wait"}">${call.connected ? "Voice connected" : "Connecting…"}</b><small title="${esc(call.host)}">🔊 ${esc(ch?.name || "call")}${trouble ? ` · <span class="bad">${esc(trouble)}</span>` : ""}</small></div>
+    <div class="call-btns">
+      <button type="button" data-call="mute" class="${call.muted ? "active" : ""}" title="${call.muted ? "Unmute" : "Mute"}"><span class="${call.muted ? "muted-mic" : ""}">🎙</span></button>
+      <button type="button" data-call="deafen" class="${call.deafened ? "active" : ""}" title="${call.deafened ? "Undeafen" : "Deafen (hear no one, and mute)"}">${call.deafened ? "🔇" : "🎧"}</button>
+      <button type="button" data-call="sound" title="Sound settings">⚙</button>
+      <button type="button" data-call="leave" class="leave" title="Leave the call">✕</button>
+    </div></div>`;
+}
+async function joinVoice(id) {
+  const { sp } = current();
+  const ch = sp?.channels.find((c) => c.id === id);
+  if (!ch) return;
+  if (!ch.ready) return toast("This device doesn't have this channel's keys yet; it happens when another member is online.", true);
+  if (voice.busy || (voice.call && voice.call.channel === id)) return;
+  voice.busy = true;
+  toast(`Joining ${ch.name}…`);
+  try {
+    const v = await api("/api/voice/join", { host: sp.host, channel: id });
+    voice.call = v.call; voice.audio = v.audio;
+    toast(`In ${ch.name}. Calls are end-to-end encrypted.`);
+  } catch (e) { toast(e.message, true); }
+  voice.busy = false;
+  pollVoice();
+}
+async function callAction(act) {
+  const c = voice.call;
+  if (act === "sound") return soundDialog();
+  if (!c) return;
+  try {
+    if (act === "leave") { await api("/api/voice/leave", {}); voice.call = null; }
+    else if (act === "mute") await api("/api/voice/state", { muted: c.deafened ? false : !c.muted, deafened: false });
+    else if (act === "deafen") await api("/api/voice/state", { muted: !c.deafened, deafened: !c.deafened });
+  } catch (e) { toast(e.message, true); }
+  pollVoice();
+}
+
+// Push-to-talk: hold the key while this page has focus. (A key that works everywhere needs the
+// desktop's global-shortcuts portal; that comes later.)
+const PTT_KEY = "`";
+function setPtt(on) {
+  if (voice.ptt === on) return;
+  voice.ptt = on;
+  api("/api/voice/ptt", { on }).catch(() => {});
+}
+addEventListener("keydown", (e) => {
+  if (e.key !== PTT_KEY || !voice.call || voice.audio?.settings?.mode !== "ptt") return;
+  if (e.target.closest?.("textarea, input")) return;
+  e.preventDefault();
+  setPtt(true);
+});
+addEventListener("keyup", (e) => { if (e.key === PTT_KEY) setPtt(false); });
+addEventListener("blur", () => setPtt(false));
+
+async function soundDialog() {
+  let list = [];
+  try { list = (await api("/api/voice/devices")).devices; } catch (e) { toast(e.message, true); }
+  try { voice.audio = (await api("/api/voice")).audio; } catch {}
+  const s = voice.audio?.settings || { mic: "", speakers: "", mode: "voice", threshold: -45 };
+  const opts = (kind, cur) => `<option value="">System default</option>` + list.filter((d) => d.kind === kind).map((d) => `<option value="${esc(d.name)}" ${d.name === cur ? "selected" : ""}>${esc(d.label)}</option>`).join("");
+  ask("Sound", `<div id="sound-dlg">
+    <label>Microphone<select name="mic">${opts("microphone", s.mic)}</select></label>
+    <label>Speakers<select name="speakers">${opts("speakers", s.speakers)}</select></label>
+    <label>Send my voice<select name="mode">
+      <option value="voice" ${s.mode === "voice" ? "selected" : ""}>When I talk (voice activity)</option>
+      <option value="ptt" ${s.mode === "ptt" ? "selected" : ""}>While I hold \` (push to talk, while Comms has focus)</option>
+      <option value="open" ${s.mode === "open" ? "selected" : ""}>All the time</option></select></label>
+    <label>Sensitivity: send when louder than <b id="thr-val">${Math.round(s.threshold)} dB</b><input type="range" name="threshold" min="-80" max="-10" step="1" value="${s.threshold}"></label>
+    <div class="meter" title="Your microphone's level after noise suppression"><div class="meter-fill" id="meter-fill"></div><div class="meter-mark" id="meter-mark"></div></div>
+    <div class="row"><button type="button" class="ghost" id="mic-test">Test microphone</button><small class="muted">Talk, and set the marker just below your voice.</small></div>
+    <p class="muted small">Device changes apply from your next call. Noise suppression and echo cancellation are always on. Nothing is recorded.</p>
+  </div>`, "Done", async () => true);
+  const form = $("#dlg-form");
+  const save = async () => {
+    const f = new FormData(form);
+    const body = { mic: f.get("mic"), speakers: f.get("speakers"), mode: f.get("mode"), threshold: Number(f.get("threshold")) };
+    $("#thr-val").textContent = `${body.threshold} dB`;
+    try { await api("/api/voice/settings", body); if (voice.audio) voice.audio.settings = body; } catch (e) { toast(e.message, true); }
+    soundMeter();
+  };
+  form.querySelectorAll("#sound-dlg select").forEach((el) => (el.onchange = save));
+  form.querySelector("[name=threshold]").oninput = save;
+  $("#mic-test").onclick = async () => {
+    if (voice.call) return toast("You're in a call: the meter already shows your microphone.");
+    try { await api("/api/voice/test", { on: !voice.audio?.testing }); } catch (e) { toast(e.message, true); }
+    pollVoice();
+  };
+  $("#dlg").addEventListener("close", () => { if (voice.audio?.testing) api("/api/voice/test", { on: false }).catch(() => {}); setTimeout(pollVoice, 300); }, { once: true });
+  pollVoice();
+}
+function soundMeter() {
+  const fill = $("#meter-fill");
+  if (!fill) return;
+  const pct = (db) => Math.max(0, Math.min(100, ((db + 80) / 80) * 100));
+  const live = voice.call || voice.audio?.testing;
+  const db = live ? (voice.audio?.mic_db ?? -100) : -100;
+  const thr = Number($("#dlg-form [name=threshold]")?.value ?? -45);
+  fill.style.width = pct(db) + "%";
+  fill.classList.toggle("over", db >= thr);
+  $("#meter-mark").style.left = pct(thr) + "%";
+  const b = $("#mic-test");
+  if (b) b.textContent = voice.audio?.testing ? "Stop test" : "Test microphone";
+}
+
 loadPrefs().then(loadState);
+pollVoice();
 listen();
 // Other people's changes (names, channels, roles) show up within a few seconds.
 setInterval(() => { if (!document.querySelector("dialog[open]")) loadState(); }, 15000);

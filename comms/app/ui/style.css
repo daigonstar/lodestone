@@ -160,3 +160,35 @@ select { font: inherit; color: var(--text); background: var(--bg-3); border: 1px
 /* pairing */
 .pair-code { background: var(--bg-3); border-radius: 10px; padding: 10px 12px; margin-top: 10px; }
 code.big { font-size: 18px; letter-spacing: 1px; padding: 2px 6px; background: var(--bg); border-radius: 6px; }
+
+/* calls */
+select { font: inherit; color: var(--text); background: var(--bg-3); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; width: 100%; }
+.chhead { margin: 14px 10px 4px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.ch.vc.on { color: var(--text); }
+.vc-people { padding: 0 0 2px 22px; }
+.vc-person { display: flex; align-items: center; gap: 6px; padding: 3px 6px; font-size: 13px; color: var(--muted); }
+.vc-person .av-wrap { margin-right: 0; }
+.vc-person .av { width: 22px; height: 22px; font-size: 11px; transition: box-shadow .1s; }
+.vc-person.speaking { color: var(--text); }
+.vc-person.speaking .av { box-shadow: 0 0 0 2px #3ddc97; }
+.muted-mic { position: relative; display: inline-block; }
+.muted-mic::after { content: ""; position: absolute; left: -2px; right: -2px; top: 50%; height: 2px; background: var(--danger); transform: rotate(-45deg); }
+.callbar { margin: 0 8px 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-3); display: grid; gap: 6px; }
+.call-info { display: flex; flex-direction: column; min-width: 0; }
+.call-info b { font-size: 13px; }
+.call-info b.ok { color: #3ddc97; }
+.call-info b.wait { color: #f5b14a; }
+.call-info small { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.call-info .bad { color: var(--danger); }
+.call-btns { display: flex; gap: 6px; }
+.call-btns button { flex: 1; padding: 6px 0; background: var(--bg-2); }
+.call-btns button.active { background: color-mix(in srgb, var(--danger) 25%, var(--bg-2)); }
+.call-btns button.leave { background: color-mix(in srgb, var(--danger) 70%, var(--bg-2)); color: #fff; }
+.meter { position: relative; height: 10px; border-radius: 5px; background: var(--bg-3); border: 1px solid var(--line); margin: 12px 0 10px; overflow: hidden; }
+.meter-fill { height: 100%; width: 0; background: var(--muted); transition: width .1s; }
+.meter-fill.over { background: #3ddc97; }
+.meter-mark { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--accent); }
+.small { font-size: 12px; }
+input[type=range] { padding: 0; background: none; border: 0; accent-color: var(--accent); }
+input[type=range]:focus { outline: none; }
+#mic-test { white-space: nowrap; flex: none; }
