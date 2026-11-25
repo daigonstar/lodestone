@@ -127,6 +127,11 @@ named, and are listed so nothing is a surprise:
 - **MangoHud:** `~/.config/MangoHud/MangoHud.conf` (the first save keeps your original as
   `MangoHud.conf.bak`), and two Vulkan layer files in `~/.local/share/vulkan/implicit_layer.d/` if
   Lodestone sets MangoHud up itself.
+- **Emulators (when you press Install in a system's library):** the emulator's official Flatpak from
+  Flathub, installed for your user (`flatpak install --user`, adding the Flathub remote for your user if
+  it's missing), and for RetroArch the chosen core from libretro's official build server into
+  `~/.var/app/org.libretro.RetroArch/config/retroarch/cores/`, checked against libretro's published CRC32.
+  Your emulator choice per system is saved in `settings.json`. Lodestone never downloads games or BIOS files.
 - **Minecraft (ATLauncher):** the instance's `instance.json` when you add or remove mods (backed up as
   `instance.json.lodestone-backup` first).
 - **Wine prefixes:** Battle.net, EA, Ubisoft and games run in prefixes under

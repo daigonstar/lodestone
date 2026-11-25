@@ -75,5 +75,9 @@ console.curseforge.com                        # link to get a CurseForge key (op
 api.github.com                                # newest release of umu-launcher, legendary, gogdl and MangoHud
 github.com                                    # links to MangoHud's documentation (opened in your browser)
 
+# --- Emulation (only when you install an emulator or core from a system's library) ---
+buildbot.libretro.com                         # official RetroArch cores (checked against libretro's CRC32 list)
+dl.flathub.org                                # Flathub's repository file, passed to flatpak (flatpak contacts it, not Lodestone)
+
 # --- Inside Lodestone only ---
 lodestone.localhost                           # internal address for sign-in hand-offs; never leaves the app

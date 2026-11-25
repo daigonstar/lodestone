@@ -412,8 +412,45 @@ const CLIENTS = {
     owned: "Games you install in Ubisoft Connect show up below after a Rescan. Play starts them through Ubisoft Connect, which signs you in and keeps them updated. Sign in to Ubisoft under 👤 Accounts to also see the games you own but haven't installed; Install opens Ubisoft Connect on the game.",
     tip: "Tip: in Ubisoft Connect's settings, turn off the in-game overlay if a game has trouble starting." },
 };
+// A system's library: which emulator plays it, and one-click installs for the ones that aren't there.
+function renderSystemPanel(el) {
+  const sys = (state.systems || []).find((s) => s.id === state.view.slice(4));
+  if (!sys || !sys.options.length) return el.classList.add("hidden");
+  el.classList.remove("hidden");
+  const cur = sys.options.find((o) => o.index === sys.chosen) || sys.options[0];
+  const busy = state.emuBusy === sys.id;
+  const status = cur.installed
+    ? `Your ${sys.games} ${esc(sys.name)} games play with <b>${esc(cur.label)}</b>.`
+    : cur.can_install
+      ? `<b>${esc(cur.label)}</b> isn't installed yet. Install sets it up from Flathub${cur.core ? ", with its core from libretro" : ""}, in the background.`
+      : `<b>${esc(cur.label)}</b> isn't installed. Install ${esc(cur.emulator)} yourself, or pick another emulator.`;
+  el.innerHTML = `<div><h2>${esc(sys.name)}</h2><p class="muted">${status}</p></div>
+    <div class="row-btns emu-pick">
+      <label class="emu-label">Plays with
+        <select id="emu-choice">${sys.options.map((o) => `<option value="${o.index}" ${o.index === cur.index ? "selected" : ""}>${esc(o.label)}${o.installed ? "" : " (not installed)"}</option>`).join("")}</select>
+      </label>
+      ${!cur.installed && cur.can_install ? `<button class="play" id="emu-install" ${busy ? "disabled" : ""}>${busy ? "Installing…" : "Install"}</button>` : ""}
+    </div>`;
+  $("#emu-choice").onchange = async (e) => {
+    try { await invoke("emu_set_choice", { system: sys.id, index: Number(e.target.value) }); await load(true); } catch (err) { toast(String(err), true); }
+  };
+  const ib = $("#emu-install");
+  if (ib) ib.onclick = async () => {
+    state.emuBusy = sys.id;
+    renderSystemPanel(el);
+    try {
+      const how = await invoke("emu_install", { system: sys.id, index: cur.index });
+      if (how === "installing") { toast(`Installing ${cur.emulator} in the background. Follow it in Downloads.`); pollDownloads(); }
+      else { toast(how === "done" ? `${cur.label} is ready` : `${cur.label} is already installed`); await load(true); }
+    } catch (err) { toast(String(err), true); }
+    state.emuBusy = null;
+    renderSystemPanel(el);
+  };
+}
+
 function renderSetup() {
   const el = $("#setup");
+  if (state.view.startsWith("sys:")) return renderSystemPanel(el);
   const app = (state.winapps || []).find((a) => a.id === WINAPP_FOR[state.view]);
   if (!app || (app.installed && app.id === "gw2")) return el.classList.add("hidden");
   el.classList.remove("hidden");

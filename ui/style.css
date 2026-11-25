@@ -180,6 +180,9 @@ a { color: var(--accent-2); }
 
 /* Minecraft hub */
 .mc { padding: 18px 24px 80px; }
+.emu-pick { align-items: center; gap: 10px; }
+.emu-label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+#emu-choice { background: var(--bg-3); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: var(--text); max-width: 320px; }
 .mc-dev { margin-bottom: 12px; padding: 10px 14px; border-radius: 10px; border: 1px solid #f5a52455; background: #f5a5241a; color: var(--text); font-size: 13px; }
 .mc-dev b { color: #f5b14a; }
 .mc-head { display: flex; align-items: center; gap: 20px; padding: 22px; border-radius: 16px; border: 1px solid var(--line);

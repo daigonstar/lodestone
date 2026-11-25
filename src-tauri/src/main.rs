@@ -1227,6 +1227,20 @@ fn emu_systems() -> Vec<stores::emulation::System> {
     stores::emulation::systems()
 }
 
+/// Choose how a system's games are played (the index of one of its emulator options).
+#[tauri::command]
+fn emu_set_choice(system: String, index: usize) -> Result<(), String> {
+    let mut s = settings::load();
+    s.emu_choice.insert(system, index);
+    settings::save(&s)
+}
+
+/// Install what a system's chosen emulator needs ("installing", "done" or "already").
+#[tauri::command]
+async fn emu_install(system: String, index: usize) -> Result<&'static str, String> {
+    stores::emulation::install(&system, index).await
+}
+
 /// Lodestone's version (from Cargo.toml), shown in the sidebar and Settings.
 #[tauri::command]
 fn app_version() -> &'static str {
@@ -1346,6 +1360,8 @@ fn main() {
             proton_info,
             app_version,
             emu_systems,
+            emu_set_choice,
+            emu_install,
             downloads_history,
             downloads_history_clear,
             mangohud_info,

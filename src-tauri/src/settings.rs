@@ -36,6 +36,9 @@ pub struct Settings {
     /// An Emulation folder (with roms/<system> inside) to use besides the ones found automatically.
     #[serde(default)]
     pub emulation_dir: String,
+    /// The emulator chosen per system: system id -> index of its launch command.
+    #[serde(default)]
+    pub emu_choice: std::collections::HashMap<String, usize>,
 }
 
 fn yes() -> bool {

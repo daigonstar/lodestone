@@ -374,12 +374,17 @@ fn flatpak_apps() -> HashSet<String> {
     apps
 }
 
+/// Where the Flatpak RetroArch keeps its cores (and where Lodestone puts the ones it downloads).
+pub fn flatpak_cores_dir() -> PathBuf {
+    home().join(".var/app/org.libretro.RetroArch/config/retroarch/cores")
+}
+
 fn retroarch_cores(flatpak: bool) -> Option<PathBuf> {
     let h = home();
-    let mut c = Vec::new();
     if flatpak {
-        c.push(h.join(".var/app/org.libretro.RetroArch/config/retroarch/cores"));
+        return Some(flatpak_cores_dir());
     }
+    let mut c = Vec::new();
     c.extend([h.join(".config/retroarch/cores"), PathBuf::from("/usr/lib/libretro"), PathBuf::from("/usr/lib64/libretro"), PathBuf::from("/usr/lib/x86_64-linux-gnu/libretro")]);
     c.into_iter().find(|p| p.is_dir())
 }
@@ -464,9 +469,114 @@ fn build_launch(command: &str, rom: &Path, sys_dir: &Path, emus: &HashMap<&'stat
     Some((spec, e.name))
 }
 
+// ---------------- installing emulators and cores ----------------
+
+const CORES_URL: &str = "https://buildbot.libretro.com/nightly/linux/x86_64/latest";
+const FLATHUB_REPO: &str = "https://dl.flathub.org/repo/flathub.flatpakrepo";
+
+/// Install what a system's chosen way of playing needs: the emulator from Flathub (a background job
+/// in Downloads, then its core) or just the RetroArch core. Returns "installing" (watch Downloads),
+/// "done", or "already".
+pub async fn install(system: &str, index: usize) -> Result<&'static str, String> {
+    let sys = systems().into_iter().find(|s| s.id == system).ok_or("Unknown system")?;
+    let opt = sys.options.into_iter().find(|o| o.index == index).ok_or("Unknown emulator choice")?;
+    let def = EMULATORS.iter().find(|e| e.1 == opt.emulator).ok_or("Lodestone can't install this emulator")?;
+    let core = opt.core.clone();
+    if let Some(c) = &core {
+        if !valid_core(c) {
+            return Err(format!("Not a RetroArch core name: {c}"));
+        }
+    }
+    let emus = tauri::async_runtime::spawn_blocking(installed_emulators).await.map_err(|e| e.to_string())?;
+    if !emus.contains_key(def.0) {
+        let app_id = *def.2.first().ok_or_else(|| format!("{} isn't on Flathub; install it yourself", def.1))?;
+        // Flathub for your user (already there on most systems), then the emulator, in the background.
+        let mut add = std::process::Command::new("flatpak");
+        add.args(["remote-add", "--user", "--if-not-exists", "flathub", FLATHUB_REPO]);
+        let _ = crate::host::wrap(add).stdin(std::process::Stdio::null()).output();
+        let spec = LaunchSpec::new("flatpak", &["install", "--user", "-y", "--noninteractive", "flathub", app_id]);
+        let finish: Option<Box<dyn FnOnce() -> Result<(), String> + Send>> = match core.filter(|_| def.0 == "RETROARCH") {
+            Some(c) => Some(Box::new(move || tauri::async_runtime::block_on(download_core(&c)))),
+            None => None,
+        };
+        crate::downloads::start(&format!("emulation-install:{}", def.0.to_ascii_lowercase()), &format!("Installing {}", def.1), &spec, finish)?;
+        return Ok("installing");
+    }
+    match core {
+        Some(c) if !emus[def.0].cores.as_ref().is_some_and(|d| d.join(&c).is_file()) => {
+            if emus[def.0].program != "flatpak" {
+                return Err(format!("Install the {} core from RetroArch's own menu (Online Updater → Core Downloader).", core_label(&c)));
+            }
+            download_core(&c).await?;
+            Ok("done")
+        }
+        _ => Ok("already"),
+    }
+}
+
+/// Download a RetroArch core from libretro's official build server into the Flatpak RetroArch's
+/// cores folder, checked against the CRC32 libretro publishes for the core.
+pub async fn download_core(core: &str) -> Result<(), String> {
+    download_core_to(core, &flatpak_cores_dir()).await
+}
+
+async fn download_core_to(core: &str, dir: &Path) -> Result<(), String> {
+    if !valid_core(core) {
+        return Err(format!("Not a RetroArch core name: {core}"));
+    }
+    let zip_name = format!("{core}.zip");
+    let index = crate::net::client().get(format!("{CORES_URL}/.index-extended")).send().await.map_err(crate::net::err)?.error_for_status().map_err(crate::net::err)?.text().await.map_err(crate::net::err)?;
+    let want = core_crc(&index, &zip_name).ok_or_else(|| format!("libretro has no {} core for Linux", core_label(core)))?;
+    let bytes = crate::net::client().get(format!("{CORES_URL}/{zip_name}")).send().await.map_err(crate::net::err)?.error_for_status().map_err(crate::net::err)?.bytes().await.map_err(crate::net::err)?;
+    // libretro's CRC32 is for the core itself (the file inside the zip), which is what gets run.
+    let so = unzip_one(&bytes, core)?;
+    if crc32fast::hash(&so) != want {
+        return Err(format!("The {} core download didn't match libretro's checksum, so it wasn't installed", core_label(core)));
+    }
+    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let tmp = dir.join(format!("{core}.part"));
+    fs::write(&tmp, so).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, dir.join(core)).map_err(|e| e.to_string())
+}
+
+/// The CRC32 libretro lists for a core zip in .index-extended ("<date> <crc32 hex> <file>" per line). It's
+/// the CRC32 of the core inside the zip.
+fn core_crc(index: &str, file: &str) -> Option<u32> {
+    index.lines().find_map(|l| {
+        let mut w = l.split_whitespace();
+        let (_, crc, name) = (w.next()?, w.next()?, w.next()?);
+        (name == file).then(|| u32::from_str_radix(crc, 16).ok())?
+    })
+}
+
+/// The one file named `name` from a zip (at most 512 MB).
+fn unzip_one(bytes: &[u8], name: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
+    let mut f = z.by_name(name).map_err(|_| format!("{name} isn't in the download"))?;
+    let mut out = Vec::new();
+    f.by_ref().take(512 << 20).read_to_end(&mut out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 // ---------------- the library ----------------
 
-/// One system with games, for the sidebar.
+/// One way to play a system: a launch command from its systeminfo (or Lodestone's table).
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct EmuOption {
+    /// Position in the system's launch commands (what the choice is saved as).
+    pub index: usize,
+    /// "RetroArch · Snes9x", "DuckStation"
+    pub label: String,
+    pub emulator: String,
+    /// RetroArch core file ("snes9x_libretro.so"), when it's a RetroArch core.
+    pub core: Option<String>,
+    pub installed: bool,
+    /// Lodestone can install what's missing (a Flathub emulator, a core from libretro).
+    pub can_install: bool,
+}
+
+/// One system with games, for the sidebar and its library.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct System {
     pub id: String,
@@ -474,6 +584,68 @@ pub struct System {
     pub games: usize,
     /// Emulators installed for it (display names), and whether any can play it.
     pub emulators: Vec<String>,
+    /// Every way to play it, and the one used (your choice, or else the first installed).
+    pub options: Vec<EmuOption>,
+    pub chosen: Option<usize>,
+}
+
+/// A RetroArch core name Lodestone will download and pass on: "snes9x_libretro.so" style only.
+pub fn valid_core(core: &str) -> bool {
+    core.strip_suffix("_libretro.so").is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
+}
+
+/// "snes9x_libretro.so" -> "Snes9x", "mupen64plus_next_libretro.so" -> "Mupen64Plus Next"
+fn core_label(core: &str) -> String {
+    let n = core.trim_end_matches("_libretro.so");
+    let known = [("snes9x", "Snes9x"), ("mgba", "mGBA"), ("gambatte", "Gambatte"), ("genesis_plus_gx", "Genesis Plus GX"), ("picodrive", "PicoDrive"), ("mupen64plus_next", "Mupen64Plus-Next"), ("parallel_n64", "ParaLLEl N64"), ("swanstation", "SwanStation"), ("pcsx_rearmed", "PCSX ReARMed"), ("mednafen_psx_hw", "Beetle PSX HW"), ("mednafen_psx", "Beetle PSX"), ("bsnes", "bsnes"), ("mesen", "Mesen"), ("nestopia", "Nestopia"), ("fceumm", "FCEUmm"), ("flycast", "Flycast"), ("dolphin", "Dolphin"), ("melondsds", "melonDS DS"), ("melonds", "melonDS"), ("desmume", "DeSmuME"), ("ppsspp", "PPSSPP"), ("mame", "MAME"), ("fbneo", "FinalBurn Neo"), ("vba_next", "VBA Next"), ("vbam", "VBA-M")];
+    known.iter().find(|k| k.0 == n).map(|k| k.1.to_string()).unwrap_or_else(|| n.split('_').map(|w| { let mut c = w.chars(); c.next().map(|f| f.to_uppercase().chain(c).collect::<String>()).unwrap_or_default() }).collect::<Vec<_>>().join(" "))
+}
+
+/// What a launch command needs: (emulator key, RetroArch core).
+fn command_needs(command: &str) -> Option<(String, Option<String>)> {
+    let key = command.split_whitespace().find_map(|w| w.strip_prefix("%EMULATOR_")?.strip_suffix('%').map(String::from))?;
+    let core = command.split_whitespace().find_map(|w| w.strip_prefix("%CORE_RETROARCH%/").map(String::from));
+    Some((key, core))
+}
+
+fn options_for(info: &SystemInfo, emus: &HashMap<&'static str, Emulator>) -> Vec<EmuOption> {
+    info.commands
+        .iter()
+        .enumerate()
+        .filter_map(|(index, c)| {
+            if c.contains("%INJECT%") || c.contains("%EMULATOR_OS-SHELL%") {
+                return None;
+            }
+            let (key, core) = command_needs(c)?;
+            let def = EMULATORS.iter().find(|e| e.0 == key)?;
+            let emu = emus.get(def.0);
+            let core_ok = match (&core, emu.and_then(|e| e.cores.as_ref())) {
+                (None, _) => true,
+                (Some(c), Some(dir)) => dir.join(c).is_file(),
+                (Some(_), None) => false,
+            };
+            let label = match &core {
+                Some(c) => format!("{} · {}", def.1, core_label(c)),
+                None => def.1.to_string(),
+            };
+            let flatpak = !def.2.is_empty();
+            Some(EmuOption {
+                index,
+                label,
+                emulator: def.1.to_string(),
+                installed: emu.is_some() && core_ok,
+                // RetroArch cores come from libretro's server, so only for the Flatpak or a missing RetroArch.
+                can_install: (emu.is_none() && flatpak) || (emu.is_some() && !core_ok && core.as_deref().is_some_and(valid_core) && emu.is_some_and(|e| e.program == "flatpak")),
+                core,
+            })
+        })
+        .collect()
+}
+
+/// Your saved choice for a system, if it's still one of its options.
+fn chosen(system: &str, options: &[EmuOption]) -> Option<usize> {
+    let saved = crate::settings::load().emu_choice.get(system).copied();
+    saved.filter(|i| options.iter().any(|o| o.index == *i)).or_else(|| options.iter().find(|o| o.installed).map(|o| o.index))
 }
 
 static SYSTEMS_SEEN: Mutex<Vec<System>> = Mutex::new(Vec::new());
@@ -500,6 +672,10 @@ pub fn scan() -> Vec<Game> {
             let info = fs::read_to_string(dir.join("systeminfo.txt")).ok().and_then(|t| parse_systeminfo(&t)).or_else(|| builtin(&folder));
             let Some(info) = info.filter(|i| !i.exts.is_empty()) else { continue };
             let names = gamelist(&dir);
+            let options = options_for(&info, &emus);
+            let pick = chosen(&info.id, &options);
+            // The chosen way first, then the others as fallbacks.
+            let ordered: Vec<&String> = pick.and_then(|i| info.commands.get(i)).into_iter().chain(info.commands.iter().enumerate().filter(|(i, _)| Some(*i) != pick).map(|(_, c)| c)).collect();
             for rom in scan_system(&dir, &info.exts) {
                 // The same ROM in two copies of an Emulation folder (a backup, RetroDECK and EmuDeck).
                 if !seen.insert((info.id.clone(), rom.rel.clone(), rom.size)) {
@@ -510,7 +686,7 @@ pub fn scan() -> Vec<Game> {
                 let listed = names.get(&rom.rel);
                 let title = listed.map(|l| l.0.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| clean_title(&file, ext));
                 let cover = listed.and_then(|l| l.1.clone()).or_else(|| cover_for(&media, &info.id, &rom));
-                let launch = info.commands.iter().find_map(|c| build_launch(c, &rom.path, &dir, &emus));
+                let launch = ordered.iter().find_map(|c| build_launch(c, &rom.path, &dir, &emus));
                 let no_emulator = launch.is_none();
                 let via = match &launch {
                     Some((_, emu)) => format!("{} · {emu}", info.name),
@@ -530,7 +706,7 @@ pub fn scan() -> Vec<Game> {
                     needs_emulator: no_emulator,
                     ..Default::default()
                 });
-                let s = by_system.entry(info.id.clone()).or_insert_with(|| System { id: info.id.clone(), name: info.name.clone(), games: 0, emulators: vec![] });
+                let s = by_system.entry(info.id.clone()).or_insert_with(|| System { id: info.id.clone(), name: info.name.clone(), games: 0, emulators: vec![], options: options.clone(), chosen: pick });
                 s.games += 1;
             }
             if let Some(s) = by_system.get_mut(&info.id) {
@@ -555,6 +731,33 @@ pub fn scan() -> Vec<Game> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checks_core_names_and_libretro_checksums() {
+        assert!(valid_core("snes9x_libretro.so") && valid_core("mupen64plus_next_libretro.so"));
+        for bad in ["../x_libretro.so", "snes9x.so", "_libretro.so", "Snes9x_libretro.so", "a/b_libretro.so"] {
+            assert!(!valid_core(bad), "{bad}");
+        }
+        let index = "2026-11-24 5474b5a7 mgba_libretro.so.zip\n2026-11-24 c2b3ee5d snes9x_libretro.so.zip\n";
+        assert_eq!(core_crc(index, "snes9x_libretro.so.zip"), Some(0xc2b3ee5d));
+        assert_eq!(core_crc(index, "bsnes_libretro.so.zip"), None);
+        assert_eq!(core_label("mupen64plus_next_libretro.so"), "Mupen64Plus-Next");
+        assert_eq!(core_label("beetle_new_thing_libretro.so"), "Beetle New Thing");
+    }
+
+    #[test]
+    fn unzips_one_file() {
+        use std::io::Write;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut w = zip::ZipWriter::new(&mut buf);
+            w.start_file("snes9x_libretro.so", zip::write::SimpleFileOptions::default()).unwrap();
+            w.write_all(b"ELF...").unwrap();
+            w.finish().unwrap();
+        }
+        assert_eq!(unzip_one(buf.get_ref(), "snes9x_libretro.so").unwrap(), b"ELF...");
+        assert!(unzip_one(buf.get_ref(), "other_libretro.so").is_err());
+    }
 
     #[test]
     fn reads_emudecks_systeminfo() {
@@ -625,6 +828,19 @@ mod tests {
         assert_eq!(g["A.nsp"].0, "Alpha & Omega");
         assert!(g["A.nsp"].1.is_some());
         assert!(g["B.nsp"].1.is_none());
+        let _ = fs::remove_dir_all(d);
+    }
+
+    /// `cargo test live_core_download -- --ignored --nocapture`: a real core into a temporary folder.
+    #[test]
+    #[ignore]
+    fn live_core_download() {
+        let d = std::env::temp_dir().join(format!("lodestone-core-{}", std::process::id()));
+        tauri::async_runtime::block_on(download_core_to("snes9x_libretro.so", &d)).unwrap();
+        let f = d.join("snes9x_libretro.so");
+        let head = fs::read(&f).unwrap();
+        println!("{} bytes, ELF: {}", head.len(), head.starts_with(b"\x7fELF"));
+        assert!(head.starts_with(b"\x7fELF"));
         let _ = fs::remove_dir_all(d);
     }
 

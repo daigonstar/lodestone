@@ -142,6 +142,14 @@ fn stats_of(tail: &str) -> Stats {
         }
     }
     s.last = tail.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
+    // Other tools (flatpak install): the last "NN%" in the output, which redraws in place with \r.
+    if s.pct == 0.0 {
+        let line = s.last.rsplit('\r').find(|p| p.contains('%')).unwrap_or("");
+        if let Some(n) = line.split('%').next().and_then(|b| b.rsplit(|c: char| !c.is_ascii_digit() && c != '.').next()).and_then(|n| n.parse::<f32>().ok()) {
+            s.pct = n.min(100.0);
+        }
+        s.last = s.last.rsplit('\r').find(|p| !p.trim().is_empty()).unwrap_or("").trim().to_string();
+    }
     s
 }
 
@@ -240,6 +248,9 @@ pub fn finish(list: &mut [Status]) {
         }
         if s.store.is_empty() {
             s.store = s.game_id.split(':').next().unwrap_or("").to_string();
+            if s.store == "emulation-install" {
+                s.store = "emulation".into();
+            }
         }
         if s.state != "downloading" {
             m.remove(&s.id);
