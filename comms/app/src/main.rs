@@ -6,6 +6,7 @@
 
 mod bridge;
 mod hosts;
+mod voice;
 mod web;
 
 use std::sync::Arc;
@@ -18,6 +19,7 @@ pub struct App {
     /// "127.0.0.1:<port>": requests with any other Host header are refused (stops DNS-rebinding pages).
     pub authority: String,
     pub events: tokio::sync::broadcast::Sender<String>,
+    pub voice: voice::Voice,
 }
 
 pub type Shared = Arc<App>;
@@ -37,8 +39,11 @@ async fn main() {
     getrandom::getrandom(&mut secret).expect("no system randomness");
     let token = base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, secret);
     let (events, _) = tokio::sync::broadcast::channel(256);
+    let hosts = hosts::Hosts::load(data_dir());
+    let voice = voice::Voice::load(hosts.prefs_file().with_file_name("voice.json"));
     let app: Shared = Arc::new(App {
-        hosts: hosts::Hosts::load(data_dir()),
+        hosts,
+        voice,
         bridge: bridge::Bridge::default(),
         token: token.clone(),
         authority: format!("127.0.0.1:{port}"),

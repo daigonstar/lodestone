@@ -4,3 +4,4 @@
 
 pub mod call;
 pub mod frames;
+pub mod audio;

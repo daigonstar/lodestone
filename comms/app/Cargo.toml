@@ -7,6 +7,7 @@ description = "Lodestone Comms: end-to-end encrypted chat as a Lodestone plug-in
 
 [dependencies]
 lodestone-comms-client = { path = "../client" }
+lodestone-comms-media = { path = "../media" }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-std", "io-util", "net"] }
 serde = { version = "1", features = ["derive"] }

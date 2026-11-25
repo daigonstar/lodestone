@@ -5,6 +5,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY server ./server
 COPY client ./client
 COPY app ./app
+COPY media ./media
 RUN cargo build --release --locked -p lodestone-comms-server
 
 FROM docker.io/library/debian:bookworm-slim

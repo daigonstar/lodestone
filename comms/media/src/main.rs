@@ -8,6 +8,10 @@
 //! - `loopback [seconds] [--mic NAME] [--speakers NAME]`: hear yourself through the full chain (mic ->
 //!   echo cancellation and noise suppression -> Opus -> back to your speakers), with a live level meter.
 //!   Without --mic/--speakers it uses your system's defaults. Use headphones to judge it.
+//! - `voice [seconds] [--mic NAME] [--speakers NAME] [--open] [--silent]`: the real call sound code
+//!   (voice gate, Opus, jitter buffer, mixing, echo cancellation) with your audio played straight back
+//!   to you, as one other person in a call would hear it. Shows the level and when the gate is open.
+//!   `--open` sends all the time instead of on voice activity; `--silent` plays into nothing.
 //! - `screen [seconds]`: share a screen or window through the desktop's portal (it asks you which),
 //!   then measure capture and VP8 encoding speed. Nothing is saved or sent anywhere.
 
@@ -166,6 +170,38 @@ fn loopback(secs: u64, mic: Option<&String>, speakers: Option<&String>) -> Resul
     Ok(())
 }
 
+fn voice(secs: u64, mic: Option<&String>, speakers: Option<&String>, open: bool, silent: bool) -> Result<(), String> {
+    use lodestone_comms_media::audio::{Gate, GstAudio, Levels, Options};
+    use lodestone_comms_media::call::Audio;
+    let levels = Arc::new(Levels::default());
+    if open {
+        levels.set_gate(Gate::Open);
+    }
+    let opts = Options { mic: mic.cloned(), speakers: speakers.cloned(), silent };
+    let mut a = GstAudio::call(&opts, levels.clone())?;
+    println!("Speak: you'll hear yourself as a caller would ({}), for {secs} s.", if open { "always sending" } else { "voice activity" });
+    let t = Instant::now();
+    let (mut sent, mut last) = (0u64, Instant::now());
+    while t.elapsed() < Duration::from_secs(secs) {
+        for f in a.take_captured() {
+            sent += 1;
+            a.play(0, &f);
+        }
+        if last.elapsed() >= Duration::from_millis(500) {
+            last = Instant::now();
+            let db = levels.mic_db();
+            let bars = (((db + 60.0) / 60.0).clamp(0.0, 1.0) * 30.0) as usize;
+            println!("  mic {:>5.0} dB |{}{}| {}  frames {sent}", db, "#".repeat(bars), " ".repeat(30 - bars), if levels.talking() { "SENDING" } else { "quiet  " });
+        }
+        if let Some(e) = levels.error() {
+            return Err(e);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    println!("Done: {sent} Opus frames went through the call sound path.");
+    Ok(())
+}
+
 async fn screen(secs: u64) -> Result<(), String> {
     use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
     use ashpd::desktop::PersistMode;
@@ -224,8 +260,9 @@ async fn main() {
         "check" => check(),
         "devices" => devices(),
         "loopback" => loopback(secs(1, 15), flag("--mic"), flag("--speakers")),
+        "voice" => voice(secs(1, 15), flag("--mic"), flag("--speakers"), args.iter().any(|a| a == "--open"), args.iter().any(|a| a == "--silent")),
         "screen" => screen(secs(1, 10)).await,
-        other => Err(format!("unknown mode {other}: use check, devices, loopback or screen")),
+        other => Err(format!("unknown mode {other}: use check, devices, loopback, voice or screen")),
     };
     if let Err(e) = res {
         eprintln!("FAILED: {e}");

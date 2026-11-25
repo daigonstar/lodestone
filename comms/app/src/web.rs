@@ -53,6 +53,14 @@ pub fn router(app: Shared) -> Router {
         .route("/api/events", get(events))
         .route("/api/manage", post(manage))
         .route("/api/icon", get(icon).post(set_icon))
+        .route("/api/voice", get(voice_status))
+        .route("/api/voice/join", post(voice_join))
+        .route("/api/voice/leave", post(voice_leave))
+        .route("/api/voice/state", post(voice_state))
+        .route("/api/voice/devices", get(voice_devices))
+        .route("/api/voice/settings", post(voice_settings))
+        .route("/api/voice/test", post(voice_test))
+        .route("/api/voice/ptt", post(voice_ptt))
         .route_layer(middleware::from_fn_with_state(app.clone(), guard));
     Router::new()
         .route("/", get(|| async { page(INDEX, "text/html; charset=utf-8") }))
@@ -229,12 +237,14 @@ struct ChannelReq {
     host: String,
     space: String,
     name: String,
+    #[serde(default)]
+    kind: String,
 }
 
 async fn create_channel(State(app): State<Shared>, Json(r): Json<ChannelReq>) -> R {
     let c = client(&app, &r.host)?;
     ensure_signed_in(&c).await?;
-    let id = c.create_channel(&r.space, &r.name).await?;
+    let id = if r.kind == "voice" { c.create_voice_channel(&r.space, &r.name).await? } else { c.create_channel(&r.space, &r.name).await? };
     let _ = app.events.send(json!({ "type": "state" }).to_string());
     Ok(Json(json!({ "channel": id })))
 }
@@ -676,4 +686,71 @@ mod tests {
         assert_eq!(super::parse_link("https://comms.invalid/"), None);
         assert_eq!(super::parse_link("https://x/join/a/b"), None);
     }
+}
+
+// Calls (see voice.rs).
+
+async fn voice_status(State(app): State<Shared>) -> R {
+    Ok(Json(crate::voice::status(&app).await))
+}
+
+#[derive(Deserialize)]
+struct VoiceJoin {
+    host: String,
+    channel: String,
+    #[serde(default)]
+    muted: bool,
+    #[serde(default)]
+    deafened: bool,
+}
+
+async fn voice_join(State(app): State<Shared>, Json(r): Json<VoiceJoin>) -> R {
+    let c = client(&app, &r.host)?;
+    ensure_signed_in(&c).await?;
+    let v = crate::voice::join(&app, c, &r.host, &r.channel, r.muted, r.deafened).await.map_err(Fail)?;
+    let _ = app.events.send(json!({ "type": "state" }).to_string());
+    Ok(Json(v))
+}
+
+async fn voice_leave(State(app): State<Shared>) -> R {
+    crate::voice::leave(&app).await;
+    let _ = app.events.send(json!({ "type": "state" }).to_string());
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct VoiceState {
+    muted: bool,
+    deafened: bool,
+}
+
+async fn voice_state(State(app): State<Shared>, Json(r): Json<VoiceState>) -> R {
+    crate::voice::set_state(&app, r.muted, r.deafened).await.map_err(Fail)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn voice_devices(State(_app): State<Shared>) -> R {
+    let list = tokio::task::spawn_blocking(crate::voice::devices).await?.map_err(Fail)?;
+    Ok(Json(json!({ "devices": list })))
+}
+
+async fn voice_settings(State(app): State<Shared>, Json(r): Json<crate::voice::Settings>) -> R {
+    app.voice.set_settings(r).map_err(Fail)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct OnOff {
+    on: bool,
+}
+
+async fn voice_test(State(app): State<Shared>, Json(r): Json<OnOff>) -> R {
+    let a = app.clone();
+    tokio::task::spawn_blocking(move || crate::voice::mic_test(&a, r.on)).await?.map_err(Fail)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn voice_ptt(State(app): State<Shared>, Json(r): Json<OnOff>) -> R {
+    crate::voice::ptt(&app, r.on);
+    Ok(Json(json!({ "ok": true })))
 }
