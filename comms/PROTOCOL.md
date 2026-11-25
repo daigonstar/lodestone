@@ -24,6 +24,7 @@ stores ciphertext it can't read.
 | usernames and device public keys | message text, attachments, reactions |
 | space and channel names, and who is a member | any private key |
 | when messages are sent, their size, and by which device | passwords (there are none: devices sign in with their key) |
+| the size of attached files and when they were sent | what's in attached files, their names or types |
 
 The host's logs never contain session tokens or invite codes.
 
@@ -136,6 +137,23 @@ Welcome to the new devices' mailboxes. Devices collect them over the live connec
 - When someone leaves or is removed, the host stops sending them anything at once, and a member's client
   commits a Remove so their keys no longer work for new messages.
 
+## Attachments
+
+A file is encrypted on the sender's device with AES-256-GCM, using a new random 256-bit key and 96-bit
+nonce for each file. The ciphertext goes to the host; the key travels only inside the end-to-end
+encrypted message, so the host can't read the file.
+
+- `POST /v1/channels/{channel}/blobs` (members), the ciphertext as the body: returns `{ id, size }`. At
+  most `COMMS_MAX_FILE_MB` (default 10) per file and `COMMS_SPACE_QUOTA_MB` (default 2048) per server;
+  30 uploads a minute per device.
+- `GET /v1/blobs/{id}` (members of the file's server): the ciphertext, served as an inert download.
+- Files are deleted with their channel or server.
+
+The message that carries a file is an application message with `t: "file"`, the caption as `body`, and
+`file: { id, name, mime, size, key, nonce }`. Receivers decide whether it's an image from the decrypted
+content (PNG, JPEG, GIF, WebP), never from the sender's claim, and a file changed on the host fails to
+decrypt and isn't shown. The host sees each file's size and when it was uploaded.
+
 ## Live connection
 
 `GET /v1/live` upgrades to a WebSocket. The session token goes in the `Sec-WebSocket-Protocol` header as
@@ -155,5 +173,5 @@ Welcome to the new devices' mailboxes. Devices collect them over the live connec
 
 - Voice, video and screen share: the host forwards encrypted media between clients (an SFU) without
   decoding it. Media keys come from the channel's MLS group (the MLS exporter), SFrame-style.
-- Encrypted attachments, reactions, message edits and deletes (as encrypted application messages).
+- Message edits and deletes (as encrypted application messages).
 - Device pairing UI and safety-number checks in the client.

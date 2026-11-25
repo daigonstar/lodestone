@@ -8,10 +8,13 @@
 //! - `COMMS_BIND`: where to listen. Default `0.0.0.0:8080` (put HTTPS in front, see compose.yml).
 //! - `COMMS_DATA`: folder for the database. Default `./data`.
 //! - `COMMS_ADMIN_ONLY_SPACES`: `true` to let only host admins create spaces. Default `false`.
+//! - `COMMS_MAX_FILE_MB`: largest attachment. Default 10.
+//! - `COMMS_SPACE_QUOTA_MB`: attachment space per server. Default 2048.
 
 pub mod api;
 pub mod auth;
 pub mod db;
+pub mod blobs;
 pub mod live;
 pub mod settings;
 pub mod util;
@@ -23,6 +26,12 @@ use std::sync::Arc;
 pub struct Config {
     pub public_url: String,
     pub admin_only_spaces: bool,
+    /// Where encrypted attachments are kept (`<COMMS_DATA>/blobs`).
+    pub blob_dir: std::path::PathBuf,
+    /// Largest attachment, in bytes (`COMMS_MAX_FILE_MB`, default 10).
+    pub max_file: u64,
+    /// Attachment space per server, in bytes (`COMMS_SPACE_QUOTA_MB`, default 2048).
+    pub space_quota: u64,
 }
 
 pub struct App {

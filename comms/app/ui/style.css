@@ -108,3 +108,11 @@ button:disabled { opacity: .4; cursor: default; filter: none; }
 .picker-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; height: 240px; overflow-y: auto; align-content: start; }
 .picker-grid button { font-size: 22px; padding: 4px 0; background: transparent; border-radius: 6px; }
 .picker-grid button:hover { background: var(--bg-3); filter: none; }
+
+/* attachments */
+.pending { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; margin-bottom: 8px; background: var(--bg-3); border-radius: 8px; }
+.attach { margin: 4px 0; white-space: normal; }
+.attach-img { max-width: min(420px, 100%); max-height: 320px; border-radius: 8px; cursor: zoom-in; display: block; background: var(--bg-3); min-height: 40px; min-width: 40px; }
+.attach-file { background: var(--bg-3); border: 1px solid var(--line); }
+.lightbox { position: fixed; inset: 0; z-index: 60; background: #000d; display: grid; place-items: center; cursor: zoom-out; }
+.lightbox img { max-width: 94vw; max-height: 92vh; border-radius: 8px; }

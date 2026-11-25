@@ -1629,6 +1629,7 @@ dependencies = [
 name = "lodestone-comms-client"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "base64 0.22.1",
  "ed25519-dalek",
  "lodestone-comms-server",

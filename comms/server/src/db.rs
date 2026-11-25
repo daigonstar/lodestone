@@ -82,6 +82,14 @@ CREATE TABLE IF NOT EXISTS messages (
     sent_at INTEGER NOT NULL,
     PRIMARY KEY (channel, seq)
 );
+CREATE TABLE IF NOT EXISTS blobs (
+    id TEXT PRIMARY KEY,
+    space TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    channel TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    uploader INTEGER NOT NULL REFERENCES accounts(id),
+    size INTEGER NOT NULL,
+    created INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS welcomes (
     id INTEGER PRIMARY KEY,
     device_key TEXT NOT NULL REFERENCES devices(key) ON DELETE CASCADE,

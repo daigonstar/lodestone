@@ -9,7 +9,7 @@ async fn start_host(dir: &Path) -> (String, String) {
     let url = format!("http://{}", listener.local_addr().unwrap());
     let db = Db::open(&dir.join("host.db")).unwrap();
     let code = db.setup_code_if_new().unwrap().unwrap();
-    let state = app(Config { public_url: url.clone(), admin_only_spaces: false }, db);
+    let state = app(Config { public_url: url.clone(), admin_only_spaces: false, blob_dir: dir.join("blobs"), max_file: 10 << 20, space_quota: 100 << 20 }, db);
     tokio::spawn(serve(listener, state));
     (url, code)
 }
@@ -62,6 +62,29 @@ async fn encrypted_chat_end_to_end() {
     bob.sync().await.unwrap();
     assert_eq!(bob.reactions(&general).unwrap(), vec![(hello_seq, "👍".to_string(), vec!["bob".to_string()])]);
     assert!(alice.react(&general, hello_seq, "not an emoji", true).await.is_err());
+
+    // Attachments: encrypted on Alice's device, readable by Bob, opaque on the host.
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend(b"secret raid map pixels");
+    let sent = alice.send_file(&general, "../../raid map.png", &png, "the plan").await.unwrap();
+    let att = sent.attachment.clone().unwrap();
+    assert_eq!((att["name"].as_str(), att["mime"].as_str()), (Some("raid map.png"), Some("image/png")));
+    assert!(att.get("key").is_none(), "the key isn't handed out with the message");
+    let got = bob.sync().await.unwrap();
+    let file_msg = got.iter().find(|m| m.attachment.is_some()).expect("Bob got the file message");
+    assert_eq!(file_msg.body, "the plan");
+    let (bytes, mime, name) = bob.open_file(&general, file_msg.seq).await.unwrap();
+    assert_eq!((bytes, mime.as_str(), name.as_str()), (png.clone(), "image/png", "raid map.png"));
+    let blob = std::fs::read_dir(tmp.path().join("blobs")).unwrap().flatten().next().unwrap().path();
+    let stored = std::fs::read(&blob).unwrap();
+    assert!(!stored.windows(16).any(|w| w == &png[8..24]), "the host stored the file in the clear");
+    // A file changed on the host is refused, not shown.
+    let mut bad = stored.clone();
+    bad[20] ^= 1;
+    std::fs::write(&blob, &bad).unwrap();
+    std::fs::remove_dir_all(tmp.path().join("bob/files")).unwrap();
+    assert!(bob.open_file(&general, file_msg.seq).await.is_err());
+    std::fs::write(&blob, &stored).unwrap();
 
     // The host only ever stored ciphertext.
     let raw = std::fs::read(tmp.path().join("host.db")).unwrap();

@@ -38,6 +38,15 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 ";
 
+/// Columns added later, added in place to existing databases.
+fn migrate(c: &Connection) -> rusqlite::Result<()> {
+    let has: bool = c.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'attachment'")?.exists([])?;
+    if !has {
+        c.execute_batch("ALTER TABLE messages ADD COLUMN attachment TEXT")?;
+    }
+    Ok(())
+}
+
 /// A message you can read.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Message {
@@ -47,6 +56,9 @@ pub struct Message {
     pub sender_device: String,
     pub body: String,
     pub sent_at: i64,
+    /// An attached file: id, name, mime, size (the key stays in the database, never in this).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<serde_json::Value>,
 }
 
 impl Store {
@@ -60,6 +72,7 @@ impl Store {
         let path = dir.join("comms.db");
         let c = Connection::open(&path)?;
         c.execute_batch(SCHEMA)?;
+        migrate(&c)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -130,8 +143,8 @@ impl Store {
     pub fn add_message(&self, m: &Message) -> rusqlite::Result<()> {
         self.with(|c| {
             c.execute(
-                "INSERT OR IGNORE INTO messages (channel, seq, sender, sender_device, body, sent_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![m.channel, m.seq, m.sender, m.sender_device, m.body, m.sent_at],
+                "INSERT OR IGNORE INTO messages (channel, seq, sender, sender_device, body, sent_at, attachment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![m.channel, m.seq, m.sender, m.sender_device, m.body, m.sent_at, m.attachment.as_ref().map(|a| a.to_string())],
             )
             .map(|_| ())
         })
@@ -163,12 +176,37 @@ impl Store {
         Ok(out)
     }
 
+    /// A message's attachment, with its key (for decrypting it on this device).
+    pub fn attachment(&self, channel: &str, seq: i64) -> Option<serde_json::Value> {
+        self.with(|c| c.query_row("SELECT attachment FROM messages WHERE channel = ?1 AND seq = ?2", params![channel, seq], |r| r.get::<_, Option<String>>(0)).optional())
+            .ok()
+            .flatten()
+            .flatten()
+            .and_then(|a| serde_json::from_str(&a).ok())
+    }
+
     pub fn messages(&self, channel: &str, limit: i64) -> rusqlite::Result<Vec<Message>> {
         self.with(|c| {
             let mut v: Vec<Message> = c
-                .prepare("SELECT channel, seq, sender, sender_device, body, sent_at FROM messages WHERE channel = ?1 ORDER BY seq DESC LIMIT ?2")?
+                .prepare("SELECT channel, seq, sender, sender_device, body, sent_at, attachment FROM messages WHERE channel = ?1 ORDER BY seq DESC LIMIT ?2")?
                 .query_map(params![channel, limit], |r| {
-                    Ok(Message { channel: r.get(0)?, seq: r.get(1)?, sender: r.get(2)?, sender_device: r.get(3)?, body: r.get(4)?, sent_at: r.get(5)? })
+                    let att: Option<String> = r.get(6)?;
+                    Ok(Message {
+                        channel: r.get(0)?,
+                        seq: r.get(1)?,
+                        sender: r.get(2)?,
+                        sender_device: r.get(3)?,
+                        body: r.get(4)?,
+                        sent_at: r.get(5)?,
+                        // Shown without its key.
+                        attachment: att.and_then(|a| serde_json::from_str::<serde_json::Value>(&a).ok()).map(|mut a| {
+                            if let Some(o) = a.as_object_mut() {
+                                o.remove("key");
+                                o.remove("nonce");
+                            }
+                            a
+                        }),
+                    })
                 })?
                 .collect::<Result<_, _>>()?;
             v.reverse();

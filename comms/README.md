@@ -51,6 +51,8 @@ Without containers (for development): `cargo run -p lodestone-comms-server`, lis
 | `COMMS_BIND` | `0.0.0.0:8080` | where the program listens (put HTTPS in front of it) |
 | `COMMS_DATA` | `./data` | where the database lives |
 | `COMMS_ADMIN_ONLY_SPACES` | `false` | `true` lets only host admins create servers |
+| `COMMS_MAX_FILE_MB` | `10` | largest attachment (files are encrypted before they reach the host) |
+| `COMMS_SPACE_QUOTA_MB` | `2048` | attachment space per server |
 
 ## Tests
 

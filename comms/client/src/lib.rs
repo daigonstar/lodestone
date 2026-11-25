@@ -102,6 +102,43 @@ struct Payload {
     target: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     on: Option<bool>,
+    /// `file`: { id, name, mime, size, key, nonce } of an encrypted attachment on the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    file: Option<Value>,
+}
+
+/// Largest attachment this client sends (the host may allow less).
+pub const MAX_FILE: usize = 10 * 1024 * 1024;
+
+/// The image type from a file's first bytes; anything else is sent as a plain file.
+pub fn sniff_image(b: &[u8]) -> Option<&'static str> {
+    if b.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if b.starts_with(b"\xff\xd8\xff") {
+        Some("image/jpeg")
+    } else if b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if b.len() > 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+/// A file name that's only a name: no folders, no control characters, at most 128 characters.
+fn clean_file_name(n: &str) -> String {
+    let base = n.rsplit(['/', '\\']).next().unwrap_or("").trim();
+    let clean: String = base.chars().filter(|c| !c.is_control()).take(128).collect();
+    if clean.is_empty() || clean == "." || clean == ".." { "file".into() } else { clean }
+}
+
+/// An attachment reference from a message: checked before it's stored.
+fn valid_file(f: &Value) -> bool {
+    let id_ok = f["id"].as_str().is_some_and(|i| i.len() == 24 && i.bytes().all(|b| b.is_ascii_hexdigit()));
+    let key_ok = f["key"].as_str().and_then(unb64).is_some_and(|k| k.len() == 32);
+    let nonce_ok = f["nonce"].as_str().and_then(unb64).is_some_and(|k| k.len() == 12);
+    let size_ok = f["size"].as_u64().is_some_and(|s| s as usize <= MAX_FILE);
+    id_ok && key_ok && nonce_ok && size_ok && f["name"].is_string() && f["mime"].is_string()
 }
 
 /// A reaction is one emoji (possibly several code points, like 👍🏽 or 🏳️‍🌈) or a custom `:name:`.
@@ -116,6 +153,7 @@ pub struct Client {
     key: SigningKey,
     signer: SignatureKeyPair,
     device: String,
+    dir: std::path::PathBuf,
     op: tokio::sync::Mutex<()>,
     touched: std::sync::Mutex<Vec<String>>,
 }
@@ -142,7 +180,7 @@ impl Client {
         let signer = SignatureKeyPair::from_raw(SignatureScheme::ED25519, key.to_bytes().to_vec(), public.clone());
         let storage = MemoryStorage::default();
         *storage.values.write().unwrap() = store.load_mls()?;
-        Ok(Self { store, provider: Provider { crypto: RustCrypto::default(), storage }, host: Host::new(host_url), key, signer, device: b64(&public), op: Default::default(), touched: Default::default() })
+        Ok(Self { store, provider: Provider { crypto: RustCrypto::default(), storage }, host: Host::new(host_url), key, signer, device: b64(&public), dir: dir.to_path_buf(), op: Default::default(), touched: Default::default() })
     }
 
     pub fn device_key(&self) -> &str {
@@ -287,10 +325,74 @@ impl Client {
         self.persist()?;
         let epoch = group.epoch().as_u64();
         let seq = self.host.send(channel, "application", epoch, &out.tls_serialize_detached().map_err(local)?).await?.ok_or_else(|| Error::Local("The host refused the message".into()))?;
-        let m = Message { channel: channel.into(), seq, sender: self.username().unwrap_or_default(), sender_device: self.device.clone(), body: text.into(), sent_at: now() };
+        let m = Message { channel: channel.into(), seq, sender: self.username().unwrap_or_default(), sender_device: self.device.clone(), body: text.into(), sent_at: now(), attachment: None };
         self.store.add_message(&m)?;
         self.store.set_last_seq(channel, seq)?;
         Ok(m)
+    }
+
+    /// Encrypt a file on this device (AES-256-GCM, a new random key per file), upload the ciphertext,
+    /// and send the key inside an end-to-end encrypted message. Images are recognised by their content.
+    pub async fn send_file(&self, channel: &str, name: &str, bytes: &[u8], caption: &str) -> Result<Message> {
+        use aes_gcm::aead::{Aead, KeyInit};
+        if bytes.is_empty() || bytes.len() > MAX_FILE {
+            return Err(Error::Local(format!("Files can be at most {} MB", MAX_FILE / 1024 / 1024)));
+        }
+        let mime = sniff_image(bytes).unwrap_or("application/octet-stream");
+        let mut key = [0u8; 32];
+        let mut nonce = [0u8; 12];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce);
+        let cipher = aes_gcm::Aes256Gcm::new_from_slice(&key).map_err(local)?;
+        let sealed = cipher.encrypt(aes_gcm::Nonce::from_slice(&nonce), bytes).map_err(local)?;
+        let up = self.host.post_raw(&format!("/v1/channels/{channel}/blobs"), sealed.clone()).await?;
+        let id = up["id"].as_str().unwrap_or_default().to_string();
+        let file = json!({ "id": id, "name": clean_file_name(name), "mime": mime, "size": bytes.len(), "key": b64(&key), "nonce": b64(&nonce) });
+        let _ = std::fs::create_dir_all(self.dir.join("files"));
+        let _ = std::fs::write(self.dir.join("files").join(&id), &sealed);
+        let _g = self.op.lock().await;
+        let devices = self.space_devices_for(channel).await?;
+        self.catch_up(channel, &devices).await?;
+        let mut group = self.group(channel)?.ok_or_else(|| Error::Local("You aren't in this channel's encrypted group yet".into()))?;
+        let payload = serde_json::to_vec(&Payload { t: "file".into(), body: caption.to_string(), file: Some(file.clone()), ..Default::default() }).map_err(local)?;
+        let out = group.create_message(&self.provider, &self.signer, &payload).map_err(local)?;
+        self.persist()?;
+        let seq = self.host.send(channel, "application", group.epoch().as_u64(), &out.tls_serialize_detached().map_err(local)?).await?.ok_or_else(|| Error::Local("The host refused the message".into()))?;
+        let m = Message { channel: channel.into(), seq, sender: self.username().unwrap_or_default(), sender_device: self.device.clone(), body: caption.into(), sent_at: now(), attachment: Some(file) };
+        self.store.add_message(&m)?;
+        self.store.set_last_seq(channel, seq)?;
+        Ok(self.store.messages(channel, 1)?.into_iter().find(|x| x.seq == seq).unwrap_or(m))
+    }
+
+    /// A message's attachment, decrypted: (bytes, mime type, file name). The encrypted copy is kept in
+    /// this device's folder so it isn't downloaded twice.
+    pub async fn open_file(&self, channel: &str, seq: i64) -> Result<(Vec<u8>, String, String)> {
+        use aes_gcm::aead::{Aead, KeyInit};
+        let f = self.store.attachment(channel, seq).ok_or_else(|| Error::Local("No file on that message".into()))?;
+        let id = f["id"].as_str().unwrap_or_default().to_string();
+        if !(id.len() == 24 && id.bytes().all(|b| b.is_ascii_hexdigit())) {
+            return Err(Error::Local("Bad file reference".into()));
+        }
+        let cache = self.dir.join("files").join(&id);
+        let sealed = match std::fs::read(&cache) {
+            Ok(b) => b,
+            Err(_) => {
+                let (b, _) = self.host.get_raw(&format!("/v1/blobs/{id}")).await?;
+                let _ = std::fs::create_dir_all(self.dir.join("files"));
+                let _ = std::fs::write(&cache, &b);
+                b
+            }
+        };
+        let key = f["key"].as_str().and_then(unb64).ok_or_else(|| Error::Local("Bad file key".into()))?;
+        let nonce = f["nonce"].as_str().and_then(unb64).filter(|n| n.len() == 12).ok_or_else(|| Error::Local("Bad file key".into()))?;
+        let cipher = aes_gcm::Aes256Gcm::new_from_slice(&key).map_err(local)?;
+        let plain = cipher.decrypt(aes_gcm::Nonce::from_slice(&nonce), sealed.as_ref()).map_err(|_| {
+            let _ = std::fs::remove_file(&cache);
+            Error::Local("The file doesn't match its key (damaged or swapped on the host)".into())
+        })?;
+        // The type is decided by the content, not by what the sender claimed.
+        let mime = sniff_image(&plain).unwrap_or("application/octet-stream").to_string();
+        Ok((plain, mime, clean_file_name(f["name"].as_str().unwrap_or("file"))))
     }
 
     /// Add (`on`) or remove your emoji reaction on a message, end-to-end encrypted like a message.
@@ -302,7 +404,7 @@ impl Client {
         let devices = self.space_devices_for(channel).await?;
         self.catch_up(channel, &devices).await?;
         let mut group = self.group(channel)?.ok_or_else(|| Error::Local("You aren't in this channel's encrypted group yet".into()))?;
-        let payload = serde_json::to_vec(&Payload { t: "react".into(), body: emoji.into(), target: Some(target), on: Some(on) }).map_err(local)?;
+        let payload = serde_json::to_vec(&Payload { t: "react".into(), body: emoji.into(), target: Some(target), on: Some(on), file: None }).map_err(local)?;
         let out = group.create_message(&self.provider, &self.signer, &payload).map_err(local)?;
         self.persist()?;
         let seq = self.host.send(channel, "application", group.epoch().as_u64(), &out.tls_serialize_detached().map_err(local)?).await?.ok_or_else(|| Error::Local("The host refused it".into()))?;
@@ -450,13 +552,17 @@ impl Client {
                     None => ("⚠ unknown".to_string(), String::new()),
                 };
                 match payload {
-                    Some(p) if p.t == "text" => Some(Message {
+                    Some(p) if p.t == "text" || (p.t == "file" && p.file.as_ref().is_some_and(valid_file)) => Some(Message {
                         channel: channel.into(),
                         seq: m["seq"].as_i64().unwrap_or(0),
                         sender: name,
                         sender_device: device,
                         body: p.body,
                         sent_at: m["sent_at"].as_i64().unwrap_or(0),
+                        attachment: p.file.map(|mut f| {
+                            f["name"] = json!(clean_file_name(f["name"].as_str().unwrap_or_default()));
+                            f
+                        }),
                     }),
                     Some(p) if p.t == "react" && valid_reaction(&p.body) => {
                         if let Some(target) = p.target {

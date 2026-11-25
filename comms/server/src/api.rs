@@ -41,6 +41,11 @@ pub fn router(app: Shared) -> Router {
         .route("/v1/keypackages", post(upload_keypackages).get(count_keypackages))
         .route("/v1/keypackages/claim", post(claim_keypackages))
         .route("/v1/channels/{channel}/messages", post(send_message).get(list_messages))
+        .route(
+            "/v1/channels/{channel}/blobs",
+            post(crate::blobs::upload).layer(axum::extract::DefaultBodyLimit::max(app.cfg.max_file as usize + 64 * 1024)),
+        )
+        .route("/v1/blobs/{id}", get(crate::blobs::download))
         .route("/v1/welcomes", post(send_welcome).get(take_welcomes))
         .route("/v1/live", get(crate::live::connect))
         .route("/join/{code}", get(join_page))

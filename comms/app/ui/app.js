@@ -82,21 +82,36 @@ function render() {
   $("#chat").innerHTML = `<header><h3># ${esc(ch.name)}${ch.topic ? `<span class="topic">${esc(ch.topic)}</span>` : ""}</h3><span class="lock" title="Only members' devices can read this channel; the host stores ciphertext.">🔒 end-to-end encrypted</span></header>
     <div class="msgs" id="msgs"></div>
     <div class="composer">${ch.ready
-      ? '<div class="compose-row"><textarea id="text" placeholder="Message (Enter to send, Shift+Enter for a new line)" maxlength="8000"></textarea><button type="button" class="emoji-btn" id="emoji-btn" title="Emoji">😊</button></div>'
+      ? '<div id="pending" class="pending hidden"></div><div class="compose-row"><button type="button" class="emoji-btn" id="attach-btn" title="Attach a file or image (or paste / drop one)">📎</button><textarea id="text" placeholder="Message (Enter to send, Shift+Enter for a new line)" maxlength="8000"></textarea><button type="button" class="emoji-btn" id="emoji-btn" title="Emoji">😊</button></div>'
       : '<p class="muted">You\'re a member, but no one in this channel has been online to give your device its keys yet. It happens automatically.</p>'}</div>`;
   loadMessages();
   const t = $("#text");
   if (t) {
     $("#emoji-btn").onclick = (e) => openPicker(e.currentTarget, (emo) => insertAtCursor(t, emo), false);
+    $("#attach-btn").onclick = () => $("#attach-file").click();
+    t.addEventListener("paste", (e) => {
+      const f = [...(e.clipboardData?.files || [])][0];
+      if (f) { e.preventDefault(); setPending(f); }
+    });
+    showPending();
     t.focus();
     t.addEventListener("keydown", async (e) => {
       if (e.key !== "Enter" || e.shiftKey) return;
       e.preventDefault();
       const text = t.value.trim();
-      if (!text) return;
+      if (!text && !state.pending) return;
       t.disabled = true;
-      try { await api("/api/send", { host: state.sel.host, channel: state.sel.channel, text }); t.value = ""; }
-      catch (err) { toast(err.message, true); }
+      try {
+        if (state.pending) {
+          const f = state.pending;
+          const data = await fileBase64(f);
+          await api("/api/upload", { host: state.sel.host, channel: state.sel.channel, name: f.name || "pasted image", data, caption: text });
+          setPending(null);
+        } else {
+          await api("/api/send", { host: state.sel.host, channel: state.sel.channel, text });
+        }
+        t.value = "";
+      } catch (err) { toast(err.message, true); }
       t.disabled = false;
       t.focus();
     });
@@ -137,6 +152,7 @@ async function loadMessages() {
       add.textContent = "☺+";
       add.dataset.reactAdd = m.seq;
       row.append(time, who, body, add);
+      if (m.attachment) row.append(attachmentEl(m));
       const list = reacts.get(m.seq);
       if (list) {
         const chips = document.createElement("div");
@@ -162,6 +178,75 @@ async function loadMessages() {
     box.dataset.seen = "1";
   } catch (e) { toast(e.message, true); }
 }
+
+// ---------- attachments ----------
+const MAX_FILE = 10 * 1024 * 1024;
+const fmtSize = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+const fileBase64 = (f) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1] || ""); r.onerror = () => rej(new Error("Couldn't read the file")); r.readAsDataURL(f); });
+
+function setPending(f) {
+  if (f && f.size > MAX_FILE) return toast(`Files can be at most ${fmtSize(MAX_FILE)}`, true);
+  state.pending = f || null;
+  showPending();
+}
+function showPending() {
+  const el = $("#pending");
+  if (!el) return;
+  const f = state.pending;
+  el.classList.toggle("hidden", !f);
+  if (!f) return (el.innerHTML = "");
+  el.innerHTML = `<span>📎 ${esc(f.name || "pasted image")} <small class="muted">${fmtSize(f.size)} · press Enter to send, with your message as its caption</small></span><button type="button" class="ghost" id="pending-x" title="Remove">✕</button>`;
+  $("#pending-x").onclick = () => setPending(null);
+  $("#text")?.focus();
+}
+$("#attach-file").onchange = (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) setPending(f); };
+document.addEventListener("dragover", (e) => { if ($("#text") && e.dataTransfer?.types?.includes("Files")) e.preventDefault(); });
+document.addEventListener("drop", (e) => {
+  const f = [...(e.dataTransfer?.files || [])][0];
+  if (f && $("#text")) { e.preventDefault(); setPending(f); }
+});
+
+// Decrypted files come from the plug-in with the page's secret, so they're fetched and shown as blobs.
+const fileUrls = new Map();
+async function fileUrl(seq) {
+  const key = `${state.sel.host}|${state.sel.channel}|${seq}`;
+  if (fileUrls.has(key)) return fileUrls.get(key);
+  const r = await fetch(`/api/file?host=${encodeURIComponent(state.sel.host)}&channel=${encodeURIComponent(state.sel.channel)}&seq=${seq}`, { headers: { "x-comms-token": TOKEN } });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "Couldn't open the file");
+  const url = URL.createObjectURL(await r.blob());
+  fileUrls.set(key, url);
+  return url;
+}
+function attachmentEl(m) {
+  const a = m.attachment;
+  const wrap = document.createElement("div");
+  wrap.className = "attach";
+  if (String(a.mime).startsWith("image/")) {
+    const img = document.createElement("img");
+    img.alt = a.name;
+    img.className = "attach-img";
+    img.title = `${a.name} · ${fmtSize(a.size)} · click to enlarge`;
+    fileUrl(m.seq).then((u) => (img.src = u)).catch((e) => { wrap.textContent = `⚠ ${e.message}`; });
+    img.onclick = () => { $("#lightbox-img").src = img.src; $("#lightbox").classList.remove("hidden"); };
+    wrap.append(img);
+  } else {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "attach-file";
+    b.textContent = `📄 ${a.name} · ${fmtSize(a.size)} · Save`;
+    b.onclick = async () => {
+      try {
+        const link = document.createElement("a");
+        link.href = await fileUrl(m.seq);
+        link.download = a.name;
+        link.click();
+      } catch (e) { toast(e.message, true); }
+    };
+    wrap.append(b);
+  }
+  return wrap;
+}
+$("#lightbox").onclick = () => $("#lightbox").classList.add("hidden");
 
 // ---------- emoji ----------
 const isOnlyEmoji = (t) => /^(\p{Extended_Pictographic}|\p{Emoji_Component}|\u200d|\ufe0f|\s){1,24}$/u.test(t) && /\p{Extended_Pictographic}/u.test(t) && [...t.replace(/\s/g, "")].length <= 16;

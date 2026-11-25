@@ -35,6 +35,8 @@ pub fn router(app: Shared) -> Router {
         .route("/api/messages", get(messages))
         .route("/api/send", post(send))
         .route("/api/react", post(react))
+        .route("/api/upload", post(upload).layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)))
+        .route("/api/file", get(open_file))
         .route("/api/friends", get(friends))
         .route("/api/invite-friend", post(invite_friend))
         .route("/api/events", get(events))
@@ -281,6 +283,61 @@ async fn react(State(app): State<Shared>, Json(r): Json<ReactReq>) -> R {
     c.react(&r.channel, r.seq, &r.emoji, r.on).await?;
     let _ = app.events.send(json!({ "type": "messages", "host": r.host, "channels": [r.channel] }).to_string());
     Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct UploadReq {
+    host: String,
+    channel: String,
+    name: String,
+    /// The file, base64.
+    data: String,
+    #[serde(default)]
+    caption: String,
+}
+
+async fn upload(State(app): State<Shared>, Json(r): Json<UploadReq>) -> R {
+    let bytes = lodestone_comms_client::host::unb64(&r.data).ok_or_else(|| Fail("Bad file".into()))?;
+    let c = client(&app, &r.host)?;
+    ensure_signed_in(&c).await?;
+    let m = c.send_file(&r.channel, &r.name, &bytes, r.caption.trim()).await?;
+    let _ = app.events.send(json!({ "type": "messages", "host": r.host, "channels": [r.channel] }).to_string());
+    Ok(Json(json!(m)))
+}
+
+#[derive(Deserialize)]
+struct FileQuery {
+    host: String,
+    channel: String,
+    seq: i64,
+}
+
+/// A decrypted attachment for the page. Only real images (checked by content) are served as images;
+/// anything else is an inert download, so a file can never run as a page in this origin.
+async fn open_file(State(app): State<Shared>, Query(q): Query<FileQuery>) -> Response {
+    let Ok(c) = client(&app, &q.host) else { return StatusCode::NOT_FOUND.into_response() };
+    if ensure_signed_in(&c).await.is_err() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match c.open_file(&q.channel, q.seq).await {
+        Ok((bytes, mime, name)) => {
+            let mut r = Response::new(Body::from(bytes));
+            let h = r.headers_mut();
+            let image = mime.starts_with("image/");
+            h.insert(header::CONTENT_TYPE, HeaderValue::from_str(if image { &mime } else { "application/octet-stream" }).unwrap_or(HeaderValue::from_static("application/octet-stream")));
+            if !image {
+                let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || ".-_ ".contains(c) { c } else { '_' }).collect();
+                if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{safe}\"")) {
+                    h.insert(header::CONTENT_DISPOSITION, v);
+                }
+            }
+            h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+            h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; sandbox"));
+            h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            r
+        }
+        Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
 }
 
 /// Your Steam and Epic friends, through the bridge (needs the friends:read permission in Lodestone).

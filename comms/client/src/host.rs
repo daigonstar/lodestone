@@ -74,7 +74,17 @@ impl Host {
 
     /// Upload a raw body (a server icon).
     pub async fn put_raw(&self, path: &str, bytes: Vec<u8>) -> HostResult<Value> {
-        let mut req = self.http.put(format!("{}{path}", self.url)).body(bytes);
+        self.send_raw(true, path, bytes).await
+    }
+
+    /// Upload a raw body with POST (an encrypted attachment).
+    pub async fn post_raw(&self, path: &str, bytes: Vec<u8>) -> HostResult<Value> {
+        self.send_raw(false, path, bytes).await
+    }
+
+    async fn send_raw(&self, put: bool, path: &str, bytes: Vec<u8>) -> HostResult<Value> {
+        let url = format!("{}{path}", self.url);
+        let mut req = if put { self.http.put(url) } else { self.http.post(url) }.body(bytes);
         if let Some(t) = self.token.lock().unwrap().clone() {
             req = req.bearer_auth(t);
         }

@@ -110,6 +110,7 @@ pub async fn delete_space(State(app): State<Shared>, me: Auth, Path(space): Path
     // Tell members first: after the delete there's no member list to send to.
     app.live.to_space(&app, &space, json!({ "type": "space_deleted", "space": space }));
     app.db.with(|c| c.execute("DELETE FROM spaces WHERE id = ?1", [&space]))?;
+    crate::blobs::sweep(&app);
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -154,6 +155,7 @@ pub async fn delete_channel(State(app): State<Shared>, me: Auth, Path(channel): 
         return Err(ApiError::bad("A server needs at least one channel"));
     }
     app.db.with(|c| c.execute("DELETE FROM channels WHERE id = ?1", [&channel]))?;
+    crate::blobs::sweep(&app);
     app.live.to_space(&app, &space, json!({ "type": "channel_deleted", "space": space, "channel": channel }));
     Ok(Json(json!({ "ok": true })))
 }

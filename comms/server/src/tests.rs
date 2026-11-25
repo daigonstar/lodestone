@@ -14,7 +14,8 @@ const HOST: &str = "https://comms.test";
 fn host() -> (Shared, String) {
     let db = Db::memory();
     let code = db.setup_code_if_new().unwrap().unwrap();
-    (app(Config { public_url: HOST.into(), admin_only_spaces: false }, db), code)
+    let blob_dir = std::env::temp_dir().join(format!("comms-blobs-{}-{}", std::process::id(), crate::util::new_id()));
+    (app(Config { public_url: HOST.into(), admin_only_spaces: false, blob_dir, max_file: 64 * 1024, space_quota: 200 * 1024 }, db), code)
 }
 
 async fn call(app: &Shared, method: &str, path: &str, token: Option<&str>, body: Value) -> (StatusCode, Value) {
@@ -295,4 +296,56 @@ fn upgrades_an_existing_database_in_place() {
     drop(db);
     let _ = Db::open(&path).unwrap(); // a second open changes nothing
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn attachments_are_members_only_limited_and_cleaned_up() {
+    let (app, code) = host();
+    let (alice, bob) = (Device::new(), Device::new());
+    alice.register(&app, "alice", &code).await;
+    let ta = alice.sign_in(&app).await;
+    let (_, sp) = call(&app, "POST", "/v1/spaces", Some(&ta), json!({ "name": "Raid night" })).await;
+    let sid = sp["id"].as_str().unwrap().to_string();
+    let ch = sp["channels"][0]["id"].as_str().unwrap().to_string();
+    let upload = |token: String, channel: String, body: Vec<u8>| {
+        let app = app.clone();
+        async move {
+            let req = Request::builder().method("POST").uri(format!("/v1/channels/{channel}/blobs")).header("authorization", format!("Bearer {token}")).body(Body::from(body)).unwrap();
+            let res = crate::api::router(app).oneshot(req).await.unwrap();
+            let status = res.status();
+            let bytes = res.into_body().collect().await.unwrap().to_bytes();
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null))
+        }
+    };
+    let (s, up) = upload(ta.clone(), ch.clone(), vec![7u8; 1000]).await;
+    assert_eq!(s, StatusCode::OK, "{up}");
+    let id = up["id"].as_str().unwrap().to_string();
+
+    // Downloads come back byte for byte, as an inert attachment.
+    let req = Request::builder().uri(format!("/v1/blobs/{id}")).header("authorization", format!("Bearer {ta}")).body(Body::empty()).unwrap();
+    let res = crate::api::router(app.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.headers()["content-type"], "application/octet-stream");
+    assert_eq!(res.headers()["content-disposition"], "attachment");
+    assert_eq!(res.into_body().collect().await.unwrap().to_bytes().as_ref(), &[7u8; 1000][..]);
+
+    // Outsiders get nothing; too-big files and a full quota are refused.
+    let (_, other) = call(&app, "POST", "/v1/spaces", Some(&ta), json!({ "name": "Other" })).await;
+    let (_, inv) = call(&app, "POST", &format!("/v1/spaces/{}/invites", other["id"].as_str().unwrap()), Some(&ta), json!({ "max_uses": 1, "expires_in": 3600 })).await;
+    bob.register(&app, "bob", inv["code"].as_str().unwrap()).await;
+    let tb = bob.sign_in(&app).await;
+    assert_eq!(call(&app, "GET", &format!("/v1/blobs/{id}"), Some(&tb), Value::Null).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(upload(tb.clone(), ch.clone(), vec![1u8; 10]).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(upload(ta.clone(), ch.clone(), vec![1u8; 64 * 1024 + 1]).await.0, StatusCode::BAD_REQUEST, "over the file limit");
+    for _ in 0..3 {
+        assert_eq!(upload(ta.clone(), ch.clone(), vec![1u8; 60 * 1024]).await.0, StatusCode::OK);
+    }
+    assert_eq!(upload(ta.clone(), ch.clone(), vec![1u8; 60 * 1024]).await.0, StatusCode::BAD_REQUEST, "over the server's quota");
+    assert_eq!(call(&app, "GET", "/v1/blobs/..%2Fcomms.db", Some(&ta), Value::Null).await.0, StatusCode::NOT_FOUND);
+
+    // Deleting the server removes its files from disk.
+    let files = || std::fs::read_dir(&app.cfg.blob_dir).map(|d| d.count()).unwrap_or(0);
+    assert_eq!(files(), 4);
+    assert_eq!(call(&app, "DELETE", &format!("/v1/spaces/{sid}"), Some(&ta), Value::Null).await.0, StatusCode::OK);
+    assert_eq!(files(), 0);
+    let _ = std::fs::remove_dir_all(&app.cfg.blob_dir);
 }
