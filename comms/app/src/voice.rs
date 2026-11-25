@@ -389,6 +389,7 @@ pub async fn status(app: &Shared) -> Value {
             "undecryptable": ctl.undecryptable.load(Ordering::Relaxed),
             "sharing": sess.video.share.lock().unwrap().as_ref().map(|s| json!({ "width": s.size.0, "height": s.size.1, "frames": s.frames.load(Ordering::Relaxed) })),
             "watching": sess.video.viewers.lock().unwrap().keys().collect::<Vec<_>>(),
+            "slot": sess.slot,
             "video_sent": ctl.video_sent.load(Ordering::Relaxed),
             "video_received": ctl.video_received.load(Ordering::Relaxed),
         },
@@ -466,6 +467,10 @@ pub async fn watch(app: &Shared, slot: usize, on: bool) -> Result<(), String> {
 pub async fn picture(app: &Shared, slot: usize) -> Option<Arc<Picture>> {
     let g = app.voice.session.lock().await;
     let s = g.as_ref()?;
+    // Your own slot: the preview of what you're sharing.
+    if slot as u64 == s.slot {
+        return s.video.share.lock().unwrap().as_ref().map(|sh| sh.preview.clone());
+    }
     let v = s.video.viewers.lock().unwrap();
     v.get(&slot).map(|v| v.picture.clone())
 }

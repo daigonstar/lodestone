@@ -61,6 +61,8 @@ pub struct ScreenShare {
     pub ended: Arc<AtomicBool>,
     pub frames: Arc<AtomicU64>,
     pub size: (i32, i32),
+    /// What you're sharing, small, for your own preview.
+    pub preview: Arc<Picture>,
     close: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -110,15 +112,35 @@ impl ScreenShare {
 
     fn encode(source: &str, (w, h): (i32, i32), quality: Quality, out: impl Fn(Vec<u8>) + Send + Sync + 'static, close: Option<tokio::sync::oneshot::Sender<()>>) -> Result<Self, String> {
         let (_, _, bitrate) = quality.bounds();
+        // Your own preview: half size, 10 pictures a second (it only shows you what you're sharing).
+        let (pw, ph) = ((w / 4 * 2).max(2), (h / 4 * 2).max(2));
         let p = pipeline(&format!(
             "{source} ! videoconvert ! videoscale ! \
-             video/x-raw,width={w},height={h},pixel-aspect-ratio=1/1 ! videorate drop-only=true ! video/x-raw,framerate=30/1 ! \
-             queue leaky=downstream max-size-buffers=2 ! \
+             video/x-raw,width={w},height={h},pixel-aspect-ratio=1/1 ! videorate drop-only=true ! video/x-raw,framerate=30/1 ! tee name=t \
+             t. ! queue leaky=downstream max-size-buffers=1 ! videorate drop-only=true ! video/x-raw,framerate=10/1 ! videoscale ! \
+             video/x-raw,width={pw},height={ph} ! jpegenc quality=75 ! appsink name=preview sync=false max-buffers=1 drop=true \
+             t. ! queue leaky=downstream max-size-buffers=2 ! \
              vp8enc name=enc deadline=1 cpu-used=8 threads=4 end-usage=cbr target-bitrate={bitrate} keyframe-max-dist=300 lag-in-frames=0 error-resilient=default ! \
              appsink name=out sync=false max-buffers=4 drop=true"
         ))?;
         let encoder = p.by_name("enc").ok_or("video setup failed")?;
         let sink = p.by_name("out").and_then(|e| e.downcast::<AppSink>().ok()).ok_or("video setup failed")?;
+        let preview = Arc::new(Picture::default());
+        let (pv, pic) = (p.by_name("preview").and_then(|e| e.downcast::<AppSink>().ok()).ok_or("video setup failed")?, preview.clone());
+        let mut count = 0u64;
+        pv.set_callbacks(
+            AppSinkCallbacks::builder()
+                .new_sample(move |s| {
+                    let sample = s.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                    if let Some(map) = sample.buffer().and_then(|b| b.map_readable().ok()) {
+                        count += 1;
+                        *pic.jpeg.lock().unwrap() = Some((count, Arc::new(map.to_vec())));
+                        pic.changed.notify_waiters();
+                    }
+                    Ok(gst::FlowSuccess::Ok)
+                })
+                .build(),
+        );
         let frames = Arc::new(AtomicU64::new(0));
         let n = frames.clone();
         sink.set_callbacks(
@@ -149,7 +171,7 @@ impl ScreenShare {
             })
             .map_err(|e| e.to_string())?;
         p.set_state(gst::State::Playing).map_err(|_| "Couldn't start the screen share".to_string())?;
-        Ok(Self { pipeline: p, encoder, ended, frames, size: (w, h), close })
+        Ok(Self { pipeline: p, encoder, ended, frames, size: (w, h), preview, close })
     }
 
     /// Make the next frame a keyframe (someone started watching, or lost a frame).
