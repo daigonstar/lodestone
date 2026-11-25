@@ -192,10 +192,21 @@ Channels have a `kind`: `text` (default) or `voice` (`POST /v1/spaces/{space}/ch
 Each voice channel is also an MLS group, like a text channel; its members' devices are added the same way.
 
 The host runs a media relay (an SFU) on one UDP port. It forwards each participant's audio to the others
-without decoding it. Clients encrypt every audio frame before sending (frame keys come from the voice
-channel's MLS group; details in the next protocol version), so the relay can't hear calls.
+without decoding it. Clients encrypt every audio frame before sending, so the relay can't hear calls:
 
-- `GET /v1/channels/{channel}/voice` (members): `{ enabled, participants: [{ username, device, slot, muted, deafened }] }`.
+- `base`: 32 bytes from the voice channel's MLS group for the current epoch (MLS exporter, label
+  `lodestone-comms voice v1`, empty context). Every member derives the same base; the host can't.
+- Each sender's key: HKDF-SHA256 over `base` with info `lodestone-comms voice sender` followed by the
+  sender's MLS leaf index (4 bytes, big-endian).
+- Each frame: a 17-byte header `[version = 1][epoch: u32][leaf: u32][counter: u64]` (big-endian, used as
+  AES-GCM associated data), then AES-256-GCM of the Opus frame with nonce = 4 zero bytes + counter.
+  The leaf in the header picks the sender's key, so the relay's slot numbers can't make one person
+  sound like another: a mismatched key just fails to decrypt.
+- Keys change with every epoch (anyone joining or leaving the channel's group). Receivers keep a few
+  older epochs' bases for frames sent just before a change.
+
+- `GET /v1/channels/{channel}/voice` (members): `{ enabled, relay, participants: [{ username, device, slot, muted, deafened }] }`
+  (`relay` is the relay's address as `ip:port`).
   Channel lists in `GET /v1/spaces/{space}` show `in_call` (usernames) for voice channels.
 - `POST /v1/channels/{channel}/voice/join` `{ offer, muted, deafened }`: a WebRTC offer (JSON) with one
   send-only audio track and up to 16 receive-only ones, in that order. Returns `{ answer, slot, participants }`.

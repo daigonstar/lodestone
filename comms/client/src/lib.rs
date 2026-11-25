@@ -281,6 +281,46 @@ impl Client {
         Ok(out.len())
     }
 
+    // ---------- calls ----------
+
+    /// The voice channel's call key material for the current epoch: (epoch, this device's leaf index,
+    /// 32-byte base from the MLS exporter). Everyone in the channel's group derives the same base.
+    pub fn voice_secret(&self, channel: &str) -> Result<(u64, u32, [u8; 32])> {
+        let group = self.group(channel)?.ok_or_else(|| Error::Local("You aren't in this channel's encrypted group yet".into()))?;
+        let secret = group.export_secret(self.provider.crypto(), "lodestone-comms voice v1", b"", 32).map_err(local)?;
+        let base: [u8; 32] = secret.try_into().map_err(|_| Error::Local("bad exporter length".into()))?;
+        Ok((group.epoch().as_u64(), group.own_leaf_index().u32(), base))
+    }
+
+    /// Who's in a voice channel, and the relay's address (`relay`, ip:port).
+    pub async fn voice_info(&self, channel: &str) -> Result<Value> {
+        Ok(self.host.get(&format!("/v1/channels/{channel}/voice")).await?)
+    }
+
+    /// Join a call with an offer from the call engine; returns the relay's answer, your slot and who's in.
+    pub async fn voice_join(&self, channel: &str, offer: Value, muted: bool, deafened: bool) -> Result<Value> {
+        Ok(self.host.post(&format!("/v1/channels/{channel}/voice/join"), json!({ "offer": offer, "muted": muted, "deafened": deafened })).await?)
+    }
+
+    pub async fn voice_state(&self, channel: &str, muted: bool, deafened: bool) -> Result<()> {
+        self.host.post(&format!("/v1/channels/{channel}/voice/state"), json!({ "muted": muted, "deafened": deafened })).await?;
+        Ok(())
+    }
+
+    pub async fn voice_leave(&self, channel: &str) -> Result<()> {
+        self.host.post(&format!("/v1/channels/{channel}/voice/leave"), json!({})).await?;
+        Ok(())
+    }
+
+    /// Catch up one channel now (calls do this often, so new members' keys arrive quickly).
+    pub async fn sync_channel(&self, channel: &str) -> Result<()> {
+        let _g = self.op.lock().await;
+        let devices = self.space_devices_for(channel).await?;
+        self.catch_up(channel, &devices).await?;
+        self.reconcile(channel, &devices).await?;
+        Ok(())
+    }
+
     // ---------- devices and pairing ----------
 
     /// This device's fingerprint: the same short code the host and your other devices show for it.
@@ -366,8 +406,17 @@ impl Client {
 
     /// Add a text channel (owner or admin). Other members are added to its group on the next sync.
     pub async fn create_channel(&self, space: &str, name: &str) -> Result<String> {
+        self.create_channel_of(space, name, "text").await
+    }
+
+    /// Add a voice channel: also an MLS group, whose keys protect the call's audio.
+    pub async fn create_voice_channel(&self, space: &str, name: &str) -> Result<String> {
+        self.create_channel_of(space, name, "voice").await
+    }
+
+    async fn create_channel_of(&self, space: &str, name: &str, kind: &str) -> Result<String> {
         let _g = self.op.lock().await;
-        let ch = self.host.post(&format!("/v1/spaces/{space}/channels"), json!({ "name": name })).await?;
+        let ch = self.host.post(&format!("/v1/spaces/{space}/channels"), json!({ "name": name, "kind": kind })).await?;
         let id = ch["id"].as_str().unwrap_or_default().to_string();
         self.new_group(&id, space, name)?;
         Ok(id)

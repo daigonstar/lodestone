@@ -2102,8 +2102,16 @@ dependencies = [
 name = "lodestone-comms-media"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "ashpd",
  "gstreamer",
+ "hkdf 0.12.4",
+ "lodestone-comms-client",
+ "lodestone-comms-server",
+ "serde_json",
+ "sha2 0.10.9",
+ "str0m",
+ "tempfile",
  "tokio",
 ]
 

@@ -265,7 +265,12 @@ fn voice_channel(app: &Shared, channel: &str, me: &Auth) -> ApiResult<String> {
 /// `GET /v1/channels/{channel}/voice`: who's in the call (members can look without joining).
 pub async fn state(State(app): State<Shared>, me: Auth, Path(channel): Path<String>) -> ApiResult<Json<Value>> {
     voice_channel(&app, &channel, &me)?;
-    Ok(Json(json!({ "enabled": app.voice.enabled(), "participants": app.voice.participants(&channel) })))
+    // The relay's address as an IP, so a client can choose which of its own addresses to send from.
+    let relay = match app.voice.addr.clone() {
+        Some(a) => tokio::task::spawn_blocking(move || resolve(&a)).await.ok().flatten().map(|a| a.to_string()),
+        None => None,
+    };
+    Ok(Json(json!({ "enabled": app.voice.enabled(), "relay": relay, "participants": app.voice.participants(&channel) })))
 }
 
 #[derive(Deserialize)]
