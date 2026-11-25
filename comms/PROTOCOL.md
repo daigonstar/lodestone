@@ -205,16 +205,18 @@ without decoding it. Clients encrypt every audio frame before sending, so the re
 - Keys change with every epoch (anyone joining or leaving the channel's group). Receivers keep a few
   older epochs' bases for frames sent just before a change.
 
-- `GET /v1/channels/{channel}/voice` (members): `{ enabled, relay, participants: [{ username, device, slot, muted, deafened }] }`
-  (`relay` is the relay's address as `ip:port`).
+- `GET /v1/channels/{channel}/voice` (members): `{ enabled, relay, relays, participants: [{ username, device, slot, muted, deafened }] }`
+  (`relays` are the relay's addresses as `ip:port`, in the host's order, usually public then LAN;
+  `relay` is the first). Clients try the one that fits their network first and fall back to the others.
   Channel lists in `GET /v1/spaces/{space}` show `in_call` (usernames) for voice channels.
-- `POST /v1/channels/{channel}/voice/join` `{ offer, muted, deafened }`: a WebRTC offer (JSON) with one
+- `POST /v1/channels/{channel}/voice/join` `{ offer, relay, muted, deafened }` (`relay`: which of `relays`
+  this device connects to; the first if left out): a WebRTC offer (JSON) with one
   send-only audio track and up to 16 receive-only ones, in that order. Returns `{ answer, slot, participants }`.
   The relay writes each participant's audio into the receive track matching their `slot` on everyone
   else's connection, so nobody needs to renegotiate when people join or leave. At most 16 people per call.
 - `POST /v1/channels/{channel}/voice/state` `{ muted, deafened }`: deafened participants aren't sent audio.
 - `POST /v1/channels/{channel}/voice/leave`. Removing someone from a server also ends their calls in it.
-- The relay is ICE-lite with one advertised address (`COMMS_MEDIA_ADDR`); transport is DTLS-SRTP. With
+- The relay is ICE-lite, advertising the address each client chose (from `COMMS_MEDIA_ADDR`); transport is DTLS-SRTP. With
   direct UDP, people in a call see that address (a home IP when self-hosted at home).
 
 ## Live connection

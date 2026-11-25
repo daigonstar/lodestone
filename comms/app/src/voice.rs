@@ -157,29 +157,67 @@ pub async fn join(app: &Shared, c: Arc<Client>, host: &str, channel: &str, muted
     if info["enabled"] == json!(false) {
         return Err("This host doesn't have calls turned on".into());
     }
-    let relay: SocketAddr = info["relay"].as_str().and_then(|r| r.parse().ok()).ok_or("The host didn't say where its call relay is")?;
+    let mut relays: Vec<SocketAddr> = info["relays"].as_array().into_iter().flatten().filter_map(|r| r.as_str()?.parse().ok()).collect();
+    if relays.is_empty() {
+        relays.extend(info["relay"].as_str().and_then(|r| r.parse::<SocketAddr>().ok()));
+    }
+    if relays.is_empty() {
+        return Err("The host didn't say where its call relay is".into());
+    }
+    order_relays(&mut relays);
     let (epoch, leaf, base) = c.voice_secret(channel).map_err(|e| e.to_string())?;
-    let (pending, offer) = call::prepare(relay).map_err(|e| format!("Couldn't reach the call relay: {e}"))?;
-    let joined = c.voice_join(channel, offer, muted, deafened).await.map_err(|e| e.to_string())?;
-
-    let controls = Arc::new(Controls::default());
-    controls.keys.lock().unwrap().set(epoch, leaf, base);
-    controls.muted.store(muted, Ordering::Relaxed);
-    controls.deafened.store(deafened, Ordering::Relaxed);
     app.voice.levels.clear_error();
-    let audio = match GstAudio::call(&app.voice.settings().options(), app.voice.levels.clone()) {
-        Ok(a) => a,
-        Err(e) => {
-            let _ = c.voice_leave(channel).await;
-            return Err(e);
+
+    // Try the relay's addresses in turn until one connects (a LAN address only works on the host's
+    // own network; a public one from inside it only if the router loops back).
+    let mut last_err = String::from("Couldn't reach the call relay");
+    let mut started = None;
+    for (i, relay) in relays.iter().enumerate() {
+        let last = i + 1 == relays.len();
+        let (pending, offer) = match call::prepare(*relay) {
+            Ok(x) => x,
+            Err(e) => {
+                last_err = format!("Couldn't reach the call relay: {e}");
+                continue;
+            }
+        };
+        let joined = c.voice_join(channel, &relay.to_string(), offer, muted, deafened).await.map_err(|e| e.to_string())?;
+        let controls = Arc::new(Controls::default());
+        controls.keys.lock().unwrap().set(epoch, leaf, base);
+        controls.muted.store(muted, Ordering::Relaxed);
+        controls.deafened.store(deafened, Ordering::Relaxed);
+        let audio = match GstAudio::call(&app.voice.settings().options(), app.voice.levels.clone()) {
+            Ok(a) => a,
+            Err(e) => {
+                let _ = c.voice_leave(channel).await;
+                return Err(e);
+            }
+        };
+        let call = match pending.start(joined["answer"].clone(), audio, controls.clone()) {
+            Ok(call) => call,
+            Err(e) => {
+                let _ = c.voice_leave(channel).await;
+                return Err(e);
+            }
+        };
+        if last {
+            started = Some((call, joined, controls));
+            break;
         }
-    };
-    let call = match pending.start(joined["answer"].clone(), audio, controls.clone()) {
-        Ok(call) => call,
-        Err(e) => {
-            let _ = c.voice_leave(channel).await;
-            return Err(e);
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        while !controls.connected.load(Ordering::Relaxed) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
+        if controls.connected.load(Ordering::Relaxed) {
+            started = Some((call, joined, controls));
+            break;
+        }
+        let _ = tokio::task::spawn_blocking(move || call.stop()).await;
+        last_err = format!("The call relay at {relay} didn't answer");
+    }
+    let Some((call, joined, controls)) = started else {
+        let _ = c.voice_leave(channel).await;
+        return Err(last_err);
     };
     let participants = Arc::new(Mutex::new(joined["participants"].clone()));
     let session = Session {
@@ -213,6 +251,34 @@ pub async fn join(app: &Shared, c: Arc<Client>, host: &str, channel: &str, muted
         }
     });
     Ok(status(app).await)
+}
+
+/// Put relay addresses in the order to try: a private (LAN) address on the same network as the route
+/// this PC would use to reach it first, then public ones, then other private ones.
+fn order_relays(relays: &mut [SocketAddr]) {
+    fn private(ip: std::net::IpAddr) -> bool {
+        match ip {
+            std::net::IpAddr::V4(v) => v.is_private() || v.is_loopback(),
+            std::net::IpAddr::V6(v) => v.is_loopback() || (v.segments()[0] & 0xfe00) == 0xfc00,
+        }
+    }
+    fn same_lan(relay: SocketAddr) -> bool {
+        let local = std::net::UdpSocket::bind(if relay.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" }).and_then(|s| s.connect(relay).and_then(|_| s.local_addr()));
+        match (local.map(|l| l.ip()), relay.ip()) {
+            // Same /24, or same /16 inside 10.0.0.0/8 (home labs often split that into several /24s).
+            (Ok(std::net::IpAddr::V4(l)), std::net::IpAddr::V4(r)) => {
+                let n = if r.octets()[0] == 10 { 2 } else { 3 };
+                r.is_loopback() || l.octets()[..n] == r.octets()[..n]
+            }
+            (Ok(l), r) => l == r,
+            _ => false,
+        }
+    }
+    relays.sort_by_key(|r| match (private(r.ip()), same_lan(*r)) {
+        (true, true) => 0,
+        (false, _) => 1,
+        (true, false) => 2,
+    });
 }
 
 /// Leave the call you're in, if any.

@@ -38,7 +38,7 @@ async fn join(c: &Client, channel: &str, label: &'static str) -> (call::Call, Ar
     let info = c.voice_info(channel).await.unwrap();
     let relay = info["relay"].as_str().unwrap().parse().unwrap();
     let (pending, offer) = call::prepare(relay).unwrap();
-    let joined = c.voice_join(channel, offer, false, false).await.unwrap();
+    let joined = c.voice_join(channel, &relay.to_string(), offer, false, false).await.unwrap();
     let played = Arc::new(Mutex::new(Vec::new()));
     let audio = FakeAudio { label, n: 0, last: Instant::now(), played: played.clone() };
     let call = pending.start(joined["answer"].clone(), audio, controls).unwrap();

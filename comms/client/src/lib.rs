@@ -298,8 +298,9 @@ impl Client {
     }
 
     /// Join a call with an offer from the call engine; returns the relay's answer, your slot and who's in.
-    pub async fn voice_join(&self, channel: &str, offer: Value, muted: bool, deafened: bool) -> Result<Value> {
-        Ok(self.host.post(&format!("/v1/channels/{channel}/voice/join"), json!({ "offer": offer, "muted": muted, "deafened": deafened })).await?)
+    /// `relay` is the relay address (from `voice_info`'s `relays`) this device connects to.
+    pub async fn voice_join(&self, channel: &str, relay: &str, offer: Value, muted: bool, deafened: bool) -> Result<Value> {
+        Ok(self.host.post(&format!("/v1/channels/{channel}/voice/join"), json!({ "offer": offer, "relay": relay, "muted": muted, "deafened": deafened })).await?)
     }
 
     pub async fn voice_state(&self, channel: &str, muted: bool, deafened: bool) -> Result<()> {

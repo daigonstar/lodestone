@@ -7,8 +7,9 @@
 //! audio into that slot's track on everyone else's connection, so joining and leaving never needs a
 //! renegotiation.
 //!
-//! Settings: `COMMS_MEDIA_ADDR` (the address clients reach, `host:port`, a name or an IP; voice is off
-//! without it) and `COMMS_MEDIA_BIND` (where to listen, default `0.0.0.0:7881`).
+//! Settings: `COMMS_MEDIA_ADDR` (the addresses clients reach, `host:port`, names or IPs, separated by
+//! commas: usually the public address first and the LAN address second, for people on the host's own
+//! network when the router can't loop back to its public address; voice is off without it) and `COMMS_MEDIA_BIND` (where to listen, default `0.0.0.0:7881`).
 
 use crate::auth::Auth;
 use crate::util::{ApiError, ApiResult};
@@ -50,6 +51,8 @@ enum Cmd {
 }
 
 struct Peer {
+    /// The relay address this participant connects to (one of COMMS_MEDIA_ADDR's).
+    addr: SocketAddr,
     channel: String,
     device: String,
     slot: usize,
@@ -64,7 +67,8 @@ struct Peer {
 type Calls = Arc<Mutex<HashMap<String, Vec<Participant>>>>;
 
 pub struct Voice {
-    addr: Option<String>,
+    /// COMMS_MEDIA_ADDR's addresses, in order.
+    addrs: Vec<String>,
     calls: Calls,
     tx: Mutex<Option<mpsc::Sender<Cmd>>>,
 }
@@ -74,14 +78,15 @@ impl Voice {
     pub fn start(addr: Option<String>, bind: &str) -> Self {
         let calls: Calls = Default::default();
         let mut tx_slot = None;
-        if let Some(a) = &addr {
+        let addrs: Vec<String> = addr.iter().flat_map(|a| a.split(',')).map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect();
+        if let Some(a) = (!addrs.is_empty()).then(|| addrs.join(", ")) {
             match UdpSocket::bind(bind) {
                 Ok(socket) => {
                     let (tx, rx) = mpsc::channel();
-                    let (calls2, a2) = (calls.clone(), a.clone());
+                    let calls2 = calls.clone();
                     std::thread::Builder::new()
                         .name("voice-relay".into())
-                        .spawn(move || relay(socket, rx, calls2, a2))
+                        .spawn(move || relay(socket, rx, calls2))
                         .expect("voice relay thread");
                     tx_slot = Some(tx);
                     println!("Lodestone Comms voice relay on udp {bind}, reached at {a}");
@@ -89,11 +94,12 @@ impl Voice {
                 Err(e) => eprintln!("comms: voice is off: can't listen on udp {bind}: {e}"),
             }
         }
-        Self { addr: addr.filter(|_| tx_slot.is_some()), calls, tx: Mutex::new(tx_slot) }
+        let addrs = if tx_slot.is_some() { addrs } else { Vec::new() };
+        Self { addrs, calls, tx: Mutex::new(tx_slot) }
     }
 
     pub fn enabled(&self) -> bool {
-        self.addr.is_some()
+        !self.addrs.is_empty()
     }
 
     /// Who's in a voice channel (usernames, each once), for channel lists.
@@ -149,16 +155,10 @@ fn resolve(addr: &str) -> Option<SocketAddr> {
 }
 
 /// The relay loop: one socket, every connection, forwarding between participants of the same call.
-fn relay(socket: UdpSocket, rx: mpsc::Receiver<Cmd>, calls: Calls, addr: String) {
+fn relay(socket: UdpSocket, rx: mpsc::Receiver<Cmd>, calls: Calls) {
     let mut peers: Vec<Peer> = Vec::new();
     let mut buf = vec![0u8; 2000];
-    let mut public = resolve(&addr);
-    let mut resolved_at = Instant::now();
     loop {
-        if resolved_at.elapsed() > Duration::from_secs(300) {
-            public = resolve(&addr).or(public);
-            resolved_at = Instant::now();
-        }
         while let Ok(cmd) = rx.try_recv() {
             match cmd {
                 Cmd::Add(p) => {
@@ -229,11 +229,16 @@ fn relay(socket: UdpSocket, rx: mpsc::Receiver<Cmd>, calls: Calls, addr: String)
         let _ = socket.set_read_timeout(Some(wait));
         match socket.recv_from(&mut buf) {
             Ok((n, source)) => {
-                let (Some(dest), Ok(contents)) = (public, buf[..n].try_into()) else { continue };
-                let input = Input::Receive(Instant::now(), Receive { proto: Protocol::Udp, source, destination: dest, contents });
-                if let Some(p) = peers.iter_mut().find(|p| p.rtc.accepts(&input)) {
-                    if p.rtc.handle_input(input).is_err() {
-                        p.rtc.disconnect();
+                // Each connection sees the packet as sent to the relay address it chose.
+                let now = Instant::now();
+                for p in peers.iter_mut() {
+                    let Ok(contents) = buf[..n].try_into() else { break };
+                    let input = Input::Receive(now, Receive { proto: Protocol::Udp, source, destination: p.addr, contents });
+                    if p.rtc.accepts(&input) {
+                        if p.rtc.handle_input(input).is_err() {
+                            p.rtc.disconnect();
+                        }
+                        break;
                     }
                 }
             }
@@ -265,17 +270,18 @@ fn voice_channel(app: &Shared, channel: &str, me: &Auth) -> ApiResult<String> {
 /// `GET /v1/channels/{channel}/voice`: who's in the call (members can look without joining).
 pub async fn state(State(app): State<Shared>, me: Auth, Path(channel): Path<String>) -> ApiResult<Json<Value>> {
     voice_channel(&app, &channel, &me)?;
-    // The relay's address as an IP, so a client can choose which of its own addresses to send from.
-    let relay = match app.voice.addr.clone() {
-        Some(a) => tokio::task::spawn_blocking(move || resolve(&a)).await.ok().flatten().map(|a| a.to_string()),
-        None => None,
-    };
-    Ok(Json(json!({ "enabled": app.voice.enabled(), "relay": relay, "participants": app.voice.participants(&channel) })))
+    // The relay's addresses as IPs (resolved now: a DDNS name may change), so a client can choose.
+    let addrs = app.voice.addrs.clone();
+    let relays: Vec<String> = tokio::task::spawn_blocking(move || addrs.iter().filter_map(|a| resolve(a)).map(|a| a.to_string()).collect()).await.unwrap_or_default();
+    Ok(Json(json!({ "enabled": app.voice.enabled(), "relay": relays.first(), "relays": relays, "participants": app.voice.participants(&channel) })))
 }
 
 #[derive(Deserialize)]
 pub struct JoinReq {
     offer: Value,
+    /// Which relay address (from `relays`) the client connects to; the first if left out.
+    #[serde(default)]
+    relay: Option<String>,
     #[serde(default)]
     muted: bool,
     #[serde(default)]
@@ -286,14 +292,19 @@ pub struct JoinReq {
 /// SLOTS receive-only ones). Returns the answer, your slot and who's in the call.
 pub async fn join(State(app): State<Shared>, me: Auth, Path(channel): Path<String>, Json(r): Json<JoinReq>) -> ApiResult<Json<Value>> {
     voice_channel(&app, &channel, &me)?;
-    let Some(addr) = app.voice.addr.clone() else {
+    if !app.voice.enabled() {
         return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "Voice isn't set up on this host yet (COMMS_MEDIA_ADDR)".into()));
     };
     if !app.limits.allow(&format!("voice-join:{}", me.device), 20, Duration::from_secs(60)) {
         return Err(ApiError(StatusCode::TOO_MANY_REQUESTS, "Too many joins; wait a moment".into()));
     }
     let offer: SdpOffer = serde_json::from_value(r.offer).map_err(|_| ApiError::bad("Not a WebRTC offer"))?;
-    let public = tokio::task::spawn_blocking(move || resolve(&addr)).await.ok().flatten().ok_or_else(|| ApiError(StatusCode::SERVICE_UNAVAILABLE, "The voice relay's address doesn't resolve".into()))?;
+    let addrs = app.voice.addrs.clone();
+    let relays: Vec<SocketAddr> = tokio::task::spawn_blocking(move || addrs.iter().filter_map(|a| resolve(a)).collect()).await.unwrap_or_default();
+    let public = match &r.relay {
+        Some(want) => relays.iter().find(|a| a.to_string() == *want).copied().ok_or_else(|| ApiError::bad("That isn't one of this host's relay addresses"))?,
+        None => *relays.first().ok_or_else(|| ApiError(StatusCode::SERVICE_UNAVAILABLE, "The voice relay's address doesn't resolve".into()))?,
+    };
 
     // A slot: the lowest one free in this call (rejoining keeps yours).
     let slot = {
@@ -318,7 +329,7 @@ pub async fn join(State(app): State<Shared>, me: Auth, Path(channel): Path<Strin
             return Err(ApiError::bad(format!("Couldn't set up the call: {e}")));
         }
     };
-    app.voice.send(Cmd::Add(Box::new(Peer { channel: channel.clone(), device: me.device.clone(), slot, rtc, from_client: None, to_client: Vec::new(), deafened: r.deafened })));
+    app.voice.send(Cmd::Add(Box::new(Peer { addr: public, channel: channel.clone(), device: me.device.clone(), slot, rtc, from_client: None, to_client: Vec::new(), deafened: r.deafened })));
     Ok(Json(json!({ "answer": answer, "slot": slot, "participants": app.voice.participants(&channel) })))
 }
 
