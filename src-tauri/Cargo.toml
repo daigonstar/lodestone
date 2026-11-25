@@ -35,3 +35,7 @@ webkit2gtk = "2.0"
 [profile.release]
 strip = true
 lto = true
+
+# Windows: free disk space and the list of running programs (for spotting a game that's running).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading"] }

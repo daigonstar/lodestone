@@ -886,6 +886,9 @@ function render() {
   $("#dlv").classList.toggle("hidden", !dlv);
   $("#comms").classList.toggle("hidden", !commsView);
   $("#plugins").classList.toggle("hidden", !pluginsView);
+  // Opening Plug-ins looks up the latest Comms release (only then: never in the background).
+  if (pluginsView && render.prevView !== "plugins") checkCommsRelease();
+  render.prevView = state.view;
   if (pluginsView) {
     for (const el of ["#empty", "#mini", "#mc", "#shop", "#downloads"]) $(el).classList.add("hidden");
     shopHide();
@@ -1639,7 +1642,16 @@ async function openComms() {
     if (!st.installed) {
       msg.innerHTML = `<div class="comms-intro"><h2>Lodestone Comms</h2>
         <p>Text chat with your friends on servers you host yourselves, end-to-end encrypted. It's a separate program with its own sandbox: it can't see your store sign-ins, and it only gets what you allow below.</p>
-        <p class="muted">Comms isn't installed yet. It's in early development.</p></div>`;
+        <p class="muted">Comms isn't installed yet. It's in early development.</p>
+        <p><button class="play" id="comms-install">Install Comms</button></p>
+        <p class="muted small">Downloaded from Lodestone's official releases on GitHub and checked against GitHub's published checksum before it's installed.</p></div>`;
+      $("#comms-install").onclick = async (e) => {
+        const b = e.currentTarget;
+        b.disabled = true;
+        b.textContent = "Downloading and checking…";
+        try { const v = await invoke("comms_install"); toast(`Comms ${v} is installed.`); openComms(); refreshPlugins(); }
+        catch (err) { b.disabled = false; b.textContent = "Install Comms"; toast(String(err), true); }
+      };
       return;
     }
     st = await invoke("comms_start");
@@ -1695,8 +1707,10 @@ function renderPluginsPage() {
     return `<div class="plugin-card" data-plugin="${esc(p.id)}">
       <div class="plugin-head"><div><h2>${esc(p.name)}</h2><p class="muted">${esc(p.description)}</p></div><span class="plugin-status ${p.running ? "on" : ""}">${status}</span></div>
       ${p.installed ? `<h4>Permissions</h4><ul class="perm-list">${perms}</ul>` : `<p class="muted">${esc(p.install_hint)}</p>`}
+      ${p.id === "comms" ? commsReleaseHTML(p) : ""}
       <div class="row-btns">
         ${p.installed ? `<button class="play" data-view="${p.id === "comms" ? "comms" : ""}">Open</button>` : ""}
+        ${p.id === "comms" && state.commsRelease?.latest && (!p.installed || state.commsRelease.update) ? `<button class="${p.installed ? "ghost" : "play"}" data-plugin-act="install">${p.installed ? "Update to" : "Install Comms"} ${esc(state.commsRelease.latest)}</button>` : ""}
         ${p.running ? '<button class="ghost" data-plugin-act="stop">Stop</button>' : ""}
         ${anyGranted ? '<button class="ghost" data-plugin-act="revoke">Revoke permissions</button>' : ""}
       </div></div>`;
@@ -1708,6 +1722,14 @@ $("#plugins-list").addEventListener("click", async (e) => {
   const id = b.closest("[data-plugin]").dataset.plugin;
   try {
     if (b.dataset.pluginAct === "stop") await invoke("plugin_stop", { id });
+    if (b.dataset.pluginAct === "install") {
+      b.disabled = true;
+      b.textContent = "Downloading and checking…";
+      const v = await invoke("comms_install");
+      state.commsRelease = { ...state.commsRelease, installed: v, update: false };
+      const f = $("#comms-frame"); f.removeAttribute("src"); f.classList.add("hidden");
+      toast(`Comms ${v} is installed.`);
+    }
     if (b.dataset.pluginAct === "revoke") {
       await invoke("comms_approve", { permissions: [] });
       const f = $("#comms-frame"); f.removeAttribute("src"); f.classList.add("hidden");
@@ -1717,6 +1739,21 @@ $("#plugins-list").addEventListener("click", async (e) => {
   refreshPlugins();
 });
 $("#open-plugins").onclick = () => { $("#dlg-settings").close(); state.view = "plugins"; ls.set("view", "plugins"); render(); refreshPlugins(); };
+
+// Comms releases: looked up when you open Plug-ins (or Comms while it isn't installed), never in the
+// background. Installing or updating only happens when you press the button.
+async function checkCommsRelease() {
+  try { state.commsRelease = await invoke("comms_check_update"); } catch (e) { state.commsRelease = { error: String(e) }; }
+  if (state.view === "plugins") renderPluginsPage();
+}
+function commsReleaseHTML(p) {
+  const r = state.commsRelease;
+  if (!r) return '<p class="muted small">Checking for the latest Comms…</p>';
+  if (r.error) return `<p class="muted small">${esc(r.error)}</p>`;
+  if (r.update) return `<p class="small">Comms ${esc(r.latest)} is out (you have ${esc(r.installed)}). Updating keeps your servers and messages.</p>`;
+  if (!p.installed) return `<p class="small">Latest: Comms ${esc(r.latest)}. It's downloaded from Lodestone's official GitHub releases and checked before it's installed.</p>`;
+  return "";
+}
 
 // ---------- collapsible sidebar sections (remembered) ----------
 // A collapsed section still shows the library you're in, so you never lose your place.

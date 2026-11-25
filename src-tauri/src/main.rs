@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod achievements;
+mod comms_install;
 mod plugins;
 mod downloads;
 mod friends;
@@ -15,6 +16,7 @@ mod meta;
 mod mc;
 mod model;
 mod net;
+mod os;
 mod proton;
 mod series;
 mod settings;
@@ -1382,6 +1384,19 @@ async fn comms_status() -> Result<plugins::Status, String> {
     blocking(plugins::status).await
 }
 
+/// Is there a Comms to install, or a newer version? (Asked when you open Plug-ins or Comms.)
+#[tauri::command]
+async fn comms_check_update() -> Result<serde_json::Value, String> {
+    let running = blocking(plugins::status).await?.version;
+    comms_install::check(running).await
+}
+
+/// Install (or update to) the newest Comms from its official releases, after checking its checksum.
+#[tauri::command]
+async fn comms_install() -> Result<String, String> {
+    comms_install::install().await
+}
+
 /// Start Lodestone Comms (if it isn't running) and wait for it to be ready.
 #[tauri::command]
 async fn comms_start(app: AppHandle) -> Result<plugins::Status, String> {
@@ -1574,6 +1589,8 @@ fn main() {
             emu_menu_entry,
             emu_folders,
             comms_status,
+            comms_check_update,
+            comms_install,
             comms_start,
             comms_approve,
             comms_theme,

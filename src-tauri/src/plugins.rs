@@ -49,8 +49,17 @@ pub struct Status {
     pub needs_approval: bool,
 }
 
-/// How to start Comms: its Flatpak, or a `lodestone-comms` program on the PATH.
+/// How to start Comms: its Flatpak, or a `lodestone-comms` program on the PATH. On Windows, the Comms
+/// Lodestone installed (comms_install).
 fn comms_command() -> Option<Command> {
+    #[cfg(windows)]
+    {
+        let exe = crate::comms_install::windows_exe()?;
+        let mut c = Command::new(exe);
+        c.arg("--lodestone-bridge");
+        return Some(c);
+    }
+    #[allow(unreachable_code)]
     let mut info = Command::new("flatpak");
     info.args(["info", COMMS_FLATPAK]);
     let has_flatpak = host::wrap(info).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
@@ -246,7 +255,7 @@ pub fn list() -> Vec<PluginInfo> {
         running: s.running,
         version: s.version,
         permissions: perms.iter().map(|p| (p.clone(), describe(p).unwrap_or("Unknown permission").to_string(), granted.contains(p))).collect(),
-        install_hint: "Install the Lodestone Comms Flatpak (io.github.daigonstar.Lodestone.Comms). It's in early development and not released yet.",
+        install_hint: "Comms isn't installed. Lodestone can install it from its official releases on GitHub (it's in early development).",
     }]
 }
 

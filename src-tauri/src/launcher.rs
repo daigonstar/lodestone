@@ -6,7 +6,6 @@ use crate::state;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -53,11 +52,9 @@ pub fn spawn(spec: &LaunchSpec, log: PathBuf) -> std::io::Result<Child> {
         cmd.current_dir(d);
     }
     let mut cmd = crate::host::wrap(cmd);
-    cmd.stdin(Stdio::null())
-        .stdout(out.try_clone()?)
-        .stderr(out)
-        // Own process group: keeps running if Lodestone closes, and no terminal signals reach it.
-        .process_group(0);
+    cmd.stdin(Stdio::null()).stdout(out.try_clone()?).stderr(out);
+    // Detached: keeps running if Lodestone closes, and no terminal signals reach it.
+    crate::os::detach(&mut cmd);
     cmd.spawn()
 }
 

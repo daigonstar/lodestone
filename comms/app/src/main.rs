@@ -57,6 +57,12 @@ async fn main() {
 /// Windows: the Comms server runs on a background thread; the main thread shows the window.
 #[cfg(windows)]
 fn main() {
+    // Started by Lodestone: Comms shows inside Lodestone, so no window of its own.
+    if std::env::args().any(|a| a == "--lodestone-bridge") {
+        let rt = tokio::runtime::Runtime::new().expect("can't start");
+        rt.block_on(run(None));
+        return;
+    }
     use tao::event::{Event, WindowEvent};
     use tao::event_loop::{ControlFlow, EventLoop};
     use tao::window::WindowBuilder;

@@ -98,6 +98,13 @@ pub struct Proc {
 
 /// Every process (the host's, from a Flatpak) except Lodestone itself.
 pub fn procs() -> Vec<Proc> {
+    #[cfg(windows)]
+    {
+        // The program's full path stands in for its command line: game detection looks for programs
+        // running from the game's folder.
+        return crate::os::windows_procs().into_iter().map(|(name, path)| Proc { comm: name, cmdline: path.into_bytes() }).collect();
+    }
+    #[allow(unreachable_code)]
     if in_flatpak() {
         return host_procs();
     }

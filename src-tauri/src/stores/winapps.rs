@@ -706,7 +706,7 @@ fn ea_fix_link(drive_c: &Path) {
         Ok(_) => return,
         Err(_) => {}
     }
-    let _ = std::os::unix::fs::symlink(&target, &link);
+    let _ = crate::tools::link_dir(&target, &link);
 }
 
 #[derive(Debug, PartialEq)]

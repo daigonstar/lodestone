@@ -66,7 +66,7 @@ pub async fn install_umu() -> Result<String, String> {
     let _ = fs::remove_dir_all(&stage);
     let current = dir.join("current");
     let _ = fs::remove_file(&current);
-    std::os::unix::fs::symlink(&target, &current).map_err(net::err)?;
+    link_dir(&target, &current).map_err(net::err)?;
     fs::write(dir.join("version.txt"), &tag).map_err(net::err)?;
     Ok(tag)
 }
@@ -188,8 +188,7 @@ impl BinTool {
         fs::create_dir_all(&dir).map_err(net::err)?;
         let tmp = dir.join(format!("{}.part", self.name));
         fs::write(&tmp, &bytes).map_err(net::err)?;
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755)).map_err(net::err)?;
+        crate::os::make_executable(&tmp).map_err(net::err)?;
         fs::rename(&tmp, dir.join(self.name)).map_err(net::err)?;
         fs::write(dir.join("version.txt"), &tag).map_err(net::err)?;
         Ok(tag)
@@ -213,5 +212,19 @@ mod tests {
             let v = tauri::async_runtime::block_on(t.install()).unwrap();
             println!("{} {v} at {:?}", t.name, t.path());
         }
+    }
+}
+
+/// Point `link` at `target` (the "current" version of a tool). These tools (Wine, Proton and the
+/// like) are only used on Linux.
+pub fn link_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (target, link);
+        Err(std::io::Error::other("only used on Linux"))
     }
 }

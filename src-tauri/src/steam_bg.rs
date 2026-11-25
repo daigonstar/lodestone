@@ -231,13 +231,7 @@ fn apply(edit: &Edit) -> Result<(), String> {
 }
 
 fn free_space(p: &Path) -> u64 {
-    use std::os::unix::ffi::OsStrExt;
-    let Ok(c) = std::ffi::CString::new(p.as_os_str().as_bytes()) else { return 0 };
-    let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(c.as_ptr(), &mut s) } != 0 {
-        return 0;
-    }
-    s.f_bavail as u64 * s.f_frsize as u64
+    crate::os::free_space(p)
 }
 
 /// A folder name that is safe to join under steamapps/common.
@@ -495,12 +489,11 @@ fn progress(appid: u32, seen: &Seen, kind: &str) -> (f32, Option<u64>, Option<u6
 /// Disk space a folder really uses (blocks written), not its files' apparent sizes: Steam reserves
 /// full-size files up front, which would otherwise look finished straight away.
 fn disk_used(p: &Path) -> u64 {
-    use std::os::unix::fs::MetadataExt;
     let Ok(rd) = fs::read_dir(p) else { return 0 };
     rd.flatten()
         .map(|e| match e.file_type() {
             Ok(t) if t.is_dir() => disk_used(&e.path()),
-            Ok(t) if t.is_file() => e.metadata().map(|m| m.blocks() * 512).unwrap_or(0),
+            Ok(t) if t.is_file() => e.metadata().map(|m| crate::os::file_disk_use(&m)).unwrap_or(0),
             _ => 0,
         })
         .sum()

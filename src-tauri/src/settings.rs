@@ -83,11 +83,6 @@ pub fn save(s: &Settings) -> Result<(), String> {
     }
     // It holds API keys: keep it private to the user, from the moment it's created (fs::write would
     // create it readable by everyone for an instant before the permissions were tightened).
-    use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let text = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
-    let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&f).map_err(|e| e.to_string())?;
-    let _ = fs::set_permissions(&f, fs::Permissions::from_mode(0o600)); // files made before this change
-    file.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
-    Ok(())
+    crate::os::write_private(&f, text.as_bytes()).map_err(|e| e.to_string())
 }
