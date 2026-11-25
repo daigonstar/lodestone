@@ -87,5 +87,8 @@ raw.githubusercontent.com                     # libretro-thumbnails box art imag
 buildbot.libretro.com                         # official RetroArch cores (checked against libretro's CRC32 list)
 dl.flathub.org                                # Flathub's repository file, passed to flatpak (flatpak contacts it, not Lodestone)
 
+# --- Plug-ins (only when you open one, such as Lodestone Comms) ---
+127.0.0.1                                     # a plug-in's own page on this PC, shown in Lodestone's window (never leaves the PC)
+
 # --- Inside Lodestone only ---
 lodestone.localhost                           # internal address for sign-in hand-offs; never leaves the app

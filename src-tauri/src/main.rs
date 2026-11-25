@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod achievements;
+mod plugins;
 mod downloads;
 mod friends;
 mod gog_setup;
@@ -1375,6 +1376,30 @@ async fn emu_pick_folder(start: String) -> Result<Option<String>, String> {
     blocking(move || stores::emulation::pick_folder(&start)).await?
 }
 
+/// Lodestone Comms: installed? running? its page, and the permissions it asks for.
+#[tauri::command]
+async fn comms_status() -> Result<plugins::Status, String> {
+    blocking(plugins::status).await
+}
+
+/// Start Lodestone Comms (if it isn't running) and wait for it to be ready.
+#[tauri::command]
+async fn comms_start(app: AppHandle) -> Result<plugins::Status, String> {
+    blocking(move || plugins::start(app)).await?
+}
+
+/// Approve the permissions Comms asked for (only known ones are stored).
+#[tauri::command]
+fn comms_approve(permissions: Vec<String>) -> Result<plugins::Status, String> {
+    plugins::approve(permissions)
+}
+
+/// Pass Lodestone's colours to Comms.
+#[tauri::command]
+fn comms_theme(vars: serde_json::Value) {
+    plugins::send_theme(vars)
+}
+
 /// Open the folder a ROM is in, in the file manager.
 #[tauri::command]
 fn rom_reveal(id: String) -> Result<(), String> {
@@ -1534,6 +1559,10 @@ fn main() {
             store_achievements,
             emu_menu_entry,
             emu_folders,
+            comms_status,
+            comms_start,
+            comms_approve,
+            comms_theme,
             rom_reveal,
             emu_open,
             emu_set_folder,
@@ -1589,6 +1618,11 @@ fn main() {
             download_dismiss,
             save_settings
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Lodestone");
+        .build(tauri::generate_context!())
+        .expect("error while running Lodestone")
+        .run(|_, event| {
+            if let tauri::RunEvent::Exit = event {
+                plugins::stop();
+            }
+        });
 }

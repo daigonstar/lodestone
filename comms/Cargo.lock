@@ -1612,6 +1612,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
+name = "lodestone-comms"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "futures-util",
+ "getrandom 0.2.17",
+ "lodestone-comms-client",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "lodestone-comms-client"
 version = "0.1.0"
 dependencies = [

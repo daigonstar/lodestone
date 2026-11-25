@@ -1,0 +1,16 @@
+[package]
+name = "lodestone-comms"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Lodestone Comms: end-to-end encrypted chat as a Lodestone plug-in"
+
+[dependencies]
+lodestone-comms-client = { path = "../client" }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-std", "io-util", "net"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+getrandom = "0.2"
+base64 = "0.22"

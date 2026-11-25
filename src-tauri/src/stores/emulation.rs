@@ -220,7 +220,7 @@ pub fn create_layout(dir: &str) -> Result<(PathBuf, usize), String> {
 /// neither is there.
 pub fn pick_folder(start: &str) -> Result<Option<String>, String> {
     let start = expand(start).filter(|p| p.is_dir()).unwrap_or_else(home);
-    let mut cmd = if crate::host::which("zenity").is_some() {
+    let cmd = if crate::host::which("zenity").is_some() {
         let mut c = std::process::Command::new("zenity");
         c.args(["--file-selection", "--directory", "--title=Choose your Emulation or ROMs folder"]).arg(format!("--filename={}/", start.display()));
         c

@@ -360,6 +360,7 @@ function renderNav() {
   const lib = [
     ["home", "Home", ""],
     ["downloads", "Downloads", (state.dl || []).filter((d) => d.state === "downloading").length || ""],
+    ["comms", "Comms", ""],
     ["all", "All games", ls.get("mergeDupes", true) ? mergeList(visible.filter((g) => inst(g) && !g.system)).length : visible.filter((g) => inst(g) && !g.system).length],
     ["favorites", "Favorites", visible.filter((g) => g.favorite).length],
     ["recent", "Recently played", visible.filter((g) => g.last_played && inst(g)).length],
@@ -584,7 +585,7 @@ function detailCard() {
 }
 function placeDetail() {
   const d = $("#detail");
-  const gridView = !["home", "minecraft", "downloads"].includes(state.view) && !state.view.startsWith("shop:");
+  const gridView = !["home", "minecraft", "downloads", "comms"].includes(state.view) && !state.view.startsWith("shop:");
   const card = state.open && gridView ? detailCard() : null;
   if (!card) {
     if (state.open && gridView && state.selected) state.open = false;
@@ -872,10 +873,19 @@ function render() {
   const shopView = state.view.startsWith("shop:");
   const home = state.view === "home";
   const dlv = state.view === "downloads";
-  const mc = state.view === "minecraft" || shopView || home || dlv;
+  const commsView = state.view === "comms";
+  const mc = state.view === "minecraft" || shopView || home || dlv || commsView;
   for (const el of ["#hero", ".grid-head", "#grid", "#setup", "#filters"]) $(el).classList.toggle("hidden", mc);
   $("#home").classList.toggle("hidden", !home);
   $("#dlv").classList.toggle("hidden", !dlv);
+  $("#comms").classList.toggle("hidden", !commsView);
+  document.querySelector("main").classList.toggle("comms-open", commsView);
+  if (commsView) {
+    for (const el of ["#empty", "#mini", "#mc", "#shop", "#downloads"]) $(el).classList.add("hidden");
+    shopHide();
+    openComms();
+    return;
+  }
   $("#downloads").classList.toggle("hidden", dlv);
   if (mc) $("#about").classList.add("hidden");
   if (dlv) {
@@ -1443,6 +1453,7 @@ $("#btn-settings").onclick = async () => {
   $("#form-settings").rauser.value = s.ra_user || "";
   $("#form-settings").rakey.value = s.ra_key || "";
   $("#form-settings").emudir.value = s.emulation_dir || "";
+  renderPluginSettings(s);
   renderEmuFolders();
   renderProton().catch((e) => toast(String(e), true));
   renderMangohud().catch((e) => toast(String(e), true));
@@ -1602,6 +1613,73 @@ async function menuAction(act) {
   } catch (e) {
     toast(String(e), true);
   }
+}
+
+// ---------- Lodestone Comms (a plug-in: its own program, shown in a frame) ----------
+// The frame shows a page Comms serves on 127.0.0.1. It can't use Lodestone's commands; Comms only reaches
+// Lodestone through the bridge, for the permissions you approve here.
+async function openComms() {
+  const msg = $("#comms-msg"), frame = $("#comms-frame");
+  if (frame.src && !frame.classList.contains("hidden")) return;
+  msg.innerHTML = '<p class="muted">Starting Lodestone Comms…</p>';
+  try {
+    let st = await invoke("comms_status");
+    if (!st.installed) {
+      msg.innerHTML = `<div class="comms-intro"><h2>Lodestone Comms</h2>
+        <p>Text chat with your friends on servers you host yourselves, end-to-end encrypted. It's a separate program with its own sandbox: it can't see your store sign-ins, and it only gets what you allow below.</p>
+        <p class="muted">Comms isn't installed yet. It's in early development.</p></div>`;
+      return;
+    }
+    st = await invoke("comms_start");
+    if (st.needs_approval) return askCommsPermissions(st);
+    showComms(st);
+  } catch (e) { msg.innerHTML = `<p class="err-text">${esc(String(e))}</p>`; }
+}
+function askCommsPermissions(st) {
+  $("#comms-msg").innerHTML = `<div class="comms-intro"><h2>Allow Lodestone Comms?</h2>
+    <p>Comms ${esc(st.version || "")} runs as its own program and can't see your store sign-ins, keys or files. It asks Lodestone for:</p>
+    <ul>${st.requested.map(([, d]) => `<li>${esc(d)}</li>`).join("")}</ul>
+    <p class="muted">You can take this back in Settings → Plug-ins.</p>
+    <div class="row-btns"><button class="play" id="comms-allow">Allow</button><button class="ghost" data-view="home">Not now</button></div></div>`;
+  $("#comms-allow").onclick = async () => {
+    try { showComms(await invoke("comms_approve", { permissions: st.requested.map(([p]) => p) })); } catch (e) { toast(String(e), true); }
+  };
+}
+function showComms(st) {
+  if (!st.ui) return ($("#comms-msg").innerHTML = '<p class="err-text">Lodestone Comms didn\'t start. Its log is in ~/.local/share/lodestone/logs/lodestone-comms.log.</p>');
+  $("#comms-msg").innerHTML = "";
+  const frame = $("#comms-frame");
+  frame.classList.remove("hidden");
+  if (frame.src !== st.ui) frame.src = st.ui;
+  // Lodestone's colours, so Comms matches.
+  const cs = getComputedStyle(document.documentElement);
+  const vars = Object.fromEntries(["--bg", "--bg-2", "--bg-3", "--line", "--text", "--muted", "--accent", "--danger"].map((k) => [k, cs.getPropertyValue(k).trim()]));
+  invoke("comms_theme", { vars }).catch(() => {});
+}
+if (T) {
+  T.event.listen("comms-stopped", () => { const f = $("#comms-frame"); f.removeAttribute("src"); f.classList.add("hidden"); if (state.view === "comms") openComms(); });
+  // Comms asked to invite a friend: copy the invite (Lodestone opened their Steam chat) and say so.
+  T.event.listen("comms-open-chat", async (e) => {
+    const { store, id, text } = e.payload || {};
+    try { await navigator.clipboard.writeText(text); } catch { return toast("Couldn't copy the invite to the clipboard", true); }
+    toast(store === "steam" ? "Invite copied: paste it into the Steam chat that just opened." : "Invite copied: send it to your friend.");
+  });
+}
+
+// Settings → Plug-ins: what Comms is allowed, and a way to take it back.
+function renderPluginSettings(s) {
+  const allowed = (s.plugin_permissions || {}).comms || [];
+  const words = { "friends:read": "see your friends list", "chat:open": "open friends' Steam chats" };
+  $("#plugin-comms").textContent = allowed.length ? `Lodestone Comms may ${allowed.map((p) => words[p] || p).join(" and ")}.` : "Lodestone Comms: nothing allowed.";
+  $("#plugin-comms-revoke").classList.toggle("hidden", !allowed.length);
+  $("#plugin-comms-revoke").onclick = async () => {
+    try {
+      await invoke("comms_approve", { permissions: [] });
+      renderPluginSettings(await invoke("get_settings"));
+      const f = $("#comms-frame"); f.removeAttribute("src"); f.classList.add("hidden");
+      toast("Comms permissions removed. Comms will ask again next time you open it.");
+    } catch (e) { toast(String(e), true); }
+  };
 }
 
 // ---------- collapsible sidebar sections (remembered) ----------
@@ -2038,7 +2116,7 @@ async function renderAchievements(g) {
 
 async function renderAbout(g) {
   const el = $("#about");
-  if (!g || ["home", "minecraft", "downloads"].includes(state.view) || state.view.startsWith("shop:")) return el.classList.add("hidden");
+  if (!g || ["home", "minecraft", "downloads", "comms"].includes(state.view) || state.view.startsWith("shop:")) return el.classList.add("hidden");
   el.classList.remove("hidden");
   const id = g.id;
   const facts = (d) => {

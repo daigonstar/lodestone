@@ -645,3 +645,11 @@ dialog label small { color: var(--muted); font-weight: 400; }
 .emu-menu { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; }
 .emu-folder { gap: 6px; }
 .emu-folder input { flex: 1; min-width: 0; }
+
+/* Lodestone Comms view: the plug-in's page fills the main area. */
+main.comms-open { overflow: hidden; }
+.comms { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.comms-msg:empty { display: none; }
+.comms-intro { max-width: 560px; margin: 60px auto; padding: 0 24px; line-height: 1.5; }
+.comms-intro ul { padding-left: 20px; }
+#comms-frame { flex: 1; width: 100%; border: 0; background: var(--bg); }

@@ -109,6 +109,10 @@
     </section>
     </div>
 
+    <section id="comms" class="comms hidden">
+      <div id="comms-msg" class="comms-msg"></div>
+      <iframe id="comms-frame" class="hidden" title="Lodestone Comms" referrerpolicy="no-referrer"></iframe>
+    </section>
     <section id="dlv" class="dlv hidden">
       <div class="dlv-head">
         <h2>Downloads</h2>
@@ -443,6 +447,9 @@
       <div class="row-line"><button type="button" class="ghost" id="mh-config">Customize the overlay…</button></div>
       <label class="check"><input type="checkbox" id="mh-all" /> Show MangoHud in every game (turn it off or on per game in the game's ⋯ menu)</label>
       <p class="hint">FPS, frame times, CPU and GPU load over your games. Lodestone uses MangoHud from your system, or sets up the official release in its own folder. It works for games Lodestone starts; for Steam games, add <code>mangohud %command%</code> to the game's launch options in Steam.</p>
+      <h3>Plug-ins</h3>
+      <div class="row-line"><span id="plugin-comms" class="muted">Lodestone Comms: not allowed yet</span><button type="button" class="ghost hidden" id="plugin-comms-revoke">Revoke</button></div>
+      <p class="hint">Plug-ins are separate programs shown inside Lodestone. They can't see your store sign-ins, keys or files, and only get what you allow.</p>
       <h3>Mods</h3>
       <label class="check"><input type="checkbox" id="kiln-play" /> Play modded games through Kiln (checks mods are deployed and loaders set up first)</label>
       <h3>Games</h3>

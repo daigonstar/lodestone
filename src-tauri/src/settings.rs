@@ -47,6 +47,9 @@ pub struct Settings {
     /// Emulators Lodestone installs get an app menu entry (off: hidden, since you launch them here).
     #[serde(default)]
     pub emu_menu_entry: bool,
+    /// Bridge permissions you approved for each plug-in ("comms" -> ["friends:read", ...]).
+    #[serde(default)]
+    pub plugin_permissions: std::collections::HashMap<String, Vec<String>>,
 }
 
 fn yes() -> bool {
