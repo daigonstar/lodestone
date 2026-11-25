@@ -8,7 +8,7 @@ the Steam client. Steam itself is still needed for your Steam games and Steam fe
 ![Lodestone's library: games from every store in one list, with play time and ProtonDB ratings](packaging/flatpak/screenshots/library.png)
 
 > [!NOTE]
-> Lodestone is an early beta (0.1.x), built with an AI coding assistant and reviewed and tested by me.
+> Lodestone is a beta (0.2, the Emulation Update), built with an AI coding assistant and reviewed and tested by me.
 > Read [How Lodestone is built](#how-lodestone-is-built) and [Security and privacy](#security-and-privacy)
 > before you sign in to anything.
 
@@ -19,11 +19,13 @@ the Steam client. Steam itself is still needed for your Steam games and Steam fe
 | Battle.net, EA app, Ubisoft Connect | Sets each one up on Proton (or uses the one you installed with Lutris or Steam), lists what you own, and plays through it. Battle.net installs run in the background; World of Warcraft can start directly |
 | Guild Wars 2 | Installs and runs it on Proton |
 | Heroic, Lutris | Games you installed with them (including Amazon through Heroic) show up and play through them |
+| Emulators | Your ROMs in EmuDeck's folder layout, one library per system, played with the emulator you choose (installed from Flathub in one click if it's missing). Names, box art and achievements from RetroAchievements |
 | Minecraft | Your ATLauncher instances, with a hub for mods, resource packs and shaders (in development) |
 | Anything else | **+ Add game**: a native game or script, or a Windows `.exe` run with Proton |
 
-Plus a Downloads tab, play time from Steam, Epic, Lutris and Heroic, game details and news, ProtonDB
-ratings, artwork editing, MangoHud, Steam friends, and modding through [Kiln](#mods-with-kiln).
+Plus a Downloads tab, play time from Steam, Epic, Lutris and Heroic, game details and news, Steam and
+RetroAchievements achievements, ProtonDB ratings, artwork editing, MangoHud, Steam friends, and modding
+through [Kiln](#mods-with-kiln).
 
 Every launch runs detached, with its output in `~/.local/share/lodestone/logs/<game>.log`
 (⋯ → View launch log). Lodestone tracks running games from the process list, which is also how it counts
@@ -63,9 +65,10 @@ than find it in the git history.
 
 What that means in practice:
 
-- **It's an early beta (0.1.x).** Steam, Epic, GOG, Battle.net (Diablo II: Resurrected) and
+- **It's a beta (0.2.x).** Steam, Epic, GOG, Battle.net (Diablo II: Resurrected) and
   the library, play time and downloads are what I use daily. EA sign-in, Ubisoft, some World of Warcraft
-  versions and the Minecraft hub have had less real-world use. Please report what breaks.
+  versions and the Minecraft hub have had less real-world use, and emulation and achievements are new in
+  0.2. Please report what breaks.
 - **It's maintained in my spare time**, around a full-time job and a young family. I'll fix what I can,
   but replies may take a few days. Pull requests and clear bug reports (with the launch log from
   ⋯ → View launch log) help enormously.
@@ -223,6 +226,30 @@ With this in mind, if you feel these projects are beneficial, please do give the
 - **Missing artwork:** Lodestone checks which covers don't exist and lists those games. **Find artwork** fills in
   what it can. Steam games with no portrait cover get one built from their wide store header.
 - Epic's library also lists Unreal Engine assets and tools you own. Lodestone only shows the ones Epic files under games.
+
+## Emulation and achievements
+
+- **ROM libraries.** Lodestone reads EmuDeck's layout (`Emulation/roms/<system>`, found in your home folder
+  and on mounted drives, RetroDECK's folder too) and lists each system that has games under **Systems** in
+  the sidebar. Multi-disc games (`.m3u`, `.cue`) show once. ES-DE's `gamelist.xml` names and downloaded covers
+  are used when they're there. ROMs stay out of **All games**.
+- **Choosing the emulator.** A system's library has a **Plays with** list, built from EmuDeck's (or ES-DE's)
+  launch commands: RetroArch cores and standalone emulators. Lodestone finds emulators installed as Flatpaks,
+  on your PATH or as AppImages in `~/Applications`.
+- **One-click installs.** If the chosen emulator is missing, **Install** adds it from Flathub for your user in
+  the background (follow it in Downloads), with the RetroArch core from libretro's build server when needed.
+  **Add to my app menu** is off by default, since you start them from Lodestone; a system's library can show
+  or hide an installed Flatpak emulator later. Lodestone never downloads games or BIOS files.
+- **RetroAchievements.** Add your RA username and Web API key (from your RetroAchievements control panel) in
+  Settings. Lodestone fingerprints your ROMs on your PC the same way RetroAchievements does, so the right
+  version of a game matches; matched ROMs get RetroAchievements' names and box art, and a game's details
+  show its achievements and your progress (hardcore unlocks are outlined).
+- **Box art backup.** ROMs that RetroAchievements and ES-DE have no art for get box art from libretro's
+  thumbnail collection, the one RetroArch uses. Covers are shown whole instead of cropped.
+- **Steam achievements.** With your Steam Web API key set, a Steam game's details show its achievements:
+  earned ones first, with when you earned them and how many players have each one (rare ones you've earned
+  are outlined). Your Steam profile's *Game details* must be public. GOG and Epic achievements aren't
+  supported: GOG only shares them through its Galaxy service, and Epic has no public API for them.
 
 ## Friends
 
