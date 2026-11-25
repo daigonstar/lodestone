@@ -23,6 +23,7 @@ pub fn router(app: Shared) -> Router {
         .route("/v1/session", post(auth::new_session).delete(auth::sign_out))
         .route("/v1/devices", post(auth::add_device))
         .route("/v1/me", get(me))
+        .route("/v1/me/status", axum::routing::put(crate::presence::set_status))
         .route("/v1/spaces", post(create_space))
         .route("/v1/spaces/{space}", get(get_space).patch(settings::update_space).delete(settings::delete_space))
         .route("/v1/spaces/{space}/icon", get(settings::get_icon).put(settings::put_icon).delete(settings::delete_icon))
@@ -115,6 +116,7 @@ fn channel_space(app: &Shared, channel: &str, me: &Auth) -> ApiResult<String> {
 // ---------- you ----------
 
 async fn me(State(app): State<Shared>, me: Auth) -> ApiResult<Json<Value>> {
+    let (status, status_text): (String, String) = app.db.with(|c| c.query_row("SELECT status, status_text FROM accounts WHERE id = ?1", [me.account], |r| Ok((r.get(0)?, r.get(1)?))))?;
     let (devices, spaces) = app.db.with(|c| {
         let devices: Vec<String> = c.prepare("SELECT key FROM devices WHERE account = ?1 ORDER BY created")?.query_map([me.account], |r| r.get(0))?.collect::<Result<_, _>>()?;
         let spaces: Vec<Value> = c
@@ -123,7 +125,7 @@ async fn me(State(app): State<Shared>, me: Auth) -> ApiResult<Json<Value>> {
             .collect::<Result<_, _>>()?;
         Ok((devices, spaces))
     })?;
-    Ok(Json(json!({ "username": me.username, "device": me.device, "host_admin": me.host_admin, "devices": devices, "spaces": spaces })))
+    Ok(Json(json!({ "username": me.username, "device": me.device, "host_admin": me.host_admin, "devices": devices, "spaces": spaces, "status": status, "status_text": status_text })))
 }
 
 // ---------- spaces and channels ----------
@@ -160,11 +162,14 @@ async fn get_space(State(app): State<Shared>, me: Auth, Path(space): Path<String
             .collect::<Result<_, _>>()?;
         // Members with their device keys: clients check MLS credentials against these.
         let mut members: Vec<Value> = Vec::new();
-        let mut stmt = c.prepare("SELECT a.id, a.username, m.role FROM members m JOIN accounts a ON a.id = m.account WHERE m.space = ?1 ORDER BY a.username")?;
-        let rows: Vec<(i64, String, String)> = stmt.query_map([&space], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_, _>>()?;
-        for (id, username, role) in rows {
+        let mut stmt = c.prepare("SELECT a.id, a.username, m.role, a.status, a.status_text FROM members m JOIN accounts a ON a.id = m.account WHERE m.space = ?1 ORDER BY a.username")?;
+        let rows: Vec<(i64, String, String, String, String)> = stmt.query_map([&space], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<Result<_, _>>()?;
+        for (id, username, role, status, status_text) in rows {
             let devices: Vec<String> = c.prepare("SELECT key FROM devices WHERE account = ?1 ORDER BY created")?.query_map([id], |r| r.get(0))?.collect::<Result<_, _>>()?;
-            members.push(json!({ "username": username, "role": role, "devices": devices }));
+            let presence = crate::presence::shown(&app, id, &status);
+            // Someone who looks offline shows no status message either.
+            let text = if presence == "offline" { String::new() } else { status_text };
+            members.push(json!({ "username": username, "role": role, "devices": devices, "presence": presence, "status_text": text }));
         }
         Ok(json!({ "id": space, "name": name, "description": description, "has_icon": has_icon, "your_role": role, "channels": channels, "members": members }))
     })?;

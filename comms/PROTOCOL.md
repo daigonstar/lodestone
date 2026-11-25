@@ -25,6 +25,7 @@ stores ciphertext it can't read.
 | space and channel names, and who is a member | any private key |
 | when messages are sent, their size, and by which device | passwords (there are none: devices sign in with their key) |
 | the size of attached files and when they were sent | what's in attached files, their names or types |
+| your chosen status and status message, and when your app last checked in | |
 
 The host's logs never contain session tokens or invite codes.
 
@@ -153,6 +154,15 @@ The message that carries a file is an application message with `t: "file"`, the 
 `file: { id, name, mime, size, key, nonce }`. Receivers decide whether it's an image from the decrypted
 content (PNG, JPEG, GIF, WebP), never from the sender's claim, and a file changed on the host fails to
 decrypt and isn't shown. The host sees each file's size and when it was uploaded.
+
+## Status
+
+- `PUT /v1/me/status` `{ status, text }`: `online`, `away`, `busy` or `invisible`, and an optional message
+  (up to 80 characters).
+- Each member in `GET /v1/spaces/{space}` has `presence` (`online`, `away`, `busy` or `offline`) and
+  `status_text`. Someone whose app hasn't checked in for 45 seconds, or who is invisible, shows as
+  `offline`, with no message.
+- The host keeps "last checked in" in memory only. Statuses and messages are visible to the host.
 
 ## Live connection
 

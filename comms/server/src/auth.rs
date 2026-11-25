@@ -43,7 +43,9 @@ pub fn session(app: &Shared, token: &str) -> ApiResult<Auth> {
         )
         .optional()
     })?;
-    found.ok_or_else(|| ApiError::unauthorized("Sign in again"))
+    let me = found.ok_or_else(|| ApiError::unauthorized("Sign in again"))?;
+    app.seen.lock().unwrap().insert(me.account, std::time::Instant::now());
+    Ok(me)
 }
 
 impl FromRequestParts<Shared> for Auth {

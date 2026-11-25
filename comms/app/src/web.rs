@@ -35,6 +35,7 @@ pub fn router(app: Shared) -> Router {
         .route("/api/messages", get(messages))
         .route("/api/send", post(send))
         .route("/api/react", post(react))
+        .route("/api/status", post(set_status))
         .route("/api/upload", post(upload).layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)))
         .route("/api/file", get(open_file))
         .route("/api/friends", get(friends))
@@ -114,10 +115,11 @@ async fn state(State(app): State<Shared>) -> R {
     for (url, c) in app.hosts.all() {
         let Some(username) = c.username() else { continue };
         let joined: Vec<String> = c.channels().map(|v| v.into_iter().map(|x| x.0).collect()).unwrap_or_default();
-        let mut entry = json!({ "url": url, "username": username, "spaces": [] });
+        let mut entry = json!({ "url": url, "username": username, "spaces": [], "status": "online", "status_text": "" });
         let spaces = async {
             ensure_signed_in(&c).await?;
             let me = c.host.get("/v1/me").await?;
+            let status = (me["status"].clone(), me["status_text"].clone());
             let mut out = Vec::new();
             for s in me["spaces"].as_array().into_iter().flatten() {
                 let id = s["id"].as_str().unwrap_or_default();
@@ -128,11 +130,15 @@ async fn state(State(app): State<Shared>) -> R {
                 }
                 out.push(sp);
             }
-            Ok::<_, Fail>(out)
+            Ok::<_, Fail>((out, status))
         }
         .await;
         match spaces {
-            Ok(s) => entry["spaces"] = json!(s),
+            Ok((s, (status, text))) => {
+                entry["spaces"] = json!(s);
+                entry["status"] = status;
+                entry["status_text"] = text;
+            }
             Err(e) => entry["error"] = json!(e.0),
         }
         hosts.push(entry);
@@ -337,6 +343,38 @@ async fn open_file(State(app): State<Shared>, Query(q): Query<FileQuery>) -> Res
             r
         }
         Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct StatusReq {
+    status: String,
+    #[serde(default)]
+    text: String,
+}
+
+/// Set your status on every host you've joined (it's one "you", wherever your friends are).
+async fn set_status(State(app): State<Shared>, Json(r): Json<StatusReq>) -> R {
+    let mut errors = Vec::new();
+    for (url, c) in app.hosts.all() {
+        if c.username().is_none() {
+            continue;
+        }
+        let res = async {
+            ensure_signed_in(&c).await?;
+            c.host.call("PUT", "/v1/me/status", Some(json!({ "status": r.status, "text": r.text }))).await?;
+            Ok::<_, Fail>(())
+        }
+        .await;
+        if let Err(e) = res {
+            errors.push(format!("{url}: {}", e.0));
+        }
+    }
+    let _ = app.events.send(json!({ "type": "state" }).to_string());
+    if errors.is_empty() {
+        Ok(Json(json!({ "ok": true })))
+    } else {
+        Err(Fail(errors.join("; ")))
     }
 }
 

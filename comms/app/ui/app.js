@@ -7,7 +7,7 @@ history.replaceState(null, "", location.pathname); // don't leave the secret in 
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const state = { hosts: [], bridge: false, sel: { host: "", space: "", channel: "" }, me: "" };
+const state = { hosts: [], bridge: false, sel: { host: "", space: "", channel: "" }, me: "", showMembers: true };
 
 async function api(path, body) {
   const r = await fetch(path, {
@@ -68,6 +68,7 @@ function render() {
     + `<button class="srv add" id="add-server" title="Join or create a server">+</button>`;
   const { sp, ch } = current();
   if (!sp) {
+    $("#members").classList.add("hidden");
     $("#channels").innerHTML = "";
     $("#chat").innerHTML = `<div class="empty"><h2>Lodestone Comms</h2>
       <p class="muted">End-to-end encrypted chat on servers you or your friends host. Messages are encrypted on your PC; the host only passes them on.</p>
@@ -77,14 +78,17 @@ function render() {
   const admin = sp.your_role === "owner" || sp.your_role === "admin";
   $("#channels").innerHTML = `<h2><span>${esc(sp.name)}</span><button class="gear" data-act="settings" title="Server settings">⚙</button></h2><div class="host" title="${esc(sp.host)}">${esc(sp.me)} · ${esc(sp.host.replace(/^https?:\/\//, ""))}</div>
     <div class="chlist">${sp.channels.map((c) => `<button class="ch ${c.id === state.sel.channel ? "on" : ""}" data-channel="${esc(c.id)}"># ${esc(c.name)}${c.ready ? "" : ' <span class="wait">(waiting for keys)</span>'}</button>`).join("")}</div>
-    <div class="side-actions"><button data-act="invite">Invite people</button>${admin ? '<button class="ghost" data-act="channel">New channel</button>' : ""}</div>`;
+    <div class="side-actions"><button data-act="invite">Invite people</button>${admin ? '<button class="ghost" data-act="channel">New channel</button>' : ""}</div>
+    ${meBar()}`;
+  renderMembers(sp);
   if (!ch) { $("#chat").innerHTML = ""; return; }
-  $("#chat").innerHTML = `<header><h3># ${esc(ch.name)}${ch.topic ? `<span class="topic">${esc(ch.topic)}</span>` : ""}</h3><span class="lock" title="Only members' devices can read this channel; the host stores ciphertext.">🔒 end-to-end encrypted</span></header>
+  $("#chat").innerHTML = `<header><h3># ${esc(ch.name)}${ch.topic ? `<span class="topic">${esc(ch.topic)}</span>` : ""}</h3><button class="gear" id="toggle-members" title="Show or hide members">👥</button><span class="lock" title="Only members' devices can read this channel; the host stores ciphertext.">🔒 end-to-end encrypted</span></header>
     <div class="msgs" id="msgs"></div>
     <div class="composer">${ch.ready
       ? '<div id="pending" class="pending hidden"></div><div class="compose-row"><button type="button" class="emoji-btn" id="attach-btn" title="Attach a file or image (or paste / drop one)">📎</button><textarea id="text" placeholder="Message (Enter to send, Shift+Enter for a new line)" maxlength="8000"></textarea><button type="button" class="emoji-btn" id="emoji-btn" title="Emoji">😊</button></div>'
       : '<p class="muted">You\'re a member, but no one in this channel has been online to give your device its keys yet. It happens automatically.</p>'}</div>`;
   loadMessages();
+  $("#toggle-members").onclick = () => { state.showMembers = !state.showMembers; renderMembers(current().sp); };
   const t = $("#text");
   if (t) {
     $("#emoji-btn").onclick = (e) => openPicker(e.currentTarget, (emo) => insertAtCursor(t, emo), false);
@@ -178,6 +182,61 @@ async function loadMessages() {
     box.dataset.seen = "1";
   } catch (e) { toast(e.message, true); }
 }
+
+// ---------- members and status ----------
+const STATUS_WORDS = { online: "Online", away: "Away", busy: "Busy", invisible: "Invisible", offline: "Offline" };
+function myHost() { return state.hosts.find((h) => h.url === state.sel.host) || state.hosts[0] || {}; }
+function meBar() {
+  const h = myHost();
+  const st = h.status || "online";
+  const dot = st === "invisible" ? "offline" : st;
+  return `<button class="me-bar" id="me-bar" title="Set your status"><span class="dot ${dot}"></span><span class="grow"><b>${esc(h.username || "")}</b><small>${esc(h.status_text || STATUS_WORDS[st])}</small></span>▾</button>`;
+}
+function renderMembers(sp) {
+  const el = $("#members");
+  if (!sp || !state.showMembers) { el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  const rank = { owner: 0, admin: 1, member: 2 };
+  const sorted = [...sp.members].sort((a, b) => rank[a.role] - rank[b.role] || a.username.localeCompare(b.username));
+  const on = sorted.filter((m) => m.presence !== "offline"), off = sorted.filter((m) => m.presence === "offline");
+  const row = (m) => `<div class="member ${m.presence}" title="${esc(STATUS_WORDS[m.presence] || m.presence)}${m.status_text ? " · " + esc(m.status_text) : ""}">
+      <span class="dot ${esc(m.presence)}"></span><span class="grow"><span class="mline"><span class="mname">${esc(m.username)}</span>${m.role === "owner" ? '<span class="badge" title="Owner">👑</span>' : m.role === "admin" ? '<span class="badge" title="Admin">🛡</span>' : ""}</span>
+      ${m.status_text ? `<small>${esc(m.status_text)}</small>` : ""}</span></div>`;
+  el.innerHTML = `<h4>Online — ${on.length}</h4>${on.map(row).join("")}<h4>Offline — ${off.length}</h4>${off.map(row).join("")}`;
+}
+document.addEventListener("click", (e) => {
+  const bar = e.target.closest("#me-bar");
+  const menu = $("#status-menu");
+  if (bar) {
+    const r = bar.getBoundingClientRect();
+    menu.classList.remove("hidden");
+    menu.style.left = r.left + "px";
+    menu.style.top = Math.max(8, r.top - menu.offsetHeight - 6) + "px";
+    return;
+  }
+  if (!e.target.closest("#status-menu")) menu.classList.add("hidden");
+});
+async function setStatus(status, text) {
+  try { await api("/api/status", { status, text }); await loadState(); } catch (e) { toast(e.message, true); }
+}
+$("#status-menu").onclick = (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  $("#status-menu").classList.add("hidden");
+  const h = myHost();
+  autoAway = false;
+  if (b.dataset.status) return setStatus(b.dataset.status, h.status_text || "");
+  ask("Status message", `<label>What are you up to? <span class="muted">(up to 80 characters; empty to clear)</span><input name="text" maxlength="80" value="${esc(h.status_text || "")}"></label>`, "Save", (f) => setStatus(h.status || "online", String(f.get("text") || "")));
+};
+// Away by itself after 15 minutes without using Comms, and back when you return (only from Online).
+let lastActive = Date.now(), autoAway = false;
+for (const ev of ["mousemove", "keydown", "mousedown", "wheel", "focus"]) addEventListener(ev, () => {
+  lastActive = Date.now();
+  if (autoAway) { autoAway = false; setStatus("online", myHost().status_text || ""); }
+}, { passive: true });
+setInterval(() => {
+  if (!autoAway && myHost().status === "online" && Date.now() - lastActive > 15 * 60 * 1000) { autoAway = true; setStatus("away", myHost().status_text || ""); }
+}, 30000);
 
 // ---------- attachments ----------
 const MAX_FILE = 10 * 1024 * 1024;

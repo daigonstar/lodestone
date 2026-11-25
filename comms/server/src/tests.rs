@@ -349,3 +349,43 @@ async fn attachments_are_members_only_limited_and_cleaned_up() {
     assert_eq!(files(), 0);
     let _ = std::fs::remove_dir_all(&app.cfg.blob_dir);
 }
+
+#[tokio::test]
+async fn presence_and_status() {
+    let (app, code) = host();
+    let (alice, bob) = (Device::new(), Device::new());
+    alice.register(&app, "alice", &code).await;
+    let ta = alice.sign_in(&app).await;
+    let (_, sp) = call(&app, "POST", "/v1/spaces", Some(&ta), json!({ "name": "Raid night" })).await;
+    let sid = sp["id"].as_str().unwrap().to_string();
+    let (_, inv) = call(&app, "POST", &format!("/v1/spaces/{sid}/invites"), Some(&ta), json!({ "max_uses": 1, "expires_in": 3600 })).await;
+    bob.register(&app, "bob", inv["code"].as_str().unwrap()).await;
+    let presence = |space: Value, who: &str| {
+        let m = space["members"].as_array().unwrap().iter().find(|m| m["username"] == who).unwrap().clone();
+        (m["presence"].as_str().unwrap().to_string(), m["status_text"].as_str().unwrap().to_string())
+    };
+    let sp_path = format!("/v1/spaces/{sid}");
+
+    // Bob registered but his app hasn't checked in since this host started: offline.
+    app.seen.lock().unwrap().clear();
+    let (_, s) = call(&app, "GET", &sp_path, Some(&ta), Value::Null).await;
+    assert_eq!(presence(s.clone(), "bob").0, "offline");
+    assert_eq!(presence(s, "alice").0, "online", "Alice just made a request");
+
+    // Bob checks in and picks a status.
+    let tb = bob.sign_in(&app).await;
+    assert_eq!(call(&app, "PUT", "/v1/me/status", Some(&tb), json!({ "status": "busy", "text": "In a raid" })).await.0, StatusCode::OK);
+    let (_, s) = call(&app, "GET", &sp_path, Some(&ta), Value::Null).await;
+    assert_eq!(presence(s, "bob"), ("busy".into(), "In a raid".into()));
+    let (_, me) = call(&app, "GET", "/v1/me", Some(&tb), Value::Null).await;
+    assert_eq!((me["status"].as_str(), me["status_text"].as_str()), (Some("busy"), Some("In a raid")));
+
+    // Invisible looks offline to others, message and all.
+    call(&app, "PUT", "/v1/me/status", Some(&tb), json!({ "status": "invisible", "text": "shh" })).await;
+    let (_, s) = call(&app, "GET", &sp_path, Some(&ta), Value::Null).await;
+    assert_eq!(presence(s, "bob"), ("offline".into(), String::new()));
+
+    // Bad input.
+    assert_eq!(call(&app, "PUT", "/v1/me/status", Some(&tb), json!({ "status": "asleep" })).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(call(&app, "PUT", "/v1/me/status", Some(&tb), json!({ "status": "away", "text": "x".repeat(81) })).await.0, StatusCode::BAD_REQUEST);
+}

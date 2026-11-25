@@ -16,6 +16,7 @@ pub mod auth;
 pub mod db;
 pub mod blobs;
 pub mod live;
+pub mod presence;
 pub mod settings;
 pub mod util;
 #[cfg(test)]
@@ -39,12 +40,15 @@ pub struct App {
     pub db: db::Db,
     pub live: live::Hub,
     pub limits: util::Limits,
+    /// When each account was last heard from (any signed-in request), for online/offline. Kept in
+    /// memory only: after a restart everyone shows offline until their app next checks in.
+    pub seen: std::sync::Mutex<std::collections::HashMap<i64, std::time::Instant>>,
 }
 
 pub type Shared = Arc<App>;
 
 pub fn app(cfg: Config, db: db::Db) -> Shared {
-    Arc::new(App { cfg, db, live: live::Hub::default(), limits: util::Limits::default() })
+    Arc::new(App { cfg, db, live: live::Hub::default(), limits: util::Limits::default(), seen: Default::default() })
 }
 
 /// Serve a host on an already-bound listener (used by the program and by tests).
