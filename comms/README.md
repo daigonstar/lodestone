@@ -1,10 +1,13 @@
 # Lodestone Comms (in development)
 
 Text chat for Lodestone, on servers you host yourself, end-to-end encrypted. Voice, video and screen
-share come later. This folder holds the **host** (the server program); the client will live inside
-Lodestone as a sandboxed plug-in.
+share come later.
 
-**Status:** early development on the `comms` branch. Not ready to use: there's no client yet.
+- `server/`: the **host** (the server program people run in Docker or Podman).
+- `client/`: the **client core**: this device's key, MLS encryption (openmls) and the host connection.
+  It will run inside Lodestone as a sandboxed plug-in; there's no interface yet.
+
+**Status:** early development on the `comms` branch. Not ready to use.
 
 - [PROTOCOL.md](PROTOCOL.md): how clients and the host talk, and exactly what the host can see.
 - The host never sees message text. It stores and forwards MLS ciphertext, usernames, device public keys,

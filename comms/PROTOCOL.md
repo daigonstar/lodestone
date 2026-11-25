@@ -72,7 +72,7 @@ to send messages), or copies it for Epic friends.
 
 - Each text channel is one MLS group; the channel ID is the MLS group ID. Ciphersuite:
   `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`.
-- Each device's MLS credential is a basic credential whose identity is `<username>/<device_key>`, signed
+- Each device's MLS credential is a basic credential whose identity is `<username>:<device_key>` (a colon can't appear in either), signed
   with the device key. Clients check that the username and key match what the host lists for that member,
   and show a **safety number** that members can compare to make sure the host hasn't swapped a key.
 - The host is MLS's **delivery service**: it doesn't parse MLS messages, it stores and forwards them in
@@ -80,6 +80,7 @@ to send messages), or copies it for Epic friends.
 
 ### Key packages
 - `POST /v1/keypackages` `{ key_packages: [base64, ...] }`: a device uploads a batch (up to 100 waiting).
+- `GET /v1/keypackages`: how many of your device's key packages are still waiting.
 - `POST /v1/keypackages/claim` `{ username }`: returns one key package per device of that user and
   removes them from the host (single use).
 

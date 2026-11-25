@@ -29,7 +29,7 @@ pub fn router(app: Shared) -> Router {
         .route("/v1/spaces/{space}/members/{username}", delete(remove_member))
         .route("/v1/invites/{code}", get(preview_invite))
         .route("/v1/invites/{code}/accept", post(accept_invite))
-        .route("/v1/keypackages", post(upload_keypackages))
+        .route("/v1/keypackages", post(upload_keypackages).get(count_keypackages))
         .route("/v1/keypackages/claim", post(claim_keypackages))
         .route("/v1/channels/{channel}/messages", post(send_message).get(list_messages))
         .route("/v1/welcomes", post(send_welcome).get(take_welcomes))
@@ -285,6 +285,12 @@ async fn upload_keypackages(State(app): State<Shared>, me: Auth, Json(r): Json<K
         tx.commit()?;
         Ok(Ok(waiting as usize + bodies.len()))
     })??;
+    Ok(Json(json!({ "waiting": waiting })))
+}
+
+/// How many of your device's key packages are still waiting (so the client knows when to top up).
+async fn count_keypackages(State(app): State<Shared>, me: Auth) -> ApiResult<Json<Value>> {
+    let waiting: i64 = app.db.with(|c| c.query_row("SELECT COUNT(*) FROM keypackages WHERE device_key = ?1", [&me.device], |r| r.get(0)))?;
     Ok(Json(json!({ "waiting": waiting })))
 }
 
