@@ -15,7 +15,7 @@ async fn main() {
     if let Some(code) = db.setup_code_if_new().expect("database error") {
         println!("Lodestone Comms: no accounts yet. Register the first (admin) account with this setup code:");
         println!("    {code}");
-        println!("It is shown only once and works once.");
+        println!("It works once. (A restart before anyone registers makes a new one.)");
     }
     let bind = env("COMMS_BIND", "0.0.0.0:8080");
     println!("Lodestone Comms listening on {bind}, public address {}", cfg.public_url);

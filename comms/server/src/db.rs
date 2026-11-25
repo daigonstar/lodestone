@@ -91,10 +91,30 @@ CREATE TABLE IF NOT EXISTS welcomes (
 );
 ";
 
+/// Columns added after the first release of the schema, added in place to existing databases.
+const ADDED: &[(&str, &str, &str)] = &[
+    ("spaces", "description", "TEXT NOT NULL DEFAULT ''"),
+    ("spaces", "icon", "BLOB"),
+    ("spaces", "icon_type", "TEXT"),
+    ("channels", "topic", "TEXT NOT NULL DEFAULT ''"),
+    ("channels", "position", "INTEGER NOT NULL DEFAULT 0"),
+];
+
+fn migrate(c: &Connection) -> rusqlite::Result<()> {
+    for (table, column, kind) in ADDED {
+        let has: bool = c.prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"))?.exists([column])?;
+        if !has {
+            c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"))?;
+        }
+    }
+    Ok(())
+}
+
 impl Db {
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
         let c = Connection::open(path)?;
         c.execute_batch(SCHEMA)?;
+        migrate(&c)?;
         // The database holds account metadata: keep it readable only by the host's user.
         #[cfg(unix)]
         {
@@ -108,6 +128,7 @@ impl Db {
     pub fn memory() -> Self {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch(SCHEMA).unwrap();
+        migrate(&c).unwrap();
         Self(Mutex::new(c))
     }
 

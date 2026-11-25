@@ -7,6 +7,7 @@ plus the .cargo-checksum.json cargo expects there. The last source is a cargo co
 crates.io at that vendor folder.
 
 Run it again whenever Cargo.lock changes:  packaging/flatpak/cargo-sources.py
+Another lock file (Lodestone Comms):  cargo-sources.py <Cargo.lock> <output.json>
 """
 import json
 import sys
@@ -14,7 +15,9 @@ import tomllib
 from pathlib import Path
 
 here = Path(__file__).resolve().parent
-lock = tomllib.loads((here / "../../src-tauri/Cargo.lock").read_text())
+lock_path = Path(sys.argv[1]) if len(sys.argv) > 1 else here / "../../src-tauri/Cargo.lock"
+out = Path(sys.argv[2]) if len(sys.argv) > 2 else here / "cargo-sources.json"
+lock = tomllib.loads(lock_path.read_text())
 
 sources = []
 skipped = []
@@ -51,6 +54,5 @@ sources.append({
     "dest-filename": "config.toml",
 })
 
-out = here / "cargo-sources.json"
 out.write_text(json.dumps(sources, indent=1) + "\n")
 print(f"{out}: {len(sources) // 2} crates")

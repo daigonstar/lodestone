@@ -23,6 +23,9 @@ async fn encrypted_chat_end_to_end() {
     let tmp = tempfile::tempdir().unwrap();
     let (url, setup) = start_host(tmp.path()).await;
 
+    // A client given the host's address finds its exact public address.
+    assert_eq!(lodestone_comms_client::discover::discover(url.trim_start_matches("http://")).await.unwrap(), url);
+
     // Alice sets up the host and a server.
     let alice = Client::open(&tmp.path().join("alice"), &url).unwrap();
     alice.register("alice", &setup).await.unwrap();

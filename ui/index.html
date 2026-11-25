@@ -15,6 +15,8 @@
     <nav id="nav-stores" class="nav"></nav>
     <button type="button" class="nav-label hidden" id="nav-systems-label" data-section="nav-systems" aria-expanded="true">Systems</button>
     <nav id="nav-systems" class="nav"></nav>
+    <button type="button" class="nav-label" data-section="nav-plugins" aria-expanded="true">Plug-ins</button>
+    <nav id="nav-plugins" class="nav"></nav>
     <button type="button" class="nav-label" data-section="nav-shop" aria-expanded="true">Shop</button>
     <nav id="nav-shop" class="nav"></nav>
     <div class="sidebar-foot">
@@ -109,6 +111,11 @@
     </section>
     </div>
 
+    <section id="plugins" class="plugins-page hidden">
+      <h1>Plug-ins</h1>
+      <p class="muted">Plug-ins are separate programs that show inside Lodestone. Each runs in its own sandbox: it can't see your store sign-ins, keys or files, and it only gets what you allow here.</p>
+      <div id="plugins-list"></div>
+    </section>
     <section id="comms" class="comms hidden">
       <div id="comms-msg" class="comms-msg"></div>
       <iframe id="comms-frame" class="hidden" title="Lodestone Comms" referrerpolicy="no-referrer"></iframe>
@@ -448,8 +455,7 @@
       <label class="check"><input type="checkbox" id="mh-all" /> Show MangoHud in every game (turn it off or on per game in the game's ⋯ menu)</label>
       <p class="hint">FPS, frame times, CPU and GPU load over your games. Lodestone uses MangoHud from your system, or sets up the official release in its own folder. It works for games Lodestone starts; for Steam games, add <code>mangohud %command%</code> to the game's launch options in Steam.</p>
       <h3>Plug-ins</h3>
-      <div class="row-line"><span id="plugin-comms" class="muted">Lodestone Comms: not allowed yet</span><button type="button" class="ghost hidden" id="plugin-comms-revoke">Revoke</button></div>
-      <p class="hint">Plug-ins are separate programs shown inside Lodestone. They can't see your store sign-ins, keys or files, and only get what you allow.</p>
+      <div class="row-line"><span class="muted">Installed plug-ins, their permissions, and stopping them.</span><button type="button" class="ghost" id="open-plugins">Manage plug-ins…</button></div>
       <h3>Mods</h3>
       <label class="check"><input type="checkbox" id="kiln-play" /> Play modded games through Kiln (checks mods are deployed and loaders set up first)</label>
       <h3>Games</h3>

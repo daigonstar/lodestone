@@ -51,6 +51,8 @@ impl Host {
         let mut req = match method {
             "GET" => self.http.get(&url),
             "DELETE" => self.http.delete(&url),
+            "PATCH" => self.http.patch(&url),
+            "PUT" => self.http.put(&url),
             _ => self.http.post(&url),
         };
         if let Some(t) = self.token.lock().unwrap().clone() {
@@ -68,6 +70,36 @@ impl Host {
             return Err(HostError { status, message });
         }
         Ok(v)
+    }
+
+    /// Upload a raw body (a server icon).
+    pub async fn put_raw(&self, path: &str, bytes: Vec<u8>) -> HostResult<Value> {
+        let mut req = self.http.put(format!("{}{path}", self.url)).body(bytes);
+        if let Some(t) = self.token.lock().unwrap().clone() {
+            req = req.bearer_auth(t);
+        }
+        let res = req.send().await.map_err(|_| HostError { status: 0, message: "Can't reach the host".into() })?;
+        let status = res.status().as_u16();
+        let v: Value = res.json().await.unwrap_or(Value::Null);
+        if !(200..300).contains(&status) {
+            return Err(HostError { status, message: v["error"].as_str().unwrap_or("The host refused the request").to_string() });
+        }
+        Ok(v)
+    }
+
+    /// Download a raw body with its content type (a server icon).
+    pub async fn get_raw(&self, path: &str) -> HostResult<(Vec<u8>, String)> {
+        let mut req = self.http.get(format!("{}{path}", self.url));
+        if let Some(t) = self.token.lock().unwrap().clone() {
+            req = req.bearer_auth(t);
+        }
+        let res = req.send().await.map_err(|_| HostError { status: 0, message: "Can't reach the host".into() })?;
+        let status = res.status().as_u16();
+        if !(200..300).contains(&status) {
+            return Err(HostError { status, message: "No icon".into() });
+        }
+        let kind = res.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+        Ok((res.bytes().await.map_err(|_| HostError { status: 0, message: "Download failed".into() })?.to_vec(), kind))
     }
 
     pub async fn get(&self, path: &str) -> HostResult<Value> {

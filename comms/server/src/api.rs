@@ -2,6 +2,7 @@
 //! See PROTOCOL.md. Every handler checks membership before reading or writing anything in a space.
 
 use crate::auth::{self, Auth};
+use crate::settings;
 use crate::util::{b64, b64_decode, clean_name, hash, new_code, new_id, now, ApiError, ApiResult};
 use crate::Shared;
 use axum::extract::{Path, Query, State};
@@ -23,10 +24,18 @@ pub fn router(app: Shared) -> Router {
         .route("/v1/devices", post(auth::add_device))
         .route("/v1/me", get(me))
         .route("/v1/spaces", post(create_space))
-        .route("/v1/spaces/{space}", get(get_space))
+        .route("/v1/spaces/{space}", get(get_space).patch(settings::update_space).delete(settings::delete_space))
+        .route("/v1/spaces/{space}/icon", get(settings::get_icon).put(settings::put_icon).delete(settings::delete_icon))
         .route("/v1/spaces/{space}/channels", post(create_channel))
-        .route("/v1/spaces/{space}/invites", post(create_invite))
+        .route("/v1/spaces/{space}/channel-order", axum::routing::put(settings::reorder_channels))
+        .route("/v1/spaces/{space}/invites", post(create_invite).get(settings::list_invites))
+        .route("/v1/spaces/{space}/invites/{id}", delete(settings::revoke_invite))
         .route("/v1/spaces/{space}/members/{username}", delete(remove_member))
+        .route("/v1/spaces/{space}/members/{username}/role", axum::routing::put(settings::set_role))
+        .route("/v1/spaces/{space}/transfer", post(settings::transfer))
+        .route("/v1/spaces/{space}/bans", get(settings::list_bans))
+        .route("/v1/spaces/{space}/bans/{username}", delete(settings::unban))
+        .route("/v1/channels/{channel}", axum::routing::patch(settings::update_channel).delete(settings::delete_channel))
         .route("/v1/invites/{code}", get(preview_invite))
         .route("/v1/invites/{code}/accept", post(accept_invite))
         .route("/v1/keypackages", post(upload_keypackages).get(count_keypackages))
@@ -35,8 +44,14 @@ pub fn router(app: Shared) -> Router {
         .route("/v1/welcomes", post(send_welcome).get(take_welcomes))
         .route("/v1/live", get(crate::live::connect))
         .route("/join/{code}", get(join_page))
+        .route("/.well-known/lodestone-comms", get(discovery))
         // Bodies are capped well above the 64 KiB message limit (base64 and JSON overhead, key package batches).
         .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024))
+        // Nothing here may be cached by a proxy or CDN (Cloudflare and others sit in front of many hosts).
+        .layer(axum::middleware::map_response(|mut r: axum::response::Response| async move {
+            r.headers_mut().insert(axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-store"));
+            r
+        }))
         .with_state(app)
 }
 
@@ -66,16 +81,16 @@ pub fn add_member(c: &Connection, space: &str, account: i64, code: &str) -> rusq
     Ok(added == 1)
 }
 
-fn role_of(c: &Connection, space: &str, account: i64) -> rusqlite::Result<Option<String>> {
+pub(crate) fn role_of(c: &Connection, space: &str, account: i64) -> rusqlite::Result<Option<String>> {
     c.query_row("SELECT role FROM members WHERE space = ?1 AND account = ?2", params![space, account], |r| r.get(0)).optional()
 }
 
 /// Your role in a space, or 404 (the same answer whether the space exists or you aren't in it).
-fn require_member(app: &Shared, space: &str, me: &Auth) -> ApiResult<String> {
+pub(crate) fn require_member(app: &Shared, space: &str, me: &Auth) -> ApiResult<String> {
     app.db.with(|c| role_of(c, space, me.account))?.ok_or_else(|| ApiError::not_found("No such space"))
 }
 
-fn require_admin(app: &Shared, space: &str, me: &Auth) -> ApiResult<String> {
+pub(crate) fn require_admin(app: &Shared, space: &str, me: &Auth) -> ApiResult<String> {
     let role = require_member(app, space, me)?;
     if role == "owner" || role == "admin" {
         Ok(role)
@@ -132,10 +147,11 @@ async fn create_space(State(app): State<Shared>, me: Auth, Json(r): Json<NameReq
 async fn get_space(State(app): State<Shared>, me: Auth, Path(space): Path<String>) -> ApiResult<Json<Value>> {
     let role = require_member(&app, &space, &me)?;
     let out = app.db.with(|c| {
-        let name: String = c.query_row("SELECT name FROM spaces WHERE id = ?1", [&space], |r| r.get(0))?;
+        let (name, description, has_icon): (String, String, bool) =
+            c.query_row("SELECT name, description, icon IS NOT NULL FROM spaces WHERE id = ?1", [&space], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         let channels: Vec<Value> = c
-            .prepare("SELECT id, name, epoch FROM channels WHERE space = ?1 ORDER BY created, name")?
-            .query_map([&space], |r| Ok(json!({ "id": r.get::<_, String>(0)?, "name": r.get::<_, String>(1)?, "epoch": r.get::<_, i64>(2)? })))?
+            .prepare("SELECT id, name, epoch, topic FROM channels WHERE space = ?1 ORDER BY position, created, name")?
+            .query_map([&space], |r| Ok(json!({ "id": r.get::<_, String>(0)?, "name": r.get::<_, String>(1)?, "epoch": r.get::<_, i64>(2)?, "topic": r.get::<_, String>(3)? })))?
             .collect::<Result<_, _>>()?;
         // Members with their device keys: clients check MLS credentials against these.
         let mut members: Vec<Value> = Vec::new();
@@ -145,7 +161,7 @@ async fn get_space(State(app): State<Shared>, me: Auth, Path(space): Path<String
             let devices: Vec<String> = c.prepare("SELECT key FROM devices WHERE account = ?1 ORDER BY created")?.query_map([id], |r| r.get(0))?.collect::<Result<_, _>>()?;
             members.push(json!({ "username": username, "role": role, "devices": devices }));
         }
-        Ok(json!({ "id": space, "name": name, "your_role": role, "channels": channels, "members": members }))
+        Ok(json!({ "id": space, "name": name, "description": description, "has_icon": has_icon, "your_role": role, "channels": channels, "members": members }))
     })?;
     Ok(Json(out))
 }
@@ -158,7 +174,12 @@ async fn create_channel(State(app): State<Shared>, me: Auth, Path(space): Path<S
     if count >= 200 {
         return Err(ApiError::bad("A server can have at most 200 channels"));
     }
-    app.db.with(|c| c.execute("INSERT INTO channels (id, space, name, created) VALUES (?1, ?2, ?3, ?4)", params![id, space, name, now()]))?;
+    app.db.with(|c| {
+        c.execute(
+            "INSERT INTO channels (id, space, name, created, position) VALUES (?1, ?2, ?3, ?4, (SELECT COALESCE(MAX(position), -1) + 1 FROM channels WHERE space = ?2))",
+            params![id, space, name, now()],
+        )
+    })?;
     app.live.to_space(&app, &space, json!({ "type": "channel_created", "space": space, "channel": id, "name": name }));
     Ok(Json(json!({ "id": id, "name": name, "epoch": 0 })))
 }
@@ -448,6 +469,14 @@ async fn take_welcomes(State(app): State<Shared>, me: Auth) -> ApiResult<Json<Va
         Ok(rows.into_iter().map(|(_, ch, b)| json!({ "channel": ch, "body": b64(&b) })).collect::<Vec<_>>())
     })?;
     Ok(Json(json!({ "welcomes": list })))
+}
+
+// ---------- discovery ----------
+
+/// Lets a client that was given just a domain check it's a Comms host and learn its exact address
+/// (the one signatures are bound to).
+async fn discovery(State(app): State<Shared>) -> Json<Value> {
+    Json(json!({ "protocol": "lodestone-comms/v1", "public_url": app.cfg.public_url, "version": env!("CARGO_PKG_VERSION") }))
 }
 
 // ---------- invite links ----------

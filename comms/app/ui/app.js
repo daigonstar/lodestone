@@ -64,7 +64,7 @@ async function loadState() {
 // ---------- rendering ----------
 function render() {
   const all = spaces();
-  $("#servers").innerHTML = all.map((s) => `<button class="srv ${s.host === state.sel.host && s.id === state.sel.space ? "on" : ""}" data-space="${esc(s.id)}" data-host="${esc(s.host)}" title="${esc(s.name)}">${esc(initials(s.name))}</button>`).join("")
+  $("#servers").innerHTML = all.map((s) => `<button class="srv ${s.host === state.sel.host && s.id === state.sel.space ? "on" : ""}" data-space="${esc(s.id)}" data-host="${esc(s.host)}" title="${esc(s.name)}">${iconHTML(s)}</button>`).join("")
     + `<button class="srv add" id="add-server" title="Join or create a server">+</button>`;
   const { sp, ch } = current();
   if (!sp) {
@@ -75,11 +75,11 @@ function render() {
     return;
   }
   const admin = sp.your_role === "owner" || sp.your_role === "admin";
-  $("#channels").innerHTML = `<h2>${esc(sp.name)}</h2><div class="host" title="${esc(sp.host)}">${esc(sp.me)} · ${esc(sp.host.replace(/^https?:\/\//, ""))}</div>
+  $("#channels").innerHTML = `<h2><span>${esc(sp.name)}</span><button class="gear" data-act="settings" title="Server settings">⚙</button></h2><div class="host" title="${esc(sp.host)}">${esc(sp.me)} · ${esc(sp.host.replace(/^https?:\/\//, ""))}</div>
     <div class="chlist">${sp.channels.map((c) => `<button class="ch ${c.id === state.sel.channel ? "on" : ""}" data-channel="${esc(c.id)}"># ${esc(c.name)}${c.ready ? "" : ' <span class="wait">(waiting for keys)</span>'}</button>`).join("")}</div>
     <div class="side-actions"><button data-act="invite">Invite people</button>${admin ? '<button class="ghost" data-act="channel">New channel</button>' : ""}</div>`;
   if (!ch) { $("#chat").innerHTML = ""; return; }
-  $("#chat").innerHTML = `<header><h3># ${esc(ch.name)}</h3><span class="lock" title="Only members' devices can read this channel; the host stores ciphertext.">🔒 end-to-end encrypted</span></header>
+  $("#chat").innerHTML = `<header><h3># ${esc(ch.name)}${ch.topic ? `<span class="topic">${esc(ch.topic)}</span>` : ""}</h3><span class="lock" title="Only members' devices can read this channel; the host stores ciphertext.">🔒 end-to-end encrypted</span></header>
     <div class="msgs" id="msgs"></div>
     <div class="composer">${ch.ready
       ? '<textarea id="text" placeholder="Message (Enter to send, Shift+Enter for a new line)" maxlength="8000"></textarea>'
@@ -132,6 +132,189 @@ async function loadMessages() {
   } catch (e) { toast(e.message, true); }
 }
 
+// ---------- server icons ----------
+// Icons come from the host through the plug-in (the page can't send its secret with a plain <img>),
+// so they're fetched once and shown from a local blob.
+const icons = new Map();
+function iconHTML(s) {
+  const key = s.host + "|" + s.id;
+  const url = icons.get(key);
+  if (url) return `<img src="${esc(url)}" alt="">`;
+  if (s.has_icon && !icons.has(key)) {
+    icons.set(key, "");
+    fetch(`/api/icon?host=${encodeURIComponent(s.host)}&space=${encodeURIComponent(s.id)}`, { headers: { "x-comms-token": TOKEN } })
+      .then((r) => (r.ok ? r.blob() : null))
+      .then((b) => { if (b) { icons.set(key, URL.createObjectURL(b)); render(); } });
+  }
+  return esc(initials(s.name));
+}
+function forgetIcon(s) {
+  const key = s.host + "|" + s.id;
+  const url = icons.get(key);
+  if (url) URL.revokeObjectURL(url);
+  icons.delete(key);
+}
+
+// ---------- server settings ----------
+/** A confirmation using Comms's own dialog (native confirm() isn't reliable inside Lodestone's frame).
+ *  With `typed`, the person has to type that text to confirm. */
+function confirmBox(text, okLabel, typed) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    ask("Are you sure?", `<p>${esc(text)}</p>${typed ? `<label>Type <b>${esc(typed)}</b> to confirm<input name="typed" autocomplete="off"></label>` : ""}`, okLabel, (f) => {
+      if (typed && f.get("typed") !== typed) throw new Error("That doesn't match");
+      finish(true);
+    });
+    $("#dlg").addEventListener("close", () => finish(false), { once: true });
+  });
+}
+
+const manage = (method, path, body) => api("/api/manage", { host: state.sel.host, method, path, body });
+const fmtDate = (t) => new Date(t * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+
+function openSettings(tab) {
+  const { sp } = current();
+  if (!sp) return;
+  const admin = sp.your_role === "owner" || sp.your_role === "admin";
+  const tabs = [["overview", "Overview"], ...(admin ? [["channels", "Channels"]] : []), ["members", "Members"], ...(admin ? [["bans", "Bans"]] : []), ["invites", "Invites"]];
+  $("#set-title").textContent = `${sp.name}: settings`;
+  $("#set-tabs").innerHTML = tabs.map(([k, l]) => `<button type="button" data-tab="${k}" class="${k === tab ? "on" : ""}">${l}</button>`).join("");
+  if (!$("#settings").open) $("#settings").showModal();
+  ({ overview: tabOverview, channels: tabChannels, members: tabMembers, bans: tabBans, invites: tabInvites })[tab](sp, admin);
+}
+$("#set-close").onclick = () => $("#settings").close();
+$("#set-tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (b) openSettings(b.dataset.tab); };
+async function after(tab, fn) {
+  try { await fn(); await loadState(); if (current().sp) openSettings(tab); else $("#settings").close(); }
+  catch (e) { toast(e.message, true); }
+}
+
+function tabOverview(sp, admin) {
+  const body = $("#set-body");
+  const owner = sp.your_role === "owner";
+  body.innerHTML = `<div class="row" style="align-items:flex-start;gap:16px">
+      <div class="icon-preview">${iconHTML(sp)}</div>
+      <div style="flex:1">
+        <label>Name<input id="s-name" maxlength="64" value="${esc(sp.name)}" ${admin ? "" : "disabled"}></label>
+        <label>Description<textarea id="s-desc" class="desc" maxlength="500" ${admin ? "" : "disabled"}>${esc(sp.description || "")}</textarea></label>
+      </div></div>
+    ${admin ? `<div class="row end"><button type="button" class="ghost" id="s-icon">Change icon…</button>${sp.has_icon ? '<button type="button" class="ghost" id="s-icon-rm">Remove icon</button>' : ""}<button type="button" class="primary" id="s-save">Save</button></div>` : ""}
+    <p class="muted" style="margin-top:18px">Server names, descriptions, icons, channel names and topics are visible to the host. Messages are not.</p>
+    <div class="row end" style="margin-top:18px">
+      ${owner ? '<button type="button" class="danger" id="s-delete">Delete server…</button>' : '<button type="button" class="danger" id="s-leave">Leave server</button>'}
+    </div>`;
+  if (admin) {
+    $("#s-save").onclick = () => after("overview", () => manage("PATCH", `/v1/spaces/${sp.id}`, { name: $("#s-name").value, description: $("#s-desc").value }));
+    $("#s-icon").onclick = () => $("#icon-file").click();
+    $("#icon-file").onchange = async (e) => {
+      const f = e.target.files[0];
+      e.target.value = "";
+      if (!f) return;
+      if (f.size > 256 * 1024) return toast("Icons can be at most 256 KiB", true);
+      const data = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.readAsDataURL(f); });
+      forgetIcon(sp);
+      after("overview", () => api("/api/icon", { host: sp.host, space: sp.id, data }));
+    };
+    const rm = $("#s-icon-rm");
+    if (rm) rm.onclick = () => { forgetIcon(sp); after("overview", () => manage("DELETE", `/v1/spaces/${sp.id}/icon`)); };
+  }
+  const del = $("#s-delete");
+  if (del) del.onclick = async () => {
+    if (!(await confirmBox(`This deletes "${sp.name}", its channels and all their messages for everyone.`, "Delete server", sp.name))) return;
+    after("overview", () => manage("DELETE", `/v1/spaces/${sp.id}`));
+  };
+  const leave = $("#s-leave");
+  if (leave) leave.onclick = async () => {
+    if (!(await confirmBox(`Leave "${sp.name}"? You'll need a new invite to come back.`, "Leave"))) return;
+    after("overview", () => manage("DELETE", `/v1/spaces/${sp.id}/members/${encodeURIComponent(sp.me)}`));
+  };
+}
+
+function tabChannels(sp) {
+  const chans = sp.channels;
+  $("#set-body").innerHTML = chans.map((c, i) => `<div class="set-row" data-ch="${esc(c.id)}">
+      <div class="grow"><input data-f="name" maxlength="64" value="${esc(c.name)}"><input data-f="topic" maxlength="300" placeholder="Topic (optional)" value="${esc(c.topic || "")}" style="margin-top:4px"></div>
+      <button type="button" data-ch-act="up" ${i ? "" : "disabled"} title="Move up">↑</button>
+      <button type="button" data-ch-act="down" ${i < chans.length - 1 ? "" : "disabled"} title="Move down">↓</button>
+      <button type="button" data-ch-act="save">Save</button>
+      <button type="button" class="danger" data-ch-act="delete" ${chans.length > 1 ? "" : "disabled"}>Delete</button></div>`).join("")
+    + `<div class="row end"><button type="button" class="primary" data-act="channel">New channel</button></div>`;
+  $("#set-body").onclick = async (e) => {
+    const b = e.target.closest("[data-ch-act]");
+    if (!b) return;
+    const row = b.closest("[data-ch]");
+    const id = row.dataset.ch;
+    const act = b.dataset.chAct;
+    if (act === "save") return after("channels", () => manage("PATCH", `/v1/channels/${id}`, { name: row.querySelector('[data-f="name"]').value, topic: row.querySelector('[data-f="topic"]').value }));
+    if (act === "delete") {
+      if (!(await confirmBox("Delete this channel and all its messages for everyone?", "Delete channel"))) return;
+      return after("channels", () => manage("DELETE", `/v1/channels/${id}`));
+    }
+    const order = chans.map((c) => c.id);
+    const i = order.indexOf(id), j = act === "up" ? i - 1 : i + 1;
+    [order[i], order[j]] = [order[j], order[i]];
+    after("channels", () => manage("PUT", `/v1/spaces/${sp.id}/channel-order`, { channels: order }));
+  };
+}
+
+function tabMembers(sp, admin) {
+  const owner = sp.your_role === "owner";
+  const rank = { owner: 0, admin: 1, member: 2 };
+  const list = [...sp.members].sort((a, b) => rank[a.role] - rank[b.role] || a.username.localeCompare(b.username));
+  $("#set-body").innerHTML = list.map((m) => {
+    const me = m.username === sp.me;
+    const canRemove = !me && (owner || (admin && m.role === "member"));
+    return `<div class="set-row" data-user="${esc(m.username)}"><div class="grow"><b>${esc(m.username)}</b> ${me ? "<small>(you)</small>" : ""}<br><small>${esc(m.role)} · ${m.devices.length} device${m.devices.length === 1 ? "" : "s"}</small></div>
+      ${owner && !me && m.role !== "owner" ? `<select data-m-act="role"><option value="member" ${m.role === "member" ? "selected" : ""}>Member</option><option value="admin" ${m.role === "admin" ? "selected" : ""}>Admin</option></select><button type="button" data-m-act="transfer">Make owner…</button>` : ""}
+      ${canRemove ? '<button type="button" data-m-act="kick">Remove</button><button type="button" class="danger" data-m-act="ban">Ban</button>' : ""}</div>`;
+  }).join("");
+  $("#set-body").onchange = (e) => {
+    const sel = e.target.closest('[data-m-act="role"]');
+    if (!sel) return;
+    const u = sel.closest("[data-user]").dataset.user;
+    after("members", () => manage("PUT", `/v1/spaces/${sp.id}/members/${encodeURIComponent(u)}/role`, { role: sel.value }));
+  };
+  $("#set-body").onclick = async (e) => {
+    const b = e.target.closest("[data-m-act]");
+    if (!b || b.tagName === "SELECT") return;
+    const u = b.closest("[data-user]").dataset.user;
+    const path = `/v1/spaces/${sp.id}/members/${encodeURIComponent(u)}`;
+    const act = b.dataset.mAct;
+    if (act === "kick" && (await confirmBox(`Remove ${u} from the server? They can rejoin with an invite.`, "Remove"))) after("members", () => manage("DELETE", path));
+    if (act === "ban" && (await confirmBox(`Ban ${u}? They're removed and can't rejoin until unbanned.`, "Ban"))) after("members", () => manage("DELETE", path + "?ban=true"));
+    if (act === "transfer" && (await confirmBox(`Make ${u} the owner? You'll become an admin.`, "Make owner", u))) after("members", () => manage("POST", `/v1/spaces/${sp.id}/transfer`, { username: u }));
+  };
+}
+
+async function tabBans(sp) {
+  const body = $("#set-body");
+  body.innerHTML = '<p class="muted">Loading…</p>';
+  try {
+    const { bans } = await manage("GET", `/v1/spaces/${sp.id}/bans`);
+    body.innerHTML = bans.length ? bans.map((u) => `<div class="set-row" data-user="${esc(u)}"><div class="grow">${esc(u)}</div><button type="button" data-unban>Unban</button></div>`).join("") : '<p class="muted">Nobody is banned.</p>';
+    body.onclick = (e) => {
+      const b = e.target.closest("[data-unban]");
+      if (b) after("bans", () => manage("DELETE", `/v1/spaces/${sp.id}/bans/${encodeURIComponent(b.closest("[data-user]").dataset.user)}`));
+    };
+  } catch (e) { body.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+
+async function tabInvites(sp) {
+  const body = $("#set-body");
+  body.innerHTML = '<p class="muted">Loading…</p>';
+  try {
+    const { invites } = await manage("GET", `/v1/spaces/${sp.id}/invites`);
+    body.innerHTML = `<p class="muted">The host keeps only a scrambled copy of each code, so links can't be shown again. Revoke ones you no longer want.</p>`
+      + (invites.length ? invites.map((i) => `<div class="set-row" data-inv="${esc(i.id)}"><div class="grow">Invite <code>${esc(i.id.slice(0, 6))}</code> by ${esc(i.created_by)}<br><small>${i.uses} of ${i.max_uses} uses · expires ${esc(fmtDate(i.expires))}</small></div><button type="button" class="danger" data-revoke>Revoke</button></div>`).join("") : '<p class="muted">No active invites.</p>')
+      + `<div class="row end"><button type="button" class="primary" data-act="invite">New invite</button></div>`;
+    body.onclick = (e) => {
+      const b = e.target.closest("[data-revoke]");
+      if (b) after("invites", () => manage("DELETE", `/v1/spaces/${sp.id}/invites/${b.closest("[data-inv]").dataset.inv}`));
+    };
+  } catch (e) { body.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+
 // ---------- dialogs ----------
 function ask(title, body, okText, onOk) {
   $("#dlg-title").textContent = title;
@@ -139,6 +322,7 @@ function ask(title, body, okText, onOk) {
   $("#dlg-err").textContent = "";
   $("#dlg-ok").textContent = okText || "OK";
   $("#dlg-ok").classList.toggle("hidden", !onOk);
+  $("#dlg-cancel").textContent = onOk ? "Cancel" : "Close";
   $("#dlg-form").onsubmit = async (e) => {
     e.preventDefault();
     if (!onOk) return $("#dlg").close();
@@ -154,7 +338,7 @@ function ask(title, body, okText, onOk) {
 $("#dlg-cancel").onclick = () => $("#dlg").close();
 
 function joinDialog() {
-  ask("Join a server", `<label>Invite link<input name="link" placeholder="https://comms.example.com/join/…" required></label>
+  ask("Join a server", `<label>Invite link<input name="link" placeholder="comms.yourdomain.com/join/…" autocomplete="off" spellcheck="false" required></label>
     <label>Your username on that host <span class="muted">(only the first time)</span><input name="username" autocomplete="off" spellcheck="false" placeholder="2 to 32: a-z 0-9 _ . -"></label>`,
     "Join", async (f) => {
       const r = await api("/api/join", { link: f.get("link"), username: f.get("username") || null });
@@ -165,7 +349,7 @@ function joinDialog() {
 
 function setupDialog() {
   ask("Set up a new host", `<p class="muted">After starting a Comms host (see the README), its log shows a one-time setup code. The first account becomes the host's admin.</p>
-    <label>Host address<input name="host" placeholder="https://comms.example.com" required></label>
+    <label>Host's domain<input name="host" placeholder="comms.yourdomain.com" autocomplete="off" spellcheck="false" required></label>
     <label>Setup code<input name="code" autocomplete="off" required></label>
     <label>Your username<input name="username" autocomplete="off" spellcheck="false" required></label>`,
     "Set up", async (f) => {
@@ -185,10 +369,10 @@ function newServerDialog(host) {
 
 function addDialog() {
   const hosts = state.hosts.map((h) => h.url);
-  ask("Servers", `<div class="row" style="flex-wrap:wrap">
-      <button type="button" class="primary" data-act="join">Join with an invite</button>
-      ${hosts.map((h) => `<button type="button" class="ghost" data-act="create" data-host="${esc(h)}">Create on ${esc(h.replace(/^https?:\/\//, ""))}</button>`).join("")}
-      <button type="button" class="ghost" data-act="setup">Set up a new host</button></div>`, null, null);
+  ask("Servers", `<div class="choices">
+      <button type="button" class="primary" data-act="join">Join a server with an invite</button>
+      ${hosts.map((h) => `<button type="button" class="ghost" data-act="create" data-host="${esc(h)}">Create a server on <b>${esc(h.replace(/^https?:\/\//, ""))}</b></button>`).join("")}
+      <button type="button" class="ghost" data-act="setup">Set up a new host…</button></div>`, null, null);
 }
 
 async function inviteDialog() {
@@ -234,7 +418,7 @@ document.addEventListener("click", (e) => {
   if (e.target.closest("#add-server")) return addDialog();
   const a = e.target.closest("[data-act]");
   if (!a) return;
-  ({ join: joinDialog, setup: setupDialog, invite: inviteDialog, channel: channelDialog, create: () => newServerDialog(a.dataset.host) })[a.dataset.act]?.();
+  ({ join: joinDialog, setup: setupDialog, invite: inviteDialog, channel: channelDialog, settings: () => openSettings("overview"), create: () => newServerDialog(a.dataset.host) })[a.dataset.act]?.();
 });
 
 // ---------- live updates ----------
@@ -267,3 +451,5 @@ async function listen() {
 
 loadState();
 listen();
+// Other people's changes (names, channels, roles) show up within a few seconds.
+setInterval(() => { if (!document.querySelector("dialog[open]")) loadState(); }, 15000);

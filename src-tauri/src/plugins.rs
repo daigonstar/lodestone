@@ -26,9 +26,12 @@ pub fn describe(p: &str) -> Option<&'static str> {
     }
 }
 
+/// The plug-in's input pipe; taking it out (and dropping it) closes the pipe, which tells the plug-in to quit.
+type Input = Arc<Mutex<Option<ChildStdin>>>;
+
 struct Running {
     child: Child,
-    stdin: Arc<Mutex<ChildStdin>>,
+    stdin: Input,
     hello: Option<Value>,
 }
 
@@ -99,7 +102,7 @@ pub fn start(app: AppHandle) -> Result<Status, String> {
     let log = crate::launcher::log_path("lodestone-comms");
     let err = std::fs::File::create(&log).map(Stdio::from).unwrap_or(Stdio::null());
     let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(err).spawn().map_err(|e| format!("Couldn't start Lodestone Comms: {e}"))?;
-    let stdin = Arc::new(Mutex::new(child.stdin.take().ok_or("no stdin")?));
+    let stdin: Input = Arc::new(Mutex::new(Some(child.stdin.take().ok_or("no stdin")?)));
     let stdout = child.stdout.take().ok_or("no stdout")?;
     *COMMS_PROC.lock().unwrap() = Some(Running { child, stdin: stdin.clone(), hello: None });
     std::thread::spawn(move || read_loop(app, stdout, stdin));
@@ -130,13 +133,14 @@ pub fn send_theme(vars: Value) {
     }
 }
 
-fn write_line(stdin: &Mutex<ChildStdin>, v: &Value) {
-    let mut s = stdin.lock().unwrap();
-    let _ = writeln!(s, "{v}");
-    let _ = s.flush();
+fn write_line(stdin: &Mutex<Option<ChildStdin>>, v: &Value) {
+    if let Some(s) = stdin.lock().unwrap().as_mut() {
+        let _ = writeln!(s, "{v}");
+        let _ = s.flush();
+    }
 }
 
-fn read_loop(app: AppHandle, stdout: std::process::ChildStdout, stdin: Arc<Mutex<ChildStdin>>) {
+fn read_loop(app: AppHandle, stdout: std::process::ChildStdout, stdin: Input) {
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };
         let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
@@ -201,10 +205,57 @@ fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Value, String
     }
 }
 
-/// Stop Comms when Lodestone quits (closing its input makes it exit).
+/// A plug-in Lodestone knows about, for the Plug-ins page.
+#[derive(Serialize)]
+pub struct PluginInfo {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub installed: bool,
+    pub running: bool,
+    pub version: Option<String>,
+    /// Every permission this plug-in can ask for: (permission, plain words, granted).
+    pub permissions: Vec<(String, String, bool)>,
+    pub install_hint: &'static str,
+}
+
+/// The plug-ins Lodestone knows (only Comms so far).
+pub fn list() -> Vec<PluginInfo> {
+    let s = status();
+    let granted = approved();
+    let mut perms: Vec<String> = s.requested.iter().map(|(p, _)| p.clone()).collect();
+    for p in ["friends:read", "chat:open"] {
+        if !perms.iter().any(|x| x == p) {
+            perms.push(p.to_string());
+        }
+    }
+    vec![PluginInfo {
+        id: COMMS,
+        name: "Lodestone Comms",
+        description: "End-to-end encrypted chat with your friends, on servers you host yourselves.",
+        installed: s.installed,
+        running: s.running,
+        version: s.version,
+        permissions: perms.iter().map(|p| (p.clone(), describe(p).unwrap_or("Unknown permission").to_string(), granted.contains(p))).collect(),
+        install_hint: "Install the Lodestone Comms Flatpak (io.github.daigonstar.Lodestone.Comms). It's in early development and not released yet.",
+    }]
+}
+
+/// Stop a running plug-in (it starts again when you open it).
+pub fn stop_plugin(id: &str) -> Result<(), String> {
+    if id != COMMS {
+        return Err("Unknown plug-in".into());
+    }
+    stop();
+    Ok(())
+}
+
+/// Stop Comms (when you ask, or when Lodestone quits): closing its input makes it exit by itself; it's
+/// killed only if it hasn't after two seconds.
 pub fn stop() {
-    if let Some(mut r) = COMMS_PROC.lock().unwrap().take() {
-        drop(r.stdin);
+    let running = COMMS_PROC.lock().unwrap().take();
+    if let Some(mut r) = running {
+        drop(r.stdin.lock().unwrap().take());
         let _ = r.child.wait_timeout_or_kill();
     }
 }

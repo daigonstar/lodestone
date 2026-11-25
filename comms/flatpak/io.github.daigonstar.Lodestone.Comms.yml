@@ -1,0 +1,38 @@
+# Lodestone Comms, the plug-in, as its own Flatpak with its own sandbox.
+# It needs only the network (its hosts, and its page on 127.0.0.1 for Lodestone). It has no access to
+# your files, Lodestone's data, the display or sound: Lodestone shows its page, and its data lives in
+# ~/.var/app/io.github.daigonstar.Lodestone.Comms/.
+app-id: io.github.daigonstar.Lodestone.Comms
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: lodestone-comms
+finish-args:
+  - --share=network
+modules:
+  - name: lodestone-comms
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/lodestone-comms/cargo
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      - cargo --offline build --release --locked -p lodestone-comms
+      - install -Dm755 target/release/lodestone-comms /app/bin/lodestone-comms
+      - install -Dm644 LICENSE /app/share/licenses/io.github.daigonstar.Lodestone.Comms/LICENSE
+    sources:
+      # app-source-begin (build.sh uses this checkout)
+      - type: dir
+        path: ..
+        skip:
+          - target
+          - flatpak/.flatpak-builder
+          - flatpak/build-dir
+          - flatpak/repo
+      # app-source-end
+      - type: file
+        path: ../../LICENSE
+      - cargo-sources.json

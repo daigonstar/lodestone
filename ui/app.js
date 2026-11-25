@@ -242,6 +242,7 @@ async function load(quiet = false) {
     state.games = await invoke("list_games");
     keyCache.clear();
     try { state.systems = await invoke("emu_systems"); } catch { state.systems = []; }
+    try { state.plugins = await invoke("plugins_list"); } catch { state.plugins = []; }
     try { const st = await invoke("get_settings"); state.kilnPlay = st.kiln_play !== false; state.steamBg = st.steam_background !== false; state.mangohudAll = !!st.mangohud; state.emuMenu = !!st.emu_menu_entry; } catch { state.kilnPlay = true; state.steamBg = true; }
   } catch (e) {
     toast(String(e), true);
@@ -360,7 +361,6 @@ function renderNav() {
   const lib = [
     ["home", "Home", ""],
     ["downloads", "Downloads", (state.dl || []).filter((d) => d.state === "downloading").length || ""],
-    ["comms", "Comms", ""],
     ["all", "All games", ls.get("mergeDupes", true) ? mergeList(visible.filter((g) => inst(g) && !g.system)).length : visible.filter((g) => inst(g) && !g.system).length],
     ["favorites", "Favorites", visible.filter((g) => g.favorite).length],
     ["recent", "Recently played", visible.filter((g) => g.last_played && inst(g)).length],
@@ -391,6 +391,11 @@ function renderNav() {
   $("#nav-systems").innerHTML = systems
     .map((s) => `<button data-view="sys:${esc(s.id)}" class="${state.view === "sys:" + s.id ? "active" : ""}" title="${esc(s.emulators.length ? "Plays with " + s.emulators.join(", ") : "No emulator installed for this system yet")}"><span class="dot" style="background:${s.emulators.length ? STORES.emulation.color : "#5b5f6a"}"></span>${esc(s.name)}<span class="count">${sysCount[s.id]}</span></button>`)
     .join("");
+  // Plug-ins: the installed ones, then the management page.
+  const PLUGIN_VIEW = { comms: "comms" };
+  $("#nav-plugins").innerHTML = (state.plugins || []).filter((p) => p.installed).map((p) =>
+    `<button data-view="${PLUGIN_VIEW[p.id]}" class="${state.view === PLUGIN_VIEW[p.id] ? "active" : ""}"><span class="dot" style="background:${p.running ? "#3ddc97" : "#5b5f6a"}"></span>${esc(p.name.replace(/^Lodestone /, ""))}</button>`).join("")
+    + `<button data-view="plugins" class="${state.view === "plugins" ? "active" : ""}"><span class="dot" style="background:transparent;border:1px solid #5b5f6a"></span>Manage plug-ins</button>`;
 }
 
 function cardHTML(g) {
@@ -585,7 +590,7 @@ function detailCard() {
 }
 function placeDetail() {
   const d = $("#detail");
-  const gridView = !["home", "minecraft", "downloads", "comms"].includes(state.view) && !state.view.startsWith("shop:");
+  const gridView = !["home", "minecraft", "downloads", "comms", "plugins"].includes(state.view) && !state.view.startsWith("shop:");
   const card = state.open && gridView ? detailCard() : null;
   if (!card) {
     if (state.open && gridView && state.selected) state.open = false;
@@ -874,11 +879,19 @@ function render() {
   const home = state.view === "home";
   const dlv = state.view === "downloads";
   const commsView = state.view === "comms";
-  const mc = state.view === "minecraft" || shopView || home || dlv || commsView;
+  const pluginsView = state.view === "plugins";
+  const mc = state.view === "minecraft" || shopView || home || dlv || commsView || pluginsView;
   for (const el of ["#hero", ".grid-head", "#grid", "#setup", "#filters"]) $(el).classList.toggle("hidden", mc);
   $("#home").classList.toggle("hidden", !home);
   $("#dlv").classList.toggle("hidden", !dlv);
   $("#comms").classList.toggle("hidden", !commsView);
+  $("#plugins").classList.toggle("hidden", !pluginsView);
+  if (pluginsView) {
+    for (const el of ["#empty", "#mini", "#mc", "#shop", "#downloads"]) $(el).classList.add("hidden");
+    shopHide();
+    renderPluginsPage();
+    return;
+  }
   document.querySelector("main").classList.toggle("comms-open", commsView);
   if (commsView) {
     for (const el of ["#empty", "#mini", "#mc", "#shop", "#downloads"]) $(el).classList.add("hidden");
@@ -1453,7 +1466,6 @@ $("#btn-settings").onclick = async () => {
   $("#form-settings").rauser.value = s.ra_user || "";
   $("#form-settings").rakey.value = s.ra_key || "";
   $("#form-settings").emudir.value = s.emulation_dir || "";
-  renderPluginSettings(s);
   renderEmuFolders();
   renderProton().catch((e) => toast(String(e), true));
   renderMangohud().catch((e) => toast(String(e), true));
@@ -1657,7 +1669,9 @@ function showComms(st) {
   invoke("comms_theme", { vars }).catch(() => {});
 }
 if (T) {
-  T.event.listen("comms-stopped", () => { const f = $("#comms-frame"); f.removeAttribute("src"); f.classList.add("hidden"); if (state.view === "comms") openComms(); });
+  T.event.listen("comms-ready", () => refreshPlugins());
+  T.event.listen("comms-stopped", () => {
+    refreshPlugins(); const f = $("#comms-frame"); f.removeAttribute("src"); f.classList.add("hidden"); if (state.view === "comms") openComms(); });
   // Comms asked to invite a friend: copy the invite (Lodestone opened their Steam chat) and say so.
   T.event.listen("comms-open-chat", async (e) => {
     const { store, id, text } = e.payload || {};
@@ -1666,21 +1680,43 @@ if (T) {
   });
 }
 
-// Settings → Plug-ins: what Comms is allowed, and a way to take it back.
-function renderPluginSettings(s) {
-  const allowed = (s.plugin_permissions || {}).comms || [];
-  const words = { "friends:read": "see your friends list", "chat:open": "open friends' Steam chats" };
-  $("#plugin-comms").textContent = allowed.length ? `Lodestone Comms may ${allowed.map((p) => words[p] || p).join(" and ")}.` : "Lodestone Comms: nothing allowed.";
-  $("#plugin-comms-revoke").classList.toggle("hidden", !allowed.length);
-  $("#plugin-comms-revoke").onclick = async () => {
-    try {
-      await invoke("comms_approve", { permissions: [] });
-      renderPluginSettings(await invoke("get_settings"));
-      const f = $("#comms-frame"); f.removeAttribute("src"); f.classList.add("hidden");
-      toast("Comms permissions removed. Comms will ask again next time you open it.");
-    } catch (e) { toast(String(e), true); }
-  };
+// ---------- Plug-ins page ----------
+async function refreshPlugins() {
+  try { state.plugins = await invoke("plugins_list"); } catch (e) { toast(String(e), true); }
+  renderNav();
+  if (state.view === "plugins") renderPluginsPage();
 }
+function renderPluginsPage() {
+  const list = state.plugins || [];
+  $("#plugins-list").innerHTML = list.map((p) => {
+    const status = !p.installed ? "Not installed" : p.running ? `Running${p.version ? " · version " + esc(p.version) : ""}` : "Installed · not running";
+    const perms = p.permissions.map(([id, words, granted]) => `<li><span class="perm ${granted ? "on" : ""}">${granted ? "Allowed" : "Not allowed"}</span> ${esc(words)}</li>`).join("");
+    const anyGranted = p.permissions.some(([, , g]) => g);
+    return `<div class="plugin-card" data-plugin="${esc(p.id)}">
+      <div class="plugin-head"><div><h2>${esc(p.name)}</h2><p class="muted">${esc(p.description)}</p></div><span class="plugin-status ${p.running ? "on" : ""}">${status}</span></div>
+      ${p.installed ? `<h4>Permissions</h4><ul class="perm-list">${perms}</ul>` : `<p class="muted">${esc(p.install_hint)}</p>`}
+      <div class="row-btns">
+        ${p.installed ? `<button class="play" data-view="${p.id === "comms" ? "comms" : ""}">Open</button>` : ""}
+        ${p.running ? '<button class="ghost" data-plugin-act="stop">Stop</button>' : ""}
+        ${anyGranted ? '<button class="ghost" data-plugin-act="revoke">Revoke permissions</button>' : ""}
+      </div></div>`;
+  }).join("") || '<p class="muted">No plug-ins yet.</p>';
+}
+$("#plugins-list").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-plugin-act]");
+  if (!b) return;
+  const id = b.closest("[data-plugin]").dataset.plugin;
+  try {
+    if (b.dataset.pluginAct === "stop") await invoke("plugin_stop", { id });
+    if (b.dataset.pluginAct === "revoke") {
+      await invoke("comms_approve", { permissions: [] });
+      const f = $("#comms-frame"); f.removeAttribute("src"); f.classList.add("hidden");
+      toast("Permissions removed. The plug-in will ask again next time you open it.");
+    }
+  } catch (err) { toast(String(err), true); }
+  refreshPlugins();
+});
+$("#open-plugins").onclick = () => { $("#dlg-settings").close(); state.view = "plugins"; ls.set("view", "plugins"); render(); refreshPlugins(); };
 
 // ---------- collapsible sidebar sections (remembered) ----------
 // A collapsed section still shows the library you're in, so you never lose your place.
@@ -2116,7 +2152,7 @@ async function renderAchievements(g) {
 
 async function renderAbout(g) {
   const el = $("#about");
-  if (!g || ["home", "minecraft", "downloads", "comms"].includes(state.view) || state.view.startsWith("shop:")) return el.classList.add("hidden");
+  if (!g || ["home", "minecraft", "downloads", "comms", "plugins"].includes(state.view) || state.view.startsWith("shop:")) return el.classList.add("hidden");
   el.classList.remove("hidden");
   const id = g.id;
   const facts = (d) => {

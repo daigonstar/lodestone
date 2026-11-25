@@ -21,7 +21,7 @@ const SCRIPT: &str = include_str!("../ui/app.js");
 const STYLE: &str = include_str!("../ui/style.css");
 
 /// Only this page's own code runs, it only talks to its own plug-in, and only Lodestone may frame it.
-const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' https: data:; base-uri 'none'; form-action 'none'; frame-ancestors tauri://localhost http://tauri.localhost";
+const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' https: data: blob:; base-uri 'none'; form-action 'none'; frame-ancestors tauri://localhost http://tauri.localhost";
 
 pub fn router(app: Shared) -> Router {
     let api = Router::new()
@@ -36,6 +36,8 @@ pub fn router(app: Shared) -> Router {
         .route("/api/friends", get(friends))
         .route("/api/invite-friend", post(invite_friend))
         .route("/api/events", get(events))
+        .route("/api/manage", post(manage))
+        .route("/api/icon", get(icon).post(set_icon))
         .route_layer(middleware::from_fn_with_state(app.clone(), guard));
     Router::new()
         .route("/", get(|| async { page(INDEX, "text/html; charset=utf-8") }))
@@ -150,6 +152,7 @@ struct JoinReq {
 /// Join a server from an invite link: registers on that host first if you're new there.
 async fn join(State(app): State<Shared>, Json(r): Json<JoinReq>) -> R {
     let (host, code) = parse_link(&r.link).ok_or_else(|| Fail("That doesn't look like an invite link (…/join/…)".into()))?;
+    let host = lodestone_comms_client::discover::discover(&host).await.map_err(Fail)?;
     let c = app.hosts.open(&host).map_err(Fail)?;
     let space = if c.username().is_some() {
         ensure_signed_in(&c).await?;
@@ -173,7 +176,8 @@ struct SetupReq {
 
 /// Become the first (admin) account on a new host, with its setup code.
 async fn setup(State(app): State<Shared>, Json(r): Json<SetupReq>) -> R {
-    let c = app.hosts.open(&r.host).map_err(Fail)?;
+    let host = lodestone_comms_client::discover::discover(&r.host).await.map_err(Fail)?;
+    let c = app.hosts.open(&host).map_err(Fail)?;
     if c.username().is_some() {
         return Err(Fail("You already have an account on that host".into()));
     }
@@ -280,6 +284,73 @@ async fn invite_friend(State(app): State<Shared>, Json(r): Json<InviteFriendReq>
     let text = format!("Join me on Lodestone Comms: {link}");
     app.bridge.request("open_chat", json!({ "store": r.store, "id": r.id, "text": text })).await.map_err(Fail)?;
     Ok(Json(json!({ "link": link })))
+}
+
+#[derive(Deserialize)]
+struct ManageReq {
+    host: String,
+    method: String,
+    path: String,
+    #[serde(default)]
+    body: Option<Value>,
+}
+
+/// Server settings calls (profile, channels, roles, bans, invites), passed to the host with this
+/// device's session. Only these host paths are allowed, and the host checks each permission itself.
+async fn manage(State(app): State<Shared>, Json(r): Json<ManageReq>) -> R {
+    let ok_path = (r.path.starts_with("/v1/spaces/") || r.path.starts_with("/v1/channels/")) && !r.path.contains("..") && !r.path.contains("/messages");
+    if !ok_path || !["GET", "PATCH", "PUT", "POST", "DELETE"].contains(&r.method.as_str()) {
+        return Err(Fail("Not a settings request".into()));
+    }
+    let c = client(&app, &r.host)?;
+    ensure_signed_in(&c).await?;
+    let v = c.host.call(&r.method, &r.path, r.body).await?;
+    let _ = app.events.send(json!({ "type": "state" }).to_string());
+    Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+struct IconQuery {
+    host: String,
+    space: String,
+}
+
+/// A server's icon, fetched from its host for the page.
+async fn icon(State(app): State<Shared>, Query(q): Query<IconQuery>) -> Response {
+    let Ok(c) = client(&app, &q.host) else { return StatusCode::NOT_FOUND.into_response() };
+    if ensure_signed_in(&c).await.is_err() || !q.space.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match c.host.get_raw(&format!("/v1/spaces/{}/icon", q.space)).await {
+        Ok((bytes, kind)) if kind.starts_with("image/") && !kind.contains("svg") => {
+            let mut r = Response::new(Body::from(bytes));
+            r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_str(&kind).unwrap_or(HeaderValue::from_static("image/png")));
+            r.headers_mut().insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+            r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            r
+        }
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct SetIcon {
+    host: String,
+    space: String,
+    /// The image, base64.
+    data: String,
+}
+
+async fn set_icon(State(app): State<Shared>, Json(r): Json<SetIcon>) -> R {
+    let c = client(&app, &r.host)?;
+    ensure_signed_in(&c).await?;
+    if !r.space.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(Fail("Bad server".into()));
+    }
+    let bytes = lodestone_comms_client::host::unb64(&r.data).ok_or_else(|| Fail("Bad image".into()))?;
+    c.host.put_raw(&format!("/v1/spaces/{}/icon", r.space), bytes).await?;
+    let _ = app.events.send(json!({ "type": "state" }).to_string());
+    Ok(Json(json!({ "ok": true })))
 }
 
 /// Live updates for the page, as newline-separated JSON (read with fetch, so the secret stays in a header).

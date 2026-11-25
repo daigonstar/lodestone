@@ -27,6 +27,14 @@ stores ciphertext it can't read.
 
 The host's logs never contain session tokens or invite codes.
 
+## Finding a host by its domain
+
+`GET /.well-known/lodestone-comms` returns `{ "protocol": "lodestone-comms/v1", "public_url": "...", "version": "..." }`.
+A client given only a domain (`comms.example.com`) asks `https://<domain>/.well-known/lodestone-comms`,
+checks the protocol, and uses `public_url` as the host's address, provided it's HTTPS on that same domain.
+
+Every answer from a host carries `Cache-Control: no-store`, so proxies and CDNs never cache it.
+
 ## Signing in: device keys, no passwords
 
 All signed strings start with `lodestone-comms/v1`, and include the host's public URL so a signature for
@@ -63,6 +71,24 @@ one host can't be replayed on another.
 | `DELETE /v1/spaces/{space}/members/{username}` | owner or admin (or yourself, to leave) | removes the member; `?ban=true` also stops them rejoining |
 
 Roles: **owner** (one per space), **admin**, **member**. Names: 1 to 64 characters, no control characters.
+
+### Server settings
+
+| Request | Who | Does |
+|---|---|---|
+| `PATCH /v1/spaces/{space}` `{ name?, description? }` | owner or admin | renames the server or sets its description (up to 500 characters) |
+| `PUT /v1/spaces/{space}/icon` (image body) / `DELETE` | owner or admin | sets or removes the icon: PNG, JPEG, GIF or WebP, up to 256 KiB, checked by its first bytes |
+| `GET /v1/spaces/{space}/icon` | member | the icon, with `nosniff` and a CSP that runs nothing |
+| `DELETE /v1/spaces/{space}` | owner | deletes the server with its channels, messages and invites |
+| `PATCH /v1/channels/{channel}` `{ name?, topic? }` / `DELETE` | owner or admin | renames a channel, sets its topic (up to 300 characters), or deletes it (a server keeps at least one) |
+| `PUT /v1/spaces/{space}/channel-order` `{ channels: [...] }` | owner or admin | the channel order; must list every channel once |
+| `PUT /v1/spaces/{space}/members/{username}/role` `{ role }` | owner | `admin` or `member` |
+| `POST /v1/spaces/{space}/transfer` `{ username }` | owner | makes another member the owner; the old owner becomes an admin |
+| `GET /v1/spaces/{space}/bans`, `DELETE /v1/spaces/{space}/bans/{username}` | owner or admin | lists and lifts bans |
+| `GET /v1/spaces/{space}/invites`, `DELETE /v1/spaces/{space}/invites/{id}` | member (own invites) or admin (all) | active invites by a short ID (the start of the code's hash: codes can't be shown again), and revoking them |
+
+Admins can remove and ban members, but not other admins or the owner. Descriptions, icons and topics are
+server metadata the host sees, like names; messages stay end-to-end encrypted.
 
 Invite links have the form `<host url>/join/<code>`. Lodestone can send one to a friend from its friends
 list: it opens that friend's Steam chat with the link ready to paste (Steam offers no way for other apps

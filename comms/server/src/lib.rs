@@ -13,6 +13,7 @@ pub mod api;
 pub mod auth;
 pub mod db;
 pub mod live;
+pub mod settings;
 pub mod util;
 #[cfg(test)]
 mod tests;

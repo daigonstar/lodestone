@@ -8,6 +8,7 @@
 //!   members' devices (and send them Welcomes) and remove people who left. Two clients doing it at once
 //!   is fine: the host accepts one commit per epoch, the other client catches up and finds nothing to do.
 
+pub mod discover;
 pub mod host;
 pub mod store;
 

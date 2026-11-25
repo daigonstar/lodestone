@@ -3,6 +3,8 @@ FROM docker.io/library/rust:1-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY server ./server
+COPY client ./client
+COPY app ./app
 RUN cargo build --release --locked -p lodestone-comms-server
 
 FROM docker.io/library/debian:bookworm-slim

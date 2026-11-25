@@ -187,3 +187,112 @@ async fn rejects_bad_input() {
     let sid = sp["id"].as_str().unwrap();
     assert_eq!(call(&app, "POST", &format!("/v1/spaces/{sid}/invites"), Some(&t), json!({ "max_uses": 0, "expires_in": 3600 })).await.0, StatusCode::BAD_REQUEST);
 }
+
+/// Upload helper for raw bodies (icons).
+async fn put_raw(app: &Shared, path: &str, token: &str, body: Vec<u8>) -> StatusCode {
+    let req = Request::builder().method("PUT").uri(path).header("authorization", format!("Bearer {token}")).body(Body::from(body)).unwrap();
+    crate::api::router(app.clone()).oneshot(req).await.unwrap().status()
+}
+
+#[tokio::test]
+async fn server_settings_and_permissions() {
+    let (app, code) = host();
+    let (alice, bob, carol) = (Device::new(), Device::new(), Device::new());
+    alice.register(&app, "alice", &code).await;
+    let ta = alice.sign_in(&app).await;
+    let (_, sp) = call(&app, "POST", "/v1/spaces", Some(&ta), json!({ "name": "Raid night" })).await;
+    let sid = sp["id"].as_str().unwrap().to_string();
+    let general = sp["channels"][0]["id"].as_str().unwrap().to_string();
+    let (_, inv) = call(&app, "POST", &format!("/v1/spaces/{sid}/invites"), Some(&ta), json!({ "max_uses": 5, "expires_in": 3600 })).await;
+    let code5 = inv["code"].as_str().unwrap().to_string();
+    bob.register(&app, "bob", &code5).await;
+    carol.register(&app, "carol", &code5).await;
+    let (tb, tc) = (bob.sign_in(&app).await, carol.sign_in(&app).await);
+    let sp_path = format!("/v1/spaces/{sid}");
+
+    // Profile: members can't change it, the owner can.
+    assert_eq!(call(&app, "PATCH", &sp_path, Some(&tb), json!({ "name": "Mine now" })).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(&app, "PATCH", &sp_path, Some(&ta), json!({ "name": "Raid Night", "description": "Tuesdays, 8pm" })).await.0, StatusCode::OK);
+    let (_, got) = call(&app, "GET", &sp_path, Some(&tc), Value::Null).await;
+    assert_eq!((got["name"].as_str(), got["description"].as_str(), got["has_icon"].as_bool()), (Some("Raid Night"), Some("Tuesdays, 8pm"), Some(false)));
+
+    // Icon: only real images, members can fetch it, outsiders can't.
+    let png = b"\x89PNG\r\n\x1a\nrest-of-a-png".to_vec();
+    assert_eq!(put_raw(&app, &format!("{sp_path}/icon"), &ta, b"<svg onload=alert(1)>".to_vec()).await, StatusCode::BAD_REQUEST);
+    assert_eq!(put_raw(&app, &format!("{sp_path}/icon"), &tb, png.clone()).await, StatusCode::FORBIDDEN);
+    assert_eq!(put_raw(&app, &format!("{sp_path}/icon"), &ta, png.clone()).await, StatusCode::OK);
+    let req = Request::builder().uri(format!("{sp_path}/icon")).header("authorization", format!("Bearer {tc}")).body(Body::empty()).unwrap();
+    let res = crate::api::router(app.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.headers()["content-type"], "image/png");
+    assert_eq!(res.headers()["x-content-type-options"], "nosniff");
+
+    // Channels: create, rename with a topic, reorder, delete (never the last one).
+    let (_, raids) = call(&app, "POST", &format!("{sp_path}/channels"), Some(&ta), json!({ "name": "raids" })).await;
+    let raids = raids["id"].as_str().unwrap().to_string();
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{raids}"), Some(&tb), json!({ "topic": "x" })).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{raids}"), Some(&ta), json!({ "name": "raid-plans", "topic": "Who's in?" })).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "PUT", &format!("{sp_path}/channel-order"), Some(&ta), json!({ "channels": [raids] })).await.0, StatusCode::BAD_REQUEST, "must list every channel");
+    assert_eq!(call(&app, "PUT", &format!("{sp_path}/channel-order"), Some(&ta), json!({ "channels": [raids, general] })).await.0, StatusCode::OK);
+    let (_, got) = call(&app, "GET", &sp_path, Some(&tb), Value::Null).await;
+    assert_eq!((got["channels"][0]["name"].as_str(), got["channels"][0]["topic"].as_str()), (Some("raid-plans"), Some("Who's in?")));
+    assert_eq!(call(&app, "DELETE", &format!("/v1/channels/{raids}"), Some(&ta), Value::Null).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "DELETE", &format!("/v1/channels/{general}"), Some(&ta), Value::Null).await.0, StatusCode::BAD_REQUEST, "last channel stays");
+
+    // Roles: only the owner promotes; an admin can remove members but not other admins or the owner.
+    assert_eq!(call(&app, "PUT", &format!("{sp_path}/members/carol/role"), Some(&tb), json!({ "role": "admin" })).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(&app, "PUT", &format!("{sp_path}/members/bob/role"), Some(&ta), json!({ "role": "owner" })).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(call(&app, "PUT", &format!("{sp_path}/members/bob/role"), Some(&ta), json!({ "role": "admin" })).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "PATCH", &sp_path, Some(&tb), json!({ "description": "Admins can edit" })).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "DELETE", &format!("{sp_path}/members/alice"), Some(&tb), Value::Null).await.0, StatusCode::FORBIDDEN);
+
+    // Bans: an admin bans Carol, lists and lifts the ban.
+    assert_eq!(call(&app, "DELETE", &format!("{sp_path}/members/carol?ban=true"), Some(&tb), Value::Null).await.0, StatusCode::OK);
+    let (_, bans) = call(&app, "GET", &format!("{sp_path}/bans"), Some(&tb), Value::Null).await;
+    assert_eq!(bans["bans"], json!(["carol"]));
+    assert_eq!(call(&app, "DELETE", &format!("{sp_path}/bans/carol"), Some(&tb), Value::Null).await.0, StatusCode::OK);
+
+    // Invites: listed by short ID, revoked ones stop working.
+    let (_, inv2) = call(&app, "POST", &format!("{sp_path}/invites"), Some(&ta), json!({ "max_uses": 3, "expires_in": 3600 })).await;
+    let (_, list) = call(&app, "GET", &format!("{sp_path}/invites"), Some(&ta), Value::Null).await;
+    let ids: Vec<String> = list["invites"].as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap().to_string()).collect();
+    assert_eq!(ids.len(), 2, "the first invite still has uses left");
+    for id in &ids {
+        assert_eq!(call(&app, "DELETE", &format!("{sp_path}/invites/{id}"), Some(&ta), Value::Null).await.0, StatusCode::OK);
+    }
+    assert_eq!(call(&app, "POST", &format!("/v1/invites/{}/accept", inv2["code"].as_str().unwrap()), Some(&tc), Value::Null).await.0, StatusCode::NOT_FOUND);
+
+    // Ownership: transfer to Bob; Alice becomes an admin and can no longer delete the server.
+    assert_eq!(call(&app, "POST", &format!("{sp_path}/transfer"), Some(&tb), json!({ "username": "bob" })).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(&app, "POST", &format!("{sp_path}/transfer"), Some(&ta), json!({ "username": "bob" })).await.0, StatusCode::OK);
+    let (_, got) = call(&app, "GET", &sp_path, Some(&ta), Value::Null).await;
+    assert_eq!(got["your_role"], "admin");
+    assert_eq!(call(&app, "DELETE", &sp_path, Some(&ta), Value::Null).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(&app, "DELETE", &sp_path, Some(&tb), Value::Null).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "GET", &sp_path, Some(&tb), Value::Null).await.0, StatusCode::NOT_FOUND);
+}
+
+#[test]
+fn upgrades_an_existing_database_in_place() {
+    let dir = std::env::temp_dir().join(format!("comms-migrate-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("old.db");
+    let _ = std::fs::remove_file(&path);
+    // A database from before settings existed: no description, icon, topic or position columns.
+    let c = rusqlite::Connection::open(&path).unwrap();
+    c.execute_batch(
+        "CREATE TABLE spaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, owner INTEGER NOT NULL, created INTEGER NOT NULL);
+         CREATE TABLE channels (id TEXT PRIMARY KEY, space TEXT NOT NULL, name TEXT NOT NULL, epoch INTEGER NOT NULL DEFAULT 0, next_seq INTEGER NOT NULL DEFAULT 1, created INTEGER NOT NULL);
+         INSERT INTO spaces VALUES ('s1', 'Old server', 1, 0);
+         INSERT INTO channels (id, space, name, created) VALUES ('c1', 's1', 'general', 0);",
+    )
+    .unwrap();
+    drop(c);
+    let db = Db::open(&path).unwrap();
+    let (name, desc, topic): (String, String, String) = db
+        .with(|c| c.query_row("SELECT s.name, s.description, ch.topic FROM spaces s JOIN channels ch ON ch.space = s.id", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))))
+        .unwrap();
+    assert_eq!((name.as_str(), desc.as_str(), topic.as_str()), ("Old server", "", ""));
+    drop(db);
+    let _ = Db::open(&path).unwrap(); // a second open changes nothing
+    let _ = std::fs::remove_dir_all(&dir);
+}

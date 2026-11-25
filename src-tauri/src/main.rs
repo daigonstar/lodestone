@@ -1394,6 +1394,20 @@ fn comms_approve(permissions: Vec<String>) -> Result<plugins::Status, String> {
     plugins::approve(permissions)
 }
 
+/// The plug-ins Lodestone knows, with their status and permissions.
+#[tauri::command]
+async fn plugins_list() -> Result<Vec<plugins::PluginInfo>, String> {
+    blocking(plugins::list).await
+}
+
+/// Stop a running plug-in.
+#[tauri::command]
+async fn plugin_stop(app: AppHandle, id: String) -> Result<(), String> {
+    blocking(move || plugins::stop_plugin(&id)).await??;
+    let _ = app.emit("comms-stopped", ());
+    Ok(())
+}
+
 /// Pass Lodestone's colours to Comms.
 #[tauri::command]
 fn comms_theme(vars: serde_json::Value) {
@@ -1563,6 +1577,8 @@ fn main() {
             comms_start,
             comms_approve,
             comms_theme,
+            plugins_list,
+            plugin_stop,
             rom_reveal,
             emu_open,
             emu_set_folder,
