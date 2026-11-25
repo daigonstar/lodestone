@@ -159,9 +159,12 @@ pub fn process_table() -> Vec<String> {
 pub type Sessions = HashMap<String, Session>;
 
 #[cfg(test)]
+#[cfg_attr(windows, allow(unused_imports))]
 mod tests {
     use super::*;
     use crate::model::{Detect, Game, LaunchSpec};
+
+    #[cfg(unix)] // Linux behaviour (sh, Linux paths, symlinks)
 
     #[test]
     fn games_dont_inherit_lodestones_cert_override() {
@@ -172,6 +175,8 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&log).unwrap().trim(), "[]");
         let _ = std::fs::remove_file(log);
     }
+
+    #[cfg(unix)] // Linux behaviour (sh, Linux paths, symlinks)
 
     #[test]
     fn spawns_detached_and_tracks_until_exit() {

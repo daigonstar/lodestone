@@ -36,6 +36,7 @@ webkit2gtk = "2.0"
 strip = true
 lto = true
 
-# Windows: free disk space and the list of running programs (for spotting a game that's running).
+# Windows: free disk space, the list of running programs (for spotting a game that's running), and
+# reading where stores are installed from the registry.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_System_Registry"] }

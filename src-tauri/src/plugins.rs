@@ -215,7 +215,7 @@ fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Value, String
             let _ = app.emit("comms-open-chat", json!({ "store": store, "id": id, "text": text }));
             if store == "steam" {
                 let url = format!("steam://friends/message/{id}");
-                let _ = crate::launcher::spawn(&crate::model::LaunchSpec::new("xdg-open", &[&url]), crate::launcher::log_path("xdg-open"));
+                let _ = crate::launcher::spawn(&crate::os::open_spec(&url), crate::launcher::log_path("xdg-open"));
             }
             Ok(json!(true))
         }

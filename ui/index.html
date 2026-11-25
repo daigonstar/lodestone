@@ -82,7 +82,7 @@
                 <button data-act="emu-system" class="hidden rom-only">Change the emulator for this system</button>
                 <button data-act="rom-reveal" class="hidden rom-only">Show the ROM file</button>
                 <button data-act="ra-page" class="hidden">On RetroAchievements</button>
-                <button data-act="mangohud">MangoHud overlay: off</button>
+                <button data-act="mangohud" class="linux-only">MangoHud overlay: off</button>
                 <button data-act="log">View launch log</button>
                 <button data-act="runtimes">Install DirectX &amp; VC++ runtimes</button>
                 <button data-act="client">Open store app</button>
@@ -259,7 +259,7 @@
       <p class="hint">Anything with a command line: a native game, a Windows game through <code>umu-run</code> or <code>wine</code>, an emulator, a script.
         Battle.net and Guild Wars 2 are easiest to install in Lutris; they'll show up here automatically.</p>
       <label>Title<input name="title" required placeholder="Guild Wars 2" /></label>
-      <label class="check"><input type="checkbox" name="proton" /> Windows game: run it with Proton (own prefix, no Steam needed)</label>
+      <label class="check linux-only"><input type="checkbox" name="proton" /> Windows game: run it with Proton (own prefix, no Steam needed)</label>
       <label><span id="cmd-label">Command</span><input name="command" required placeholder="/home/you/Games/mygame/start.sh" /></label>
       <label>Store
         <select name="store">
@@ -410,7 +410,7 @@
 
   <dialog id="dlg-accounts">
     <h2>Accounts</h2>
-    <p class="hint">Sign in on each store's own page in a Lodestone window. Lodestone never sees your password; it only receives the store's sign-in token, kept in <code>~/.local/share/lodestone</code>.</p>
+    <p class="hint">Sign in on each store's own page in a Lodestone window. Lodestone never sees your password; it only receives the store's sign-in token, kept in <code class="data-dir">Lodestone's data folder</code>.</p>
     <div id="acct-list" class="acct-list"></div>
     <div class="dlg-actions"><button class="ghost" data-close-dialog>Close</button></div>
   </dialog>
@@ -418,12 +418,14 @@
   <dialog id="dlg-settings">
     <form method="dialog" id="form-settings">
       <h2>Settings</h2>
+      <div class="linux-only">
       <h3>Compatibility (Proton)</h3>
       <div class="row-line"><span id="umu-status" class="umu-status muted">Checking…</span><button type="button" id="umu-setup" class="umu-setup ghost">Set up Proton</button></div>
       <label>Proton version
         <select name="proton" id="proton-select" class="proton-select"></select>
       </label>
       <p class="hint">Windows games and launchers (Battle.net, Guild Wars 2, games you add) run through Proton using umu-launcher, which Lodestone keeps in its own folder. Steam isn't needed.</p>
+      </div>
       <h3>Library</h3>
       <label class="check"><input type="checkbox" id="merge-dupes" /> Show each game once in All games, Favorites and Recently played</label>
       <p class="hint">When you own a game on several stores, Lodestone shows the installed copy, or else the first store in this order. Use the arrows to change it.</p>
@@ -451,11 +453,13 @@
         <label><span>Web API key</span><input name="rakey" type="password" autocomplete="off" spellcheck="false" placeholder="paste key" /></label>
       </div>
       <p class="hint">For your ROMs: proper names, box art and details from RetroAchievements, and each game's achievements with your progress. Get the key from your <a href="#" data-href="https://retroachievements.org/controlpanel.php">RetroAchievements settings → Keys</a>. Lodestone matches ROMs to RA on your PC (no ROM or fingerprint is sent) and only sends your username and key to RA. Your progress counts when you play with achievements turned on in the emulator (RetroArch: Settings → Achievements).</p>
+      <div class="linux-only">
       <h3>Performance overlay (MangoHud)</h3>
       <div class="row-line"><span id="mh-status" class="muted">Checking…</span><button type="button" id="mh-setup" class="ghost">Set up MangoHud</button></div>
       <div class="row-line"><button type="button" class="ghost" id="mh-config">Customize the overlay…</button></div>
       <label class="check"><input type="checkbox" id="mh-all" /> Show MangoHud in every game (turn it off or on per game in the game's ⋯ menu)</label>
       <p class="hint">FPS, frame times, CPU and GPU load over your games. Lodestone uses MangoHud from your system, or sets up the official release in its own folder. It works for games Lodestone starts; for Steam games, add <code>mangohud %command%</code> to the game's launch options in Steam.</p>
+      </div>
       <h3>Plug-ins</h3>
       <div class="row-line"><span class="muted">Installed plug-ins, their permissions, and stopping them.</span><button type="button" class="ghost" id="open-plugins">Manage plug-ins…</button></div>
       <h3>Mods</h3>
@@ -491,7 +495,7 @@
         <ul class="ob-points">
           <li><b>Steam, Epic, GOG, Battle.net, Guild Wars 2, Minecraft</b> and anything else you add, side by side.</li>
           <li><b>Press Play and the game starts.</b> Other launchers stay hidden in the background.</li>
-          <li><b>Windows games run through Proton</b> without needing Steam, Heroic or Lutris.</li>
+          <li class="linux-only"><b>Windows games run through Proton</b> without needing Steam, Heroic or Lutris.</li>
           <li><b>A Minecraft mod manager</b> for Modrinth and CurseForge.</li>
         </ul>
         <p class="muted">This takes about two minutes. Everything here can be changed later in Settings.</p>

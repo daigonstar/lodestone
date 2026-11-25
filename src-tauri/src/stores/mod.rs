@@ -13,13 +13,19 @@ pub mod retroachievements;
 pub mod steam;
 pub mod ubisoft_api;
 pub mod winapps;
+#[cfg(windows)]
+pub mod windows_stores;
 
 use crate::model::Game;
 
 /// Scan every source. Each scanner is independent and silently returns nothing if its launcher isn't present.
 pub fn scan_all() -> Vec<Game> {
     // Lodestone's own Epic/GOG first so they win over Heroic's copy of the same game.
-    let scanners: [fn() -> Vec<Game>; 9] = [epic::scan, gog::scan, steam::scan, heroic::scan, lutris::scan, minecraft::scan, custom::scan, winapps::scan, emulation::scan];
+    #[allow(unused_mut)]
+    let mut scanners: Vec<fn() -> Vec<Game>> = vec![epic::scan, gog::scan, steam::scan, heroic::scan, lutris::scan, minecraft::scan, custom::scan, winapps::scan, emulation::scan];
+    // Windows: Epic and GOG through their own launchers.
+    #[cfg(windows)]
+    scanners.push(windows_stores::scan);
     let handles: Vec<_> = scanners.into_iter().map(std::thread::spawn).collect();
     let mut all: Vec<Game> = Vec::new();
     let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();

@@ -27,6 +27,7 @@ mod steam_bg;
 mod tools;
 mod stores;
 mod vdf;
+mod winget;
 mod workshop;
 
 use launcher::{Running, Session, Sessions, Tick};
@@ -304,7 +305,7 @@ fn remove_custom_game(id: String) -> Result<(), String> {
 /// Open a store's own app (for installing, logging in, settings).
 #[tauri::command]
 fn open_client(store: String) -> Result<(), String> {
-    if let Some(app) = stores::winapps::APPS.iter().find(|a| a.store == store && a.installed()) {
+    if let Some(app) = stores::winapps::apps().into_iter().find(|a| a.store == store && a.installed()) {
         let spec = app.open()?;
         return launcher::spawn(&spec, launcher::log_path(&format!("client-{}", app.id))).map(|_| ()).map_err(|e| e.to_string());
     }
@@ -929,7 +930,7 @@ fn open_url(url: String) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("only web links can be opened".into());
     }
-    launcher::spawn(&LaunchSpec::new("xdg-open", &[&url]), launcher::log_path("xdg-open")).map(|_| ()).map_err(|e| e.to_string())
+    launcher::spawn(&crate::os::open_spec(&url), launcher::log_path("xdg-open")).map(|_| ()).map_err(|e| e.to_string())
 }
 
 // ---------------- metadata ----------------
@@ -1156,7 +1157,7 @@ fn mc_remove(instance: String, kind: String, file: String) -> Result<(), String>
 fn mc_open_folder(instance: String, kind: String) -> Result<(), String> {
     let dir = mci::find(&instance)?.dir(Kind::parse(&kind)?);
     let _ = std::fs::create_dir_all(&dir);
-    launcher::spawn(&LaunchSpec::new("xdg-open", &[&dir.to_string_lossy()]), launcher::log_path("xdg-open")).map(|_| ()).map_err(|e| e.to_string())
+    launcher::spawn(&crate::os::open_spec(&dir.to_string_lossy()), launcher::log_path("xdg-open")).map(|_| ()).map_err(|e| e.to_string())
 }
 
 // ---------------- Proton + Windows launchers ----------------
@@ -1174,6 +1175,9 @@ fn proton_info() -> serde_json::Value {
 
 #[tauri::command]
 async fn setup_proton() -> Result<String, String> {
+    if cfg!(windows) {
+        return Err("On Windows games run natively: Proton and MangoHud are for Linux".into());
+    }
     tools::install_umu().await
 }
 
@@ -1184,6 +1188,9 @@ fn mangohud_info() -> mangohud::Info {
 
 #[tauri::command]
 async fn setup_mangohud() -> Result<String, String> {
+    if cfg!(windows) {
+        return Err("On Windows games run natively: Proton and MangoHud are for Linux".into());
+    }
     mangohud::install().await
 }
 
@@ -1384,6 +1391,30 @@ async fn comms_status() -> Result<plugins::Status, String> {
     blocking(plugins::status).await
 }
 
+/// Where Lodestone keeps its data on this system (shown in the interface).
+#[tauri::command]
+fn data_folder() -> String {
+    state::data_dir().to_string_lossy().into_owned()
+}
+
+/// A problem in Lodestone's own page, written to logs/ui.log on this PC (for bug reports; never sent
+/// anywhere). Kept short: the file is cut back when it passes 256 KB.
+#[tauri::command]
+fn ui_error(message: String) {
+    use std::io::Write;
+    let p = launcher::log_path("ui");
+    if let Some(d) = p.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    if std::fs::metadata(&p).is_ok_and(|m| m.len() > 256 * 1024) {
+        let _ = std::fs::remove_file(&p);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+        let line: String = message.chars().filter(|c| *c != '\r').take(2000).collect();
+        let _ = writeln!(f, "{} {}", state::now(), line.replace('\n', " | "));
+    }
+}
+
 /// Is there a Comms to install, or a newer version? (Asked when you open Plug-ins or Comms.)
 #[tauri::command]
 async fn comms_check_update() -> Result<serde_json::Value, String> {
@@ -1434,7 +1465,7 @@ fn comms_theme(vars: serde_json::Value) {
 fn rom_reveal(id: String) -> Result<(), String> {
     let file = stores::emulation::rom_file(&id).ok_or("Lodestone doesn't know this ROM's file; try Rescan")?;
     let dir = file.parent().ok_or("No folder")?.to_string_lossy().into_owned();
-    launcher::spawn(&LaunchSpec::new("xdg-open", &[&dir]), launcher::log_path("xdg-open")).map(|_| ()).map_err(|e| e.to_string())
+    launcher::spawn(&crate::os::open_spec(&dir), launcher::log_path("xdg-open")).map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// Open the emulator a ROM plays with, without the game (to set up controllers, video and so on).
@@ -1590,6 +1621,8 @@ fn main() {
             emu_folders,
             comms_status,
             comms_check_update,
+            ui_error,
+            data_folder,
             comms_install,
             comms_start,
             comms_approve,
@@ -1658,4 +1691,14 @@ fn main() {
                 plugins::stop();
             }
         });
+}
+
+#[cfg(all(test, windows))]
+mod windows_checks {
+    /// Windows: what the Accounts dialog gets (real system, so only on purpose).
+    #[test]
+    #[ignore]
+    fn accounts_on_windows() {
+        println!("accounts: {}", super::accounts());
+    }
 }

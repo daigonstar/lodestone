@@ -684,3 +684,6 @@ body.side-collapsed .sidebar > *:not(.side-expand) { display: none !important; }
 body.side-collapsed .side-expand { display: block; border: 0; background: transparent; color: var(--muted); font-size: 16px; padding: 4px 6px; border-radius: 6px; }
 body.side-collapsed .side-expand:hover { color: var(--text); background: rgba(255,255,255,.06); }
 #search { padding-right: 30px; }
+
+/* Windows: Linux-only settings (Proton, MangoHud) don't apply */
+body.win .linux-only { display: none !important; }

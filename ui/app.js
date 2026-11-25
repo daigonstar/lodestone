@@ -18,6 +18,15 @@ const STORES = {
   emulation: { label: "Emulation", color: "#e0598b" },
 };
 const store = (s) => STORES[s] || { label: s, color: "#9aa0a6" };
+// Windows: games run natively and launchers come through winget (WebView2 reports Windows).
+const WIN = /Windows/.test(navigator.userAgent);
+// Lodestone's data folder on this system (~/.local/share/lodestone, or %APPDATA%\lodestone on Windows).
+invoke("data_folder").then((d) => { state.dataDir = d; document.querySelectorAll(".data-dir").forEach((el) => (el.textContent = d)); }).catch(() => {});
+// Problems in this page go to logs/ui.log on this PC (for bug reports; never sent anywhere).
+window.addEventListener("error", (e) => { try { window.__TAURI__.core.invoke("ui_error", { message: `${e.message} at ${e.filename}:${e.lineno}:${e.colno}` }); } catch {} });
+window.addEventListener("unhandledrejection", (e) => { try { window.__TAURI__.core.invoke("ui_error", { message: `unhandled: ${e.reason && (e.reason.stack || e.reason)}` }); } catch {} });
+if (WIN) document.body.classList.add("win");
+
 
 const $ = (s) => document.querySelector(s);
 const ls = {
@@ -380,7 +389,8 @@ function renderNav() {
   const counts = {};
   for (const g of visible) if (inst(g)) counts[g.store] = (counts[g.store] || 0) + 1;
   $("#nav-stores").innerHTML = Object.keys(STORES)
-    .filter((k) => k !== "emulation" && (counts[k] || ["battlenet", "ea", "ubisoft", "arenanet"].includes(k)))
+    // Stores with a setup banner are always listed (on Windows: Steam, Epic and GOG too, installed via winget).
+    .filter((k) => k !== "emulation" && (counts[k] || ["battlenet", "ea", "ubisoft", "arenanet", ...(WIN ? ["steam", "epic", "gog"] : [])].includes(k)))
     .map((k) => `<button data-view="${k}" class="${state.view === k ? "active" : ""}"><span class="dot" style="background:${STORES[k].color}"></span>${STORES[k].label}<span class="count">${counts[k] || 0}</span></button>`)
     .join("");
   // Each emulated system is its own library.
@@ -459,9 +469,17 @@ function rowHTML(g) {
   </div>`;
 }
 
-const WINAPP_FOR = { battlenet: "battlenet", ea: "ea", ubisoft: "ubisoft", arenanet: "gw2" };
+const WINAPP_FOR = WIN
+  ? { battlenet: "battlenet", ea: "ea", ubisoft: "ubisoft", arenanet: "gw2", steam: "steam", epic: "epic", gog: "gog" }
+  : { battlenet: "battlenet", ea: "ea", ubisoft: "ubisoft", arenanet: "gw2" };
 // Store clients Lodestone installs into their own Proton prefix.
 const CLIENTS = {
+  steam: { name: "Steam", account: "Steam",
+    owned: "Your installed Steam games are below and start from Lodestone through Steam.", tip: "" },
+  epic: { name: "Epic Games Launcher", account: "Epic",
+    owned: "Games you install in the Epic Games Launcher show up below after a Rescan and start from Lodestone through the launcher.", tip: "" },
+  gog: { name: "GOG GALAXY", account: "GOG",
+    owned: "Games you install with GOG GALAXY show up below after a Rescan and start from Lodestone through GALAXY.", tip: "" },
   battlenet: { name: "Battle.net", account: "Blizzard",
     owned: "Your owned and free Battle.net games are below. <b>Install</b> opens Battle.net on that game's page; after it finishes, Rescan and play it from Lodestone.",
     tip: 'Tip: in Battle.net\'s settings, set "When I launch a game" to exit or minimize to tray so its window stays out of the way.' },
@@ -528,7 +546,10 @@ function renderSetup() {
   const busy = state.setupBusy === app.id;
   const c = CLIENTS[app.id];
   if (!app.installed) {
-    el.innerHTML = c
+    el.innerHTML = WIN && c
+      ? `<div><h2>Install ${c.name}</h2><p class="muted">Lodestone installs ${c.name} with winget, Windows' own package manager, from ${c.account}'s official download (winget checks it before installing). Installing accepts ${c.name}'s licence, as installing it yourself would, and Windows may ask for permission. Then sign in with your ${c.account} account, install your games there, and Rescan.</p></div>
+         <button class="play" data-winsetup="${app.id}" ${busy ? "disabled" : ""}>${busy ? "Installing…" : `Install ${c.name}`}</button>`
+      : c
       ? `<div><h2>${c.name} on Proton</h2><p class="muted">Lodestone downloads ${c.account}'s official installer and installs ${c.name} into its own Proton prefix: no Steam, Lutris or Wine setup needed. Sign in with your ${c.account} account in the window that opens, install your games there, then Rescan. The first run also downloads the Proton runtime, so it can take a few minutes.</p></div>
          <button class="play" data-winsetup="${app.id}" ${busy ? "disabled" : ""}>${busy ? "Setting up…" : `Set up ${c.name}`}</button>`
       : `<div><h2>Guild Wars 2 on Proton</h2><p class="muted">Lodestone downloads ArenaNet's official installer and runs it in its own Proton prefix. Sign in with your ArenaNet account in the game's launcher.</p></div>
@@ -946,7 +967,7 @@ function render() {
 async function winSetup(id) {
   state.setupBusy = id;
   renderSetup();
-  toast("Downloading the official installer (and Proton tools on first use)…");
+  toast(WIN ? "Installing with winget, from the official download…" : "Downloading the official installer (and Proton tools on first use)…");
   try {
     await invoke("winapp_setup", { id });
     toast("Installer is starting. Follow it in its window; this can take a minute on first run.");
@@ -1670,7 +1691,7 @@ function askCommsPermissions(st) {
   };
 }
 function showComms(st) {
-  if (!st.ui) return ($("#comms-msg").innerHTML = '<p class="err-text">Lodestone Comms didn\'t start. Its log is in ~/.local/share/lodestone/logs/lodestone-comms.log.</p>');
+  if (!st.ui) return ($("#comms-msg").innerHTML = '<p class="err-text">Lodestone Comms didn\'t start. Its log is lodestone-comms.log in the logs folder of ' + esc(state.dataDir || "Lodestone's data folder") + '.</p>');
   $("#comms-msg").innerHTML = "";
   const frame = $("#comms-frame");
   frame.classList.remove("hidden");

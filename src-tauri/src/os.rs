@@ -151,3 +151,56 @@ pub fn windows_procs() -> Vec<(String, String)> {
     }
     out
 }
+
+/// Windows: a text value from the registry (current user or this machine), e.g. Steam's install folder.
+#[cfg(windows)]
+pub fn registry_string(machine: bool, key: &str, value: &str) -> Option<String> {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+    let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+    let (k, v) = (wide(key), wide(value));
+    let hive = if machine { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+    let mut buf = vec![0u16; 1024];
+    let mut size = (buf.len() * 2) as u32;
+    let r = unsafe { RegGetValueW(hive, k.as_ptr(), v.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), buf.as_mut_ptr().cast(), &mut size) };
+    if r != 0 {
+        return None;
+    }
+    let len = (size as usize / 2).saturating_sub(1);
+    Some(String::from_utf16_lossy(&buf[..len.min(buf.len())]))
+}
+
+/// Open a web address, a link for another program (steam://, com.epicgames.launcher://) or a folder,
+/// the way the desktop does: xdg-open on Linux, Windows' own handler on Windows.
+pub fn open_spec(target: &str) -> crate::model::LaunchSpec {
+    if cfg!(windows) {
+        // Passed straight to Windows (no command shell), so "&" in an address stays part of it.
+        crate::model::LaunchSpec::new("rundll32", &["url.dll,FileProtocolHandler", target])
+    } else {
+        crate::model::LaunchSpec::new("xdg-open", &[target])
+    }
+}
+
+/// Windows: the names of the keys under a registry key (e.g. GOG's installed games).
+#[cfg(windows)]
+pub fn registry_subkeys(machine: bool, key: &str) -> Vec<String> {
+    use windows_sys::Win32::System::Registry::{RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ};
+    let k: Vec<u16> = key.encode_utf16().chain(std::iter::once(0)).collect();
+    let hive = if machine { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+    let mut h: HKEY = std::ptr::null_mut();
+    let mut out = Vec::new();
+    unsafe {
+        if RegOpenKeyExW(hive, k.as_ptr(), 0, KEY_READ, &mut h) != 0 {
+            return out;
+        }
+        for i in 0.. {
+            let mut name = [0u16; 256];
+            let mut len = name.len() as u32;
+            if RegEnumKeyExW(h, i, name.as_mut_ptr(), &mut len, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) != 0 {
+                break;
+            }
+            out.push(String::from_utf16_lossy(&name[..len as usize]));
+        }
+        RegCloseKey(h);
+    }
+    out
+}

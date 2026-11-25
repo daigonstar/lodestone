@@ -1,5 +1,7 @@
 //! Windows-only launchers and games that Lodestone installs into its own Proton prefixes:
 //! Battle.net, the EA app and Ubisoft Connect (and the games they install), and Guild Wars 2.
+// Parts of this file are Linux-only (Proton prefixes, Flatpak); on Windows they're simply unused.
+#![cfg_attr(windows, allow(dead_code, unused_imports))]
 
 use crate::model::*;
 use crate::proton::{self, Run};
@@ -80,8 +82,40 @@ pub const APPS: &[WinApp] = &[
     },
 ];
 
+/// Windows only: the stores' own launchers, which on Linux come from elsewhere (Steam natively, Epic
+/// and GOG through Heroic). Paths are their installers' defaults.
+#[cfg(windows)]
+pub const WINDOWS_LAUNCHERS: &[WinApp] = &[
+    WinApp { id: "steam", name: "Steam", store: "steam", installer_url: "", installer_file: "", installer_args: &[], exe: "Program Files (x86)/Steam/steam.exe", kind: Kind::Client, proton_store: None, game_id: "" },
+    WinApp { id: "epic", name: "Epic Games Launcher", store: "epic", installer_url: "", installer_file: "", installer_args: &[], exe: "Program Files (x86)/Epic Games/Launcher/Portal/Binaries/Win64/EpicGamesLauncher.exe", kind: Kind::Client, proton_store: None, game_id: "" },
+    WinApp { id: "gog", name: "GOG GALAXY", store: "gog", installer_url: "", installer_file: "", installer_args: &[], exe: "Program Files (x86)/GOG Galaxy/GalaxyClient.exe", kind: Kind::Client, proton_store: None, game_id: "" },
+];
+
+/// Every app Lodestone can set up: on Windows also the stores' own launchers.
+pub fn apps() -> Vec<&'static WinApp> {
+    #[allow(unused_mut)]
+    let mut v: Vec<&'static WinApp> = APPS.iter().collect();
+    #[cfg(windows)]
+    v.extend(WINDOWS_LAUNCHERS.iter());
+    v
+}
+
+/// Windows: the winget package for an app (installed from its publisher's official download).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn winget_id(id: &str) -> Option<&'static str> {
+    match id {
+        "battlenet" => Some("Blizzard.BattleNet"),
+        "ea" => Some("ElectronicArts.EADesktop"),
+        "ubisoft" => Some("Ubisoft.Connect"),
+        "steam" => Some("Valve.Steam"),
+        "epic" => Some("EpicGames.EpicGamesLauncher"),
+        "gog" => Some("GOG.Galaxy"),
+        _ => None,
+    }
+}
+
 pub fn find(id: &str) -> Result<&'static WinApp, String> {
-    APPS.iter().find(|a| a.id == id).ok_or_else(|| format!("unknown app {id}"))
+    apps().into_iter().find(|a| a.id == id).ok_or_else(|| format!("unknown app {id}"))
 }
 
 /// Wine prefixes other launchers made, where a store app may already be installed:
@@ -152,6 +186,48 @@ fn app_in(app: &WinApp, drive_c: &Path) -> bool {
 }
 
 impl WinApp {
+    /// On Windows, the system drive itself.
+    #[cfg(windows)]
+    pub fn prefix(&self) -> PathBuf {
+        PathBuf::from("C:\\")
+    }
+    #[cfg(windows)]
+    pub fn found_in(&self) -> Option<&'static str> {
+        None
+    }
+    /// Windows: the program's real path ("Program Files" folders where Windows says they are).
+    #[cfg(windows)]
+    pub fn exe_path(&self) -> PathBuf {
+        let env = |k: &str, d: &str| std::env::var_os(k).map(PathBuf::from).unwrap_or_else(|| PathBuf::from(d));
+        let rel = self.exe.replace('/', "\\");
+        if let Some(r) = rel.strip_prefix("Program Files (x86)\\") {
+            env("ProgramFiles(x86)", "C:\\Program Files (x86)").join(r)
+        } else if let Some(r) = rel.strip_prefix("Program Files\\") {
+            env("ProgramFiles", "C:\\Program Files").join(r)
+        } else {
+            PathBuf::from("C:\\").join(rel)
+        }
+    }
+    #[cfg(windows)]
+    pub fn installed(&self) -> bool {
+        self.exe_path().is_file()
+    }
+    /// Windows: programs run directly.
+    #[cfg(windows)]
+    pub fn run(&self, exe: &Path, args: Vec<String>) -> Result<LaunchSpec, String> {
+        let a: Vec<&str> = args.iter().map(String::as_str).collect();
+        let mut spec = LaunchSpec::new(exe.to_string_lossy().into_owned(), &a);
+        spec.cwd = exe.parent().map(Path::to_path_buf);
+        Ok(spec)
+    }
+    #[cfg(windows)]
+    pub fn open(&self) -> Result<LaunchSpec, String> {
+        self.run(&self.exe_path(), vec![])
+    }
+}
+
+#[cfg(not(windows))]
+impl WinApp {
     /// Lodestone's own prefix, or one where Lutris or Steam already has this app installed.
     pub fn prefix(&self) -> PathBuf {
         let own = proton::prefix(self.id);
@@ -208,13 +284,32 @@ pub struct Status {
 }
 
 pub fn status() -> Vec<Status> {
-    APPS.iter()
+    apps()
+        .into_iter()
         .map(|a| Status { id: a.id, name: a.name, store: a.store, installed: a.installed(), prefix: a.prefix().to_string_lossy().into_owned(), found_in: a.found_in() })
         .collect()
 }
 
 /// Download the official installer and start it inside the app's prefix. The installer window appears.
 pub async fn setup(app: &WinApp) -> Result<LaunchSpec, String> {
+    // Windows: through winget where the app has a package; otherwise its official installer, run
+    // directly (no Proton).
+    #[cfg(windows)]
+    {
+        if let Some(id) = winget_id(app.id) {
+            return Ok(crate::winget::install_spec(id));
+        }
+        let dl = crate::state::data_dir().join("downloads");
+        fs::create_dir_all(&dl).map_err(|e| e.to_string())?;
+        let file = dl.join(app.installer_file);
+        let bytes = crate::net::client().get(app.installer_url).send().await.map_err(crate::net::err)?.error_for_status().map_err(crate::net::err)?.bytes().await.map_err(crate::net::err)?;
+        if !bytes.starts_with(b"MZ") {
+            return Err(format!("{} download wasn't a Windows installer", app.name));
+        }
+        fs::write(&file, &bytes).map_err(|e| e.to_string())?;
+        return app.run(&file, app.installer_args.iter().map(|s| s.to_string()).collect());
+    }
+    #[allow(unreachable_code)]
     if crate::tools::umu_path().is_none() {
         crate::tools::install_umu().await?;
     }
@@ -895,6 +990,8 @@ mod tests {
         for g in super::bnet_games(app) { println!("{} installed={} {}", g.id, g.installed, g.title); }
     }
 
+    #[cfg(unix)] // Linux behaviour (sh, Linux paths, symlinks)
+
     #[test]
     fn links_ea_app_version_folder() {
         let c = std::env::temp_dir().join(format!("lodestone-ea-{}", std::process::id()));
@@ -943,6 +1040,7 @@ mod tests {
 #[cfg(test)]
 mod foreign_tests {
     /// A Battle.net installed by Lutris (plain prefix) or Steam (compatdata with pfx/) is found.
+    #[cfg(unix)] // Linux behaviour (sh, Linux paths, symlinks)
     #[test]
     fn finds_store_apps_in_other_launchers_prefixes() {
         let root = std::env::temp_dir().join(format!("lodestone-foreign-{}", std::process::id()));
