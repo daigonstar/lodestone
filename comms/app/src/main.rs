@@ -25,6 +25,8 @@ pub struct App {
     pub authority: String,
     pub events: tokio::sync::broadcast::Sender<String>,
     pub voice: voice::Voice,
+    /// Wakes the background sync early (a host said something changed).
+    pub wake: tokio::sync::Notify,
 }
 
 pub type Shared = Arc<App>;
@@ -92,6 +94,7 @@ async fn run(ready: Option<std::sync::mpsc::Sender<String>>) {
     let app: Shared = Arc::new(App {
         hosts,
         voice,
+        wake: tokio::sync::Notify::new(),
         bridge: bridge::Bridge::default(),
         token: token.clone(),
         authority: format!("127.0.0.1:{port}"),
@@ -105,6 +108,7 @@ async fn run(ready: Option<std::sync::mpsc::Sender<String>>) {
         eprintln!("Lodestone Comms (no Lodestone bridge): open {ui}");
     }
     hosts::start_sync(app.clone());
+    hosts::start_live(app.clone());
     // Have the sound device list ready before anyone opens the settings.
     tokio::spawn(voice::refresh_devices(app.clone()));
     let server = axum::serve(listener, web::router(app.clone()));

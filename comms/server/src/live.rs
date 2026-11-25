@@ -31,19 +31,50 @@ pub struct Hub {
 }
 
 impl Hub {
-    fn add(&self, account: i64, device: String, tx: mpsc::UnboundedSender<String>) -> u64 {
+    /// Add a connection; true if it's the account's first (they just came online).
+    fn add(&self, account: i64, device: String, tx: mpsc::UnboundedSender<String>) -> (u64, bool) {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
-        self.by_account.lock().unwrap().entry(account).or_default().push(Conn { id, device, tx });
-        id
+        let mut map = self.by_account.lock().unwrap();
+        let list = map.entry(account).or_default();
+        let first = list.is_empty();
+        list.push(Conn { id, device, tx });
+        (id, first)
     }
 
-    fn remove(&self, account: i64, id: u64) {
+    /// Remove a connection; true if it was the account's last (they went offline).
+    fn remove(&self, account: i64, id: u64) -> bool {
         let mut map = self.by_account.lock().unwrap();
         if let Some(v) = map.get_mut(&account) {
             v.retain(|c| c.id != id);
             if v.is_empty() {
                 map.remove(&account);
+                return true;
             }
+        }
+        false
+    }
+
+    /// Someone's presence or status changed: tell the members of their spaces, so their lists update at
+    /// once. Not for invisible accounts (that would show when they come and go). The event carries no
+    /// details: clients fetch them with their own requests.
+    pub fn presence(&self, app: &Shared, account: i64) {
+        self.announce(app, account, false);
+    }
+
+    /// As `presence`; `even_invisible` is for the moment someone switches to invisible (they appear
+    /// offline, which others should see).
+    pub fn announce(&self, app: &Shared, account: i64, even_invisible: bool) {
+        let found: Option<(String, String)> = app.db.with(|c| {
+            use rusqlite::OptionalExtension;
+            c.query_row("SELECT username, status FROM accounts WHERE id = ?1", [account], |r| Ok((r.get(0)?, r.get(1)?))).optional()
+        }).ok().flatten();
+        let Some((username, status)) = found else { return };
+        if status == "invisible" && !even_invisible {
+            return;
+        }
+        let spaces: Vec<String> = app.db.with(|c| c.prepare("SELECT space FROM members WHERE account = ?1")?.query_map([account], |r| r.get(0))?.collect()).unwrap_or_default();
+        for s in spaces {
+            self.to_space(app, &s, json!({ "type": "presence", "space": s, "username": username }));
         }
     }
 
@@ -91,7 +122,10 @@ pub async fn connect(State(app): State<Shared>, headers: HeaderMap, ws: WebSocke
 async fn run(app: Shared, me: Auth, socket: WebSocket) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    let id = app.live.add(me.account, me.device.clone(), tx);
+    let (id, first) = app.live.add(me.account, me.device.clone(), tx);
+    if first {
+        app.live.presence(&app, me.account);
+    }
     let _ = sink.send(Message::Text(json!({ "type": "hello", "username": me.username }).to_string().into())).await;
     loop {
         tokio::select! {
@@ -106,5 +140,7 @@ async fn run(app: Shared, me: Auth, socket: WebSocket) {
             },
         }
     }
-    app.live.remove(me.account, id);
+    if app.live.remove(me.account, id) {
+        app.live.presence(&app, me.account);
+    }
 }

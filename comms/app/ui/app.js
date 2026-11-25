@@ -81,12 +81,28 @@ function render() {
     ${meBar()}`;
   renderVoice();
   renderMembers(sp);
-  if (!ch) { $("#chat").innerHTML = ""; return; }
+  if (!ch) { $("#chat").innerHTML = ""; $("#chat").dataset.key = ""; return; }
+  // The chat area is only rebuilt when you switch channel or it changes (name, topic, keys arriving).
+  // Refreshes (every few seconds, and on live events) used to rebuild it, which jumped the message list
+  // and threw away anything you were typing.
+  const chatKey = JSON.stringify([state.sel.host, ch.id, ch.name, ch.topic || "", !!ch.ready]);
+  if ($("#chat").dataset.key === chatKey && $("#msgs")) return;
+  $("#chat").dataset.key = chatKey;
   $("#chat").innerHTML = `<header><h3># ${esc(ch.name)}${ch.topic ? `<span class="topic">${esc(ch.topic)}</span>` : ""}</h3><button class="gear" id="toggle-members" title="Show or hide members">👥</button><span class="lock" title="Only members' devices can read this channel; the host stores ciphertext.">🔒 end-to-end encrypted</span></header>
-    <div class="msgs" id="msgs"></div>
+    <div class="msgs" id="msgs"></div><button type="button" class="new-msgs hidden" id="new-msgs">New messages ↓</button>
     <div class="composer">${ch.ready
       ? '<div id="pending" class="pending hidden"></div><div class="compose-row"><button type="button" class="emoji-btn" id="attach-btn" title="Attach a file or image (or paste / drop one)">📎</button><textarea id="text" placeholder="Message (Enter to send, Shift+Enter for a new line)" maxlength="8000"></textarea><button type="button" class="emoji-btn" id="emoji-btn" title="Emoji">😊</button></div>'
       : '<p class="muted">You\'re a member, but no one in this channel has been online to give your device its keys yet. It happens automatically.</p>'}</div>`;
+  // Stick to the newest message only while you're at the bottom; pictures that finish loading keep
+  // you there. Scrolled up, you stay where you are.
+  const msgs = $("#msgs");
+  msgs.onscroll = () => {
+    const bottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 40;
+    msgs.dataset.stick = bottom ? "1" : "";
+    if (bottom) $("#new-msgs").classList.add("hidden");
+  };
+  msgs.addEventListener("load", () => { if (msgs.dataset.stick) msgs.scrollTop = msgs.scrollHeight; }, true);
+  $("#new-msgs").onclick = () => { msgs.scrollTop = msgs.scrollHeight; $("#new-msgs").classList.add("hidden"); };
   loadMessages();
   $("#toggle-members").onclick = () => { state.showMembers = !state.showMembers; renderMembers(current().sp); };
   const t = $("#text");
@@ -133,6 +149,7 @@ function renderHome() {
     <div class="chlist">${all.length ? '<h4 class="chhead">Your servers</h4>' : ""}${all.map((s) => `<button class="ch" data-space="${esc(s.id)}" data-host="${esc(s.host)}">${esc(s.name)}</button>`).join("")}</div>
     <div id="callbar"></div>${hosts.length ? meBar() : ""}`;
   renderVoice();
+  $("#chat").dataset.key = "";
   $("#chat").innerHTML = `<div class="home-page">
     <div class="test-banner"><b>🧪 Test build</b><span>This is an early test version of Lodestone Comms for testers. Expect rough edges and missing pieces, and things may change or need resetting between builds. Messages, files, calls, cameras and screen shares are end-to-end encrypted, but please don't rely on it for anything important yet. If something breaks or feels wrong, tell whoever invited you.</span></div>
     <h1>Welcome to Comms</h1>
@@ -210,7 +227,7 @@ async function loadMessages() {
     const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
     const reacts = new Map();
     for (const x of r.reactions || []) { if (!reacts.has(x.seq)) reacts.set(x.seq, []); reacts.get(x.seq).push(x); }
-    box.replaceChildren(...r.messages.map((m) => {
+    const makeRow = (m) => {
       const row = document.createElement("div");
       row.className = "msg" + (isOnlyEmoji(m.body) ? " big-emoji" : "");
       row.dataset.seq = m.seq;
@@ -255,9 +272,32 @@ async function loadMessages() {
         row.append(chips);
       }
       return row;
-    }));
+    };
+    // Rows are kept and updated in place: only new messages are added, and a row is redrawn only when its
+    // reactions change. Rebuilding everything made pictures reload (and the list jump while you read).
+    box.querySelector(":scope > p.muted")?.remove();
+    const existing = new Map([...box.querySelectorAll(":scope > .msg")].map((x) => [x.dataset.seq, x]));
+    let prev = null, added = 0;
+    for (const m of r.messages) {
+      const key = JSON.stringify(reacts.get(m.seq) || []);
+      let row = existing.get(String(m.seq));
+      if (!row) added++;
+      if (!row || row.dataset.key !== key) {
+        const fresh = makeRow(m);
+        fresh.dataset.key = key;
+        if (row) row.replaceWith(fresh);
+        row = fresh;
+      }
+      const want = prev ? prev.nextElementSibling : box.firstElementChild;
+      if (want !== row) box.insertBefore(row, want);
+      existing.delete(String(m.seq));
+      prev = row;
+    }
+    for (const gone of existing.values()) gone.remove();
     if (!r.messages.length) box.innerHTML = '<p class="muted">No messages yet. Messages sent before you joined can\'t be read on this device, by design.</p>';
-    if (atBottom || !box.dataset.seen) box.scrollTop = box.scrollHeight;
+    const first = !box.dataset.seen;
+    if (atBottom || first) { box.scrollTop = box.scrollHeight; box.dataset.stick = "1"; }
+    else if (added) $("#new-msgs")?.classList.remove("hidden");
     box.dataset.seen = "1";
   } catch (e) { toast(e.message, true); }
 }
@@ -952,14 +992,31 @@ async function inviteDialog() {
     box.innerHTML = friends.length ? friends.map((f) => `<div class="friend">${f.avatar ? `<img src="${esc(f.avatar)}" alt="">` : ""}<span title="${esc(f.store)}">${esc(f.name)} <small class="muted">${esc(f.store)}</small></span>
       <button type="button" data-friend="${esc(f.id)}" data-store="${esc(f.store)}">Invite</button></div>`).join("") : '<p class="muted">No friends found in Lodestone.</p>';
   } catch (e) { box.innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
+  // Step 1: make the invite and show the message. Step 2 (a click): copy it, then open their chat.
+  // Stores' chats can't be filled in by other apps, so you paste it there yourself.
   box.onclick = async (e) => {
+    const go = e.target.closest("[data-send]");
+    if (go) {
+      const text = go.dataset.send;
+      const copied = copyText(text);
+      try { await api("/api/open-chat", { store: go.dataset.store, id: go.dataset.id, text }); } catch (err) { toast(err.message, true); }
+      go.textContent = copied ? "Copied: paste it with Ctrl+V" : "Copy it from the box above";
+      toast(go.dataset.store === "steam"
+        ? (copied ? "Steam's chat is opening: click its message box and press Ctrl+V to paste the invite." : "Steam's chat is opening: copy the invite from Comms and paste it there.")
+        : "The invite is copied: paste it to your friend.", !copied);
+      return;
+    }
     const b = e.target.closest("[data-friend]");
     if (!b) return;
     b.disabled = true;
     try {
-      await api("/api/invite-friend", { host: sp.host, space: sp.id, store: b.dataset.store, id: b.dataset.friend });
-      b.textContent = "Sent to chat";
-      toast(b.dataset.store === "steam" ? "Their Steam chat is open and the invite is on your clipboard: paste it there." : "The invite is on your clipboard: send it to them.");
+      const { text } = await api("/api/invite-friend", { host: sp.host, space: sp.id });
+      const row = b.closest(".friend");
+      const where = b.dataset.store === "steam" ? "Steam chat" : "chat";
+      row.insertAdjacentHTML("afterend", `<div class="friend-send"><input readonly value="${esc(text)}">
+        <button type="button" class="primary" data-send="${esc(text)}" data-store="${esc(b.dataset.store)}" data-id="${esc(b.dataset.friend)}">Copy and open ${where}</button>
+        <small class="muted">Their chat can't be filled in by other apps: after it opens, paste with Ctrl+V.</small></div>`);
+      b.textContent = "Ready";
     } catch (err) { b.disabled = false; toast(err.message, true); }
   };
 }
@@ -1011,7 +1068,8 @@ async function listen() {
           buf = buf.slice(i + 1);
           let ev;
           try { ev = JSON.parse(line); } catch { continue; }
-          if (ev.type === "state") loadState();
+          if (ev.type === "state") { clearTimeout(listen.reload); listen.reload = setTimeout(loadState, 150); }
+          else if (ev.type === "voice") setTimeout(pollVoice, 300);
           else if (ev.type === "theme") applyTheme(ev.data);
           else if (ev.type === "profiles") { forgetAvatars(ev.host); loadProfiles(ev.host).then(render); }
           else if (ev.type === "messages" && ev.host === state.sel.host && ev.channels.includes(state.sel.channel)) loadMessages();
@@ -1316,7 +1374,8 @@ function renderStage() {
           <button type="button" class="ghost" data-stage="focus" title="Fill the Comms window (double-click the picture for full screen)">⤢</button>
           ${mine ? '<button type="button" class="ghost" data-call="share" title="Stop sharing">Stop sharing</button>' : `<button type="button" class="ghost" data-watch="${slot}" title="Stop watching">✕</button>`}</figcaption></figure>`;
       }).join("")}</div>` : ""}
-      <div class="stage-people ${screens.length ? "strip" : ""}"></div>`;
+      <div class="stage-people ${screens.length ? "strip" : ""}"></div>
+      <div class="stage-controls"></div>`;
   }
   // Tiles are kept and updated in place, so camera pictures don't flicker when someone talks.
   const people = stage.querySelector(".stage-people");
@@ -1329,6 +1388,10 @@ function renderStage() {
       t.className = "tile";
       t.dataset.tile = p.slot;
       t.innerHTML = '<div class="tile-media"></div><div class="tile-foot"><b></b><span class="tile-state"></span></div>';
+      if (!p.me) {
+        // Their volume, just for you: made once per tile so refreshes never fight your dragging.
+        t.insertAdjacentHTML("beforeend", `<label class="pvol" title="${who(p)}'s volume, just for you"><span>🔊</span><input type="range" min="0" max="200" step="5" value="${p.volume ?? 100}" data-pvol="${esc(p.username)}"><output>${Math.round(p.volume ?? 100)}%</output></label>`);
+      }
       people.appendChild(t);
     }
     const camOn = cams.includes(p.slot);
@@ -1340,6 +1403,14 @@ function renderStage() {
     const live = p.sharing && !p.me ? `<button type="button" class="live ${watching ? "on" : ""}" data-watch="${p.slot}">${watching ? "Watching" : "Watch"}</button>` : p.sharing ? '<span class="live">LIVE</span>' : "";
     setHTML(t.querySelector(".tile-state"), `${p.deafened ? '<span title="Deafened">🔇</span>' : p.muted ? '<span title="Muted" class="muted-mic">🎙</span>' : ""}${live}`);
   }
+  // The call's controls, under the tiles (same buttons as the sidebar's call bar).
+  setHTML(stage.querySelector(".stage-controls"), `
+    <button type="button" data-call="mute" class="${call.muted ? "active" : ""}" title="${call.muted ? "Unmute" : "Mute"}"><span class="${call.muted ? "muted-mic" : ""}">🎙</span><small>${call.muted ? "Unmute" : "Mute"}</small></button>
+    <button type="button" data-call="deafen" class="${call.deafened ? "active" : ""}" title="${call.deafened ? "Undeafen" : "Deafen"}">${call.deafened ? "🔇" : "🎧"}<small>${call.deafened ? "Undeafen" : "Deafen"}</small></button>
+    <button type="button" data-call="camera" class="${call.camera ? "active share-on" : ""}">📷<small>${call.camera ? "Camera off" : "Camera"}</small></button>
+    <button type="button" data-call="share" class="${call.sharing ? "active share-on" : ""}">🖥<small>${call.sharing ? "Stop sharing" : "Share"}</small></button>
+    <button type="button" data-call="sound">⚙<small>Settings</small></button>
+    <button type="button" data-call="leave" class="leave">✕<small>Leave</small></button>`);
   for (const k of keys) {
     if (!streams.has(k)) readStream(k);
     else { const u = streams.get(k).url; if (u) for (const img of document.querySelectorAll(`img[data-stream="${k}"]`)) if (!img.src) img.src = u; }
@@ -1373,3 +1444,30 @@ pollVoice();
 listen();
 // Other people's changes (names, channels, roles) show up within a few seconds.
 setInterval(() => { if (!document.querySelector("dialog[open]")) loadState(); }, 15000);
+
+// Copy text from a click. The old copy command works in more places (embedded pages, Wayland) than
+// the clipboard API; the API is the fallback.
+function copyText(text) {
+  const t = document.createElement("textarea");
+  t.value = text;
+  t.setAttribute("readonly", "");
+  t.style.position = "fixed";
+  t.style.opacity = "0";
+  document.body.appendChild(t);
+  t.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch {}
+  t.remove();
+  if (!ok) navigator.clipboard?.writeText(text).catch(() => {});
+  return ok;
+}
+
+// A person's volume slider (in the call view): saved as you drag, applied at once.
+let pvolTimer = null;
+document.addEventListener("input", (e) => {
+  const r = e.target.closest?.("[data-pvol]");
+  if (!r) return;
+  r.nextElementSibling.textContent = `${r.value}%`;
+  clearTimeout(pvolTimer);
+  pvolTimer = setTimeout(() => api("/api/voice/user-volume", { host: voice.call?.host, username: r.dataset.pvol, volume: Number(r.value) }).catch((err) => toast(err.message, true)), 150);
+});

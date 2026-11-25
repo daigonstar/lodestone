@@ -109,7 +109,7 @@ impl Capture {
 
         let (w, h) = fit(stream.size(), quality);
         let source = format!("pipewiresrc fd={fd} path={} do-timestamp=true keepalive-time=1000 always-copy=true", stream.pipe_wire_node_id());
-        Self::encode(&source, &[], (w, h), quality.bounds().2, out, Some(close))
+        Self::encode(&source, &[], (w, h), quality.bounds().2, out, Some(close), false)
     }
 
     /// Your camera, through the desktop's camera portal (it may ask you to allow it): 1280x720, 30
@@ -123,7 +123,7 @@ impl Capture {
         for caps in ["image/jpeg,width=1280,height=720 ! jpegdec", "image/jpeg,width=640,height=480 ! jpegdec", "video/x-raw,width=640,height=480", "video/x-raw"] {
             let fd = remote.try_clone().map_err(|e| e.to_string())?.into_raw_fd();
             let source = format!("pipewiresrc fd={fd}{target} do-timestamp=true ! {caps}");
-            match Self::encode(&source, &[], CAMERA_SIZE, CAMERA_BITRATE, out.clone(), None) {
+            match Self::encode(&source, &[], CAMERA_SIZE, CAMERA_BITRATE, out.clone(), None, true) {
                 Ok(c) => {
                     // Some formats are refused only once the camera starts: give it a moment.
                     tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
@@ -144,18 +144,19 @@ impl Capture {
     pub fn test_pattern(quality: Quality, out: impl Fn(Vec<u8>) + Send + Sync + 'static) -> Result<Self, String> {
         gst::init().map_err(|e| format!("GStreamer didn't start: {e}"))?;
         let (w, h) = fit(None, quality);
-        Self::encode("videotestsrc is-live=true pattern=ball", &[], (w, h), quality.bounds().2, out, None)
+        Self::encode("videotestsrc is-live=true pattern=ball", &[], (w, h), quality.bounds().2, out, None, false)
     }
 
     /// Start the encoder on `source` (a pipeline description), after setting `props` (element name,
     /// property, value) on its elements: device ids are set this way, never written into the text.
-    fn encode(source: &str, props: &[(&str, &str, String)], (w, h): (i32, i32), bitrate: u32, out: impl Fn(Vec<u8>) + Send + Sync + 'static, close: Option<tokio::sync::oneshot::Sender<()>>) -> Result<Self, String> {
-        // Your own preview: half size, 10 pictures a second (it only shows you what you're sharing).
-        let (pw, ph) = ((w / 4 * 2).max(2), (h / 4 * 2).max(2));
+    fn encode(source: &str, props: &[(&str, &str, String)], (w, h): (i32, i32), bitrate: u32, out: impl Fn(Vec<u8>) + Send + Sync + 'static, close: Option<tokio::sync::oneshot::Sender<()>>, camera: bool) -> Result<Self, String> {
+        // Your own preview: a camera at 640x360 and 30 pictures a second (it's your own face: it should
+        // look smooth); a screen share half size at 10 a second (just to check what you're sharing).
+        let ((pw, ph), pfps) = if camera { ((640, 360), 30) } else { (((w / 4 * 2).max(2), (h / 4 * 2).max(2)), 10) };
         let p = pipeline(&format!(
             "{source} ! videoconvert ! videoscale add-borders=true ! \
              video/x-raw,width={w},height={h},pixel-aspect-ratio=1/1 ! videorate drop-only=true ! video/x-raw,framerate=30/1 ! tee name=t \
-             t. ! queue leaky=downstream max-size-buffers=1 ! videorate drop-only=true ! video/x-raw,framerate=10/1 ! videoscale ! \
+             t. ! queue leaky=downstream max-size-buffers=1 ! videorate drop-only=true ! video/x-raw,framerate={pfps}/1 ! videoscale ! \
              video/x-raw,width={pw},height={ph} ! jpegenc quality=75 ! appsink name=preview sync=false max-buffers=1 drop=true \
              t. ! queue leaky=downstream max-size-buffers=2 ! \
              vp8enc name=enc deadline=1 cpu-used=8 threads=4 end-usage=cbr target-bitrate={bitrate} keyframe-max-dist=300 lag-in-frames=0 error-resilient=default ! \
@@ -384,7 +385,7 @@ mod win {
             let prop = if kind == "w" { "window-handle" } else { "monitor-handle" };
             let props = [("cap", prop, handle.to_string()), ("cap", "capture-api", "wgc".to_string())];
             let (w, h) = fit(None, quality);
-            Self::encode("d3d11screencapturesrc name=cap show-cursor=true ! d3d11download", &props, (w, h), quality.bounds().2, out, None)
+            Self::encode("d3d11screencapturesrc name=cap show-cursor=true ! d3d11download", &props, (w, h), quality.bounds().2, out, None, false)
         }
 
         /// Your camera, through Media Foundation: 1280x720, 30 frames a second, about 1.5 Mbps.
@@ -394,7 +395,7 @@ mod win {
             let mut last = String::from("No camera found");
             for caps in ["image/jpeg,width=1280,height=720 ! jpegdec", "video/x-raw,width=1280,height=720", "video/x-raw,width=640,height=480", "video/x-raw"] {
                 let props = [("cam", "device-path", id.clone())];
-                match Self::encode(&format!("mfvideosrc name=cam ! {caps}"), &props, CAMERA_SIZE, CAMERA_BITRATE, out.clone(), None) {
+                match Self::encode(&format!("mfvideosrc name=cam ! {caps}"), &props, CAMERA_SIZE, CAMERA_BITRATE, out.clone(), None, true) {
                     Ok(c) => {
                         tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
                         if !c.ended.load(Ordering::Relaxed) {

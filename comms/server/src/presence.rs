@@ -43,6 +43,12 @@ pub async fn set_status(State(app): State<Shared>, me: Auth, Json(r): Json<Statu
     if text.chars().count() > 80 || text.chars().any(char::is_control) {
         return Err(ApiError::bad("A status message can have at most 80 characters"));
     }
+    let before: String = app.db.with(|c| c.query_row("SELECT status FROM accounts WHERE id = ?1", [me.account], |r| r.get(0)))?;
     app.db.with(|c| c.execute("UPDATE accounts SET status = ?2, status_text = ?3 WHERE id = ?1", params![me.account, r.status, text]))?;
+    // Tell the people you share spaces with. Going invisible is announced (you appear offline);
+    // staying invisible isn't.
+    if !(before == "invisible" && r.status == "invisible") {
+        app.live.announce(&app, me.account, true);
+    }
     Ok(Json(json!({ "status": r.status, "text": text })))
 }

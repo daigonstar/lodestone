@@ -91,6 +91,10 @@ pub struct Levels {
     heard: Mutex<[Option<Instant>; SLOTS]>,
     /// Speaker volume in percent (100 = as received, up to 200).
     volume: AtomicI32,
+    /// Each slot's volume in percent (per person: the app maps people to slots).
+    slot_volume: Mutex<[i32; SLOTS]>,
+    /// A sound to play: 1 = someone joined, 2 = someone left.
+    tone: AtomicU8,
     error: Mutex<Option<String>>,
     pub frames_in: AtomicU64,
 }
@@ -105,6 +109,8 @@ impl Default for Levels {
             talking: AtomicBool::new(false),
             heard: Mutex::new([None; SLOTS]),
             volume: AtomicI32::new(100),
+            slot_volume: Mutex::new([100; SLOTS]),
+            tone: AtomicU8::new(0),
             error: Mutex::new(None),
             frames_in: AtomicU64::new(0),
         }
@@ -132,6 +138,16 @@ impl Levels {
     /// Speaker volume, 0 to 200 percent. Applies at once, also during a call.
     pub fn set_volume(&self, percent: f64) {
         self.volume.store(percent.clamp(0.0, 200.0) as i32, Ordering::Relaxed);
+    }
+    /// One slot's volume, 0 to 200 percent (the person in it).
+    pub fn set_slot_volume(&self, slot: usize, percent: f64) {
+        if let Some(v) = self.slot_volume.lock().unwrap().get_mut(slot) {
+            *v = percent.clamp(0.0, 200.0) as i32;
+        }
+    }
+    /// Play the "someone joined" (true) or "someone left" (false) sound.
+    pub fn chime(&self, joined: bool) {
+        self.tone.store(if joined { 1 } else { 2 }, Ordering::Relaxed);
     }
     pub fn talking(&self) -> bool {
         self.talking.load(Ordering::Relaxed)
@@ -240,6 +256,9 @@ pub struct GstAudio {
     playback: Option<(gst::Pipeline, Vec<AppSrc>)>,
     outvol: Option<gst::Element>,
     applied_volume: i32,
+    slot_vols: Vec<gst::Element>,
+    applied_slots: [i32; SLOTS],
+    tone_src: Option<AppSrc>,
     levels: Arc<Levels>,
     pending: Vec<i16>,
     preroll: VecDeque<Vec<i16>>,
@@ -268,14 +287,15 @@ impl GstAudio {
         let playback = if full {
             let mut desc = format!(
                 "audiomixer name=mix latency=20000000 ! audioconvert ! audioresample ! {raw} ! volume name=outvol ! webrtcechoprobe name={probe} ! audioconvert ! audioresample ! {} \
-                 audiotestsrc wave=silence is-live=true samplesperbuffer=960 ! {raw} ! mix. ",
+                 audiotestsrc wave=silence is-live=true samplesperbuffer=960 ! {raw} ! mix. \
+                 appsrc name=tone format=time is-live=true do-timestamp=true caps=\"{raw}\" ! queue ! mix. ",
                 if opts.silent { "fakesink sync=true".to_string() } else { format!("{SPEAKERS} name=speakers") }
             );
             for i in 0..SLOTS {
                 desc.push_str(&format!(
                     "appsrc name=s{i} format=time is-live=true do-timestamp=false min-latency=0 \
                      caps=\"audio/x-opus,channel-mapping-family=(int)0,channels=(int)1,rate=(int)48000\" ! \
-                     opusdec plc=true ! audioconvert ! audioresample ! {raw} ! queue max-size-time=500000000 ! mix. "
+                     opusdec plc=true ! audioconvert ! audioresample ! {raw} ! volume name=v{i} ! queue max-size-time=500000000 ! mix. "
                 ));
             }
             let p = pipeline(&desc)?;
@@ -318,7 +338,9 @@ impl GstAudio {
         };
 
         let outvol = playback.as_ref().and_then(|(p, _)| p.by_name("outvol"));
-        Ok(Self { capture, pcm, encoder, playback, outvol, applied_volume: -1, levels, pending: Vec::new(), preroll: VecDeque::new(), open_for: 0, encoded: 0, next_pts: [None; SLOTS] })
+        let slot_vols: Vec<gst::Element> = playback.as_ref().map(|(p, _)| (0..SLOTS).filter_map(|i| p.by_name(&format!("v{i}"))).collect()).unwrap_or_default();
+        let tone_src = playback.as_ref().and_then(|(p, _)| p.by_name("tone")).and_then(|e| e.downcast::<AppSrc>().ok());
+        Ok(Self { capture, pcm, encoder, playback, outvol, applied_volume: -1, slot_vols, applied_slots: [100; SLOTS], tone_src, levels, pending: Vec::new(), preroll: VecDeque::new(), open_for: 0, encoded: 0, next_pts: [None; SLOTS] })
     }
 
     /// Note the first pipeline error for the interface.
@@ -384,6 +406,23 @@ impl Audio for GstAudio {
     fn take_captured(&mut self) -> Vec<Vec<u8>> {
         self.check_bus();
         let v = self.levels.volume.load(Ordering::Relaxed);
+        let wanted = *self.levels.slot_volume.lock().unwrap();
+        if wanted != self.applied_slots {
+            for (i, e) in self.slot_vols.iter().enumerate() {
+                if wanted[i] != self.applied_slots[i] {
+                    e.set_property("volume", wanted[i] as f64 / 100.0);
+                }
+            }
+            self.applied_slots = wanted;
+        }
+        match self.levels.tone.swap(0, Ordering::Relaxed) {
+            0 => {}
+            t => {
+                if let Some(src) = &self.tone_src {
+                    let _ = src.push_buffer(chime(t == 1));
+                }
+            }
+        }
         if v != self.applied_volume {
             if let Some(e) = &self.outvol {
                 e.set_property("volume", v as f64 / 100.0);
@@ -452,4 +491,21 @@ impl Drop for GstAudio {
         self.levels.talking.store(false, Ordering::Relaxed);
         self.levels.mic.store(-1000, Ordering::Relaxed);
     }
+}
+
+/// A short two-note chime: rising when someone joins, falling when someone leaves. Made here (no sound
+/// files), quiet, with soft edges so it doesn't click.
+fn chime(joined: bool) -> gst::Buffer {
+    let notes: [f64; 2] = if joined { [660.0, 880.0] } else { [880.0, 587.0] };
+    let per = RATE / 10; // 100 ms a note
+    let mut pcm: Vec<u8> = Vec::with_capacity(per * 2 * 2);
+    for (n, f) in notes.iter().enumerate() {
+        for i in 0..per {
+            let t = i as f64 / RATE as f64;
+            let fade = (i.min(per - i) as f64 / (RATE as f64 * 0.01)).min(1.0);
+            let s = (2.0 * std::f64::consts::PI * f * t).sin() * 0.18 * fade * if n == 1 { 0.9 } else { 1.0 };
+            pcm.extend_from_slice(&((s * 32767.0) as i16).to_le_bytes());
+        }
+    }
+    gst::Buffer::from_mut_slice(pcm)
 }

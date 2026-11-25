@@ -46,6 +46,50 @@ impl Host {
         self.token.lock().unwrap().is_some()
     }
 
+    /// Listen on the host's live connection (`GET /v1/live`), calling `on_event` for each event, until
+    /// it closes. The session token goes in the WebSocket protocol header, never in the URL.
+    pub async fn listen(&self, mut on_event: impl FnMut(Value)) -> Result<(), String> {
+        use futures_util::StreamExt;
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        use tokio_tungstenite::tungstenite::Message;
+        let token = self.token.lock().unwrap().clone().ok_or("not signed in")?;
+        let ws_url = if let Some(rest) = self.url.strip_prefix("https://") { format!("wss://{rest}/v1/live") } else { format!("ws://{}/v1/live", self.url.trim_start_matches("http://")) };
+        let mut req = ws_url.into_client_request().map_err(|e| e.to_string())?;
+        let proto = format!("lodestone-comms.v1, {token}");
+        req.headers_mut().insert("Sec-WebSocket-Protocol", proto.parse().map_err(|_| "bad token".to_string())?);
+        let connector = if self.url.starts_with("https://") {
+            use rustls_platform_verifier::ConfigVerifierExt;
+            let config = rustls::ClientConfig::with_platform_verifier().map_err(|e| e.to_string())?;
+            Some(tokio_tungstenite::Connector::Rustls(std::sync::Arc::new(config)))
+        } else {
+            Some(tokio_tungstenite::Connector::Plain)
+        };
+        let (ws, _) = tokio_tungstenite::connect_async_tls_with_config(req, None, true, connector).await.map_err(|e| format!("live connection: {}", e.to_string().replace(&token, "…")))?;
+        let mut ws = ws;
+        // A ping every 30 s keeps proxies (Cloudflare closes idle connections after ~100 s) from
+        // dropping the connection, and notices a dead one.
+        let mut ping = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            tokio::select! {
+                msg = ws.next() => match msg {
+                    Some(Ok(Message::Text(t))) => {
+                        if let Ok(v) = serde_json::from_str::<Value>(&t) {
+                            on_event(v);
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    Some(Ok(_)) => {}
+                },
+                _ = ping.tick() => {
+                    if futures_util::SinkExt::send(&mut ws, Message::Ping(Vec::new().into())).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn call(&self, method: &str, path: &str, body: Option<Value>) -> HostResult<Value> {
         let url = format!("{}{path}", self.url);
         let mut req = match method {

@@ -50,6 +50,7 @@ pub fn router(app: Shared) -> Router {
         .route("/api/file", get(open_file))
         .route("/api/friends", get(friends))
         .route("/api/invite-friend", post(invite_friend))
+        .route("/api/open-chat", post(open_chat))
         .route("/api/events", get(events))
         .route("/api/manage", post(manage))
         .route("/api/icon", get(icon).post(set_icon))
@@ -63,6 +64,7 @@ pub fn router(app: Shared) -> Router {
         .route("/api/voice/ptt", post(voice_ptt))
         .route("/api/voice/share", post(voice_share))
         .route("/api/voice/screens", get(voice_screens))
+        .route("/api/voice/user-volume", post(voice_user_volume))
         .route("/api/voice/watch", post(voice_watch))
         .route("/api/voice/picture", get(voice_picture))
         .route("/api/voice/camera", post(voice_camera))
@@ -583,19 +585,29 @@ async fn friends(State(app): State<Shared>) -> R {
 struct InviteFriendReq {
     host: String,
     space: String,
-    store: String,
-    id: String,
 }
 
-/// Make a single-use invite and hand it to Lodestone, which copies it and opens that friend's chat.
+/// Make a single-use invite for a friend: the message to send them. The page shows it, copies it when
+/// you click (the reliable way to set the clipboard), then asks Lodestone to open their chat.
 async fn invite_friend(State(app): State<Shared>, Json(r): Json<InviteFriendReq>) -> R {
     let c = client(&app, &r.host)?;
     ensure_signed_in(&c).await?;
     let inv = c.create_invite(&r.space, 1, 7 * 24 * 3600).await?;
     let link = inv["link"].as_str().unwrap_or_default();
-    let text = format!("Join me on Lodestone Comms: {link}");
-    app.bridge.request("open_chat", json!({ "store": r.store, "id": r.id, "text": text })).await.map_err(Fail)?;
-    Ok(Json(json!({ "link": link })))
+    Ok(Json(json!({ "link": link, "text": format!("Join me on Lodestone Comms: {link}") })))
+}
+
+#[derive(Deserialize)]
+struct OpenChatReq {
+    store: String,
+    id: String,
+    text: String,
+}
+
+/// Ask Lodestone to open a friend's chat (it also copies the text, and checks everything it's given).
+async fn open_chat(State(app): State<Shared>, Json(r): Json<OpenChatReq>) -> R {
+    app.bridge.request("open_chat", json!({ "store": r.store, "id": r.id, "text": r.text })).await.map_err(Fail)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 #[derive(Deserialize)]
@@ -846,4 +858,16 @@ async fn voice_picture(State(app): State<Shared>, Query(q): Query<SlotQuery>) ->
     r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
     r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     r
+}
+
+#[derive(Deserialize)]
+struct UserVolume {
+    host: String,
+    username: String,
+    volume: f64,
+}
+
+async fn voice_user_volume(State(app): State<Shared>, Json(r): Json<UserVolume>) -> R {
+    crate::voice::set_user_volume(&app, &r.host, &r.username, r.volume).await.map_err(Fail)?;
+    Ok(Json(json!({ "ok": true })))
 }

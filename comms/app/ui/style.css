@@ -280,3 +280,26 @@ html, body { overflow: hidden; }
 .chat > .home-page { flex: 1; min-height: 0; overflow-y: auto; max-width: none; }
 .home-page > * { max-width: 900px; }
 .stage-people { overflow-y: auto; }
+
+.friend-send { display: grid; gap: 6px; padding: 8px; margin: -2px 0 6px; border-radius: 8px; background: var(--bg-3); }
+.friend-send input { font-size: 12px; }
+
+.chat { position: relative; }
+.new-msgs { position: absolute; left: 50%; transform: translateX(-50%); bottom: 84px; z-index: 3; background: var(--accent); color: #fff; border-radius: 999px; padding: 6px 14px; box-shadow: 0 6px 20px #0008; }
+
+/* call view controls and per-person volume */
+.stage-controls { display: flex; justify-content: center; gap: 10px; padding: 10px 16px 14px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.stage-controls button { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 72px; padding: 8px 10px; background: var(--bg-2); border: 1px solid var(--line); font-size: 18px; }
+.stage-controls button small { font-size: 11px; color: var(--muted); }
+.stage-controls button.active { background: color-mix(in srgb, var(--danger) 25%, var(--bg-2)); }
+.stage-controls button.share-on { background: color-mix(in srgb, #3ddc97 30%, var(--bg-2)); }
+.stage-controls button.leave { background: color-mix(in srgb, var(--danger) 70%, var(--bg-2)); }
+.stage-controls button.leave small { color: #fff; }
+.tile .pvol { position: absolute; top: 6px; left: 6px; right: 6px; display: none; align-items: center; gap: 6px; padding: 4px 8px; margin: 0; border-radius: 8px; background: rgba(0,0,0,.6); color: #fff; font-size: 11px; z-index: 2; }
+.tile:hover .pvol, .tile .pvol:focus-within { display: flex; }
+.tile .pvol input { flex: 1; padding: 0; background: none; border: 0; accent-color: var(--accent); }
+/* Tiles fit the space: as many 16:9 columns as fit (at least 260 px, never wider than the view),
+   up to 640 px each. The call view sits above everything in the chat area. */
+.stage-people:not(.strip) { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); width: 100%; max-width: 1300px; margin: 0 auto; justify-items: center; }
+.stage-people:not(.strip) .tile { width: 100%; max-width: 640px; }
+.stage { z-index: 5; }

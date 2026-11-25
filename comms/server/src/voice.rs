@@ -182,6 +182,12 @@ fn resolve(addr: &str) -> Option<SocketAddr> {
     all.iter().find(|a| a.is_ipv4()).or(all.first()).copied()
 }
 
+/// Tell a space's members that a call changed (someone joined, left, muted, shared, or turned their
+/// camera on or off), so their lists update at once.
+fn voice_changed(app: &Shared, space: &str, channel: &str) {
+    app.live.to_space(app, space, json!({ "type": "voice", "space": space, "channel": channel }));
+}
+
 const AUDIO: u8 = 0;
 const SCREEN: u8 = 1;
 const CAMERA: u8 = 2;
@@ -389,7 +395,7 @@ pub struct JoinReq {
 /// `POST /v1/channels/{channel}/voice/join` with a WebRTC offer (one send-only audio track and up to
 /// SLOTS receive-only ones). Returns the answer, your slot and who's in the call.
 pub async fn join(State(app): State<Shared>, me: Auth, Path(channel): Path<String>, Json(r): Json<JoinReq>) -> ApiResult<Json<Value>> {
-    voice_channel(&app, &channel, &me)?;
+    let space = voice_channel(&app, &channel, &me)?;
     if !app.voice.enabled() {
         return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "Voice isn't set up on this host yet (COMMS_MEDIA_ADDR)".into()));
     };
@@ -428,6 +434,7 @@ pub async fn join(State(app): State<Shared>, me: Auth, Path(channel): Path<Strin
         }
     };
     app.voice.send(Cmd::Add(Box::new(Peer { addr: public, channel: channel.clone(), device: me.device.clone(), slot, rtc, from_client: None, to_client: Vec::new(), from_client_video: None, to_client_video: Vec::new(), watching: Vec::new(), from_client_cam: None, to_client_cam: Vec::new(), cameras: false, deafened: r.deafened })));
+    voice_changed(&app, &space, &channel);
     Ok(Json(json!({ "answer": answer, "slot": slot, "participants": app.voice.participants(&channel) })))
 }
 
@@ -439,7 +446,7 @@ pub struct StateReq {
 
 /// `POST /v1/channels/{channel}/voice/state`: your mute and deafen state (deafened people aren't sent audio).
 pub async fn set_state(State(app): State<Shared>, me: Auth, Path(channel): Path<String>, Json(r): Json<StateReq>) -> ApiResult<Json<Value>> {
-    voice_channel(&app, &channel, &me)?;
+    let space = voice_channel(&app, &channel, &me)?;
     let found = {
         let mut calls = app.voice.calls.lock().unwrap();
         match calls.get_mut(&channel).and_then(|l| l.iter_mut().find(|p| p.device == me.device)) {
@@ -454,7 +461,8 @@ pub async fn set_state(State(app): State<Shared>, me: Auth, Path(channel): Path<
     if !found {
         return Err(ApiError::not_found("You aren't in this call"));
     }
-    app.voice.send(Cmd::Deafen { channel, device: me.device, on: r.deafened });
+    app.voice.send(Cmd::Deafen { channel: channel.clone(), device: me.device, on: r.deafened });
+    voice_changed(&app, &space, &channel);
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -465,10 +473,11 @@ pub struct ShareReq {
 
 /// `POST /v1/channels/{channel}/voice/share` `{ on }`: say you're sharing your screen (or stopped).
 pub async fn share(State(app): State<Shared>, me: Auth, Path(channel): Path<String>, Json(r): Json<ShareReq>) -> ApiResult<Json<Value>> {
-    voice_channel(&app, &channel, &me)?;
+    let space = voice_channel(&app, &channel, &me)?;
     let mut calls = app.voice.calls.lock().unwrap();
     let p = calls.get_mut(&channel).and_then(|l| l.iter_mut().find(|p| p.device == me.device)).ok_or_else(|| ApiError::not_found("You aren't in this call"))?;
     p.sharing = r.on;
+    voice_changed(&app, &space, &channel);
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -497,10 +506,11 @@ pub async fn watch(State(app): State<Shared>, me: Auth, Path(channel): Path<Stri
 
 /// `POST /v1/channels/{channel}/voice/camera` `{ on }`: say your camera is on (or off).
 pub async fn camera(State(app): State<Shared>, me: Auth, Path(channel): Path<String>, Json(r): Json<ShareReq>) -> ApiResult<Json<Value>> {
-    voice_channel(&app, &channel, &me)?;
+    let space = voice_channel(&app, &channel, &me)?;
     let mut calls = app.voice.calls.lock().unwrap();
     let p = calls.get_mut(&channel).and_then(|l| l.iter_mut().find(|p| p.device == me.device)).ok_or_else(|| ApiError::not_found("You aren't in this call"))?;
     p.camera = r.on;
+    voice_changed(&app, &space, &channel);
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -518,8 +528,9 @@ pub async fn cameras(State(app): State<Shared>, me: Auth, Path(channel): Path<St
 
 /// `POST /v1/channels/{channel}/voice/leave`.
 pub async fn leave(State(app): State<Shared>, me: Auth, Path(channel): Path<String>) -> ApiResult<Json<Value>> {
-    voice_channel(&app, &channel, &me)?;
+    let space = voice_channel(&app, &channel, &me)?;
     app.voice.remove(&channel, &me.device);
+    voice_changed(&app, &space, &channel);
     Ok(Json(json!({ "ok": true })))
 }
 

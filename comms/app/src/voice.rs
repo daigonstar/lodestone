@@ -36,6 +36,9 @@ pub struct Settings {
     /// Speaker volume in percent (100 = as received; up to 200).
     #[serde(default = "hundred")]
     pub volume: f64,
+    /// Each person's volume in percent, by "host|username" (100 when not set).
+    #[serde(default)]
+    pub user_volumes: HashMap<String, f64>,
     /// Screen share quality: "1080p" (the default) or "720p".
     #[serde(default = "full")]
     pub share_quality: String,
@@ -58,7 +61,7 @@ fn threshold() -> f64 {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { mic: String::new(), speakers: String::new(), mode: voice(), threshold: threshold(), camera: String::new(), volume: hundred(), share_quality: full() }
+        Self { mic: String::new(), speakers: String::new(), mode: voice(), threshold: threshold(), camera: String::new(), volume: hundred(), user_volumes: HashMap::new(), share_quality: full() }
     }
 }
 
@@ -120,6 +123,13 @@ impl Voice {
     pub fn set_settings(&self, mut s: Settings) -> Result<(), String> {
         s.volume = if s.volume.is_finite() { s.volume.clamp(0.0, 200.0) } else { 100.0 };
         s.threshold = if s.threshold.is_finite() { s.threshold.clamp(-80.0, 0.0) } else { -45.0 };
+        s.user_volumes.retain(|k, v| k.len() <= 300 && v.is_finite());
+        for v in s.user_volumes.values_mut() {
+            *v = v.clamp(0.0, 200.0);
+        }
+        if s.user_volumes.len() > 500 {
+            return Err("Too many saved volumes".into());
+        }
         if Gate::parse(&s.mode).is_none() {
             return Err("Unknown microphone mode".into());
         }
@@ -373,6 +383,7 @@ pub async fn join(app: &Shared, c: Arc<Client>, host: &str, channel: &str, muted
             ctl2.keyframe_from.lock().unwrap().extend(ask);
         }
     });
+    let (app3, host3, slot3) = (app.clone(), host.to_string(), joined["slot"].as_u64().unwrap_or(0));
     tokio::spawn(async move {
         let mut tick = 0u32;
         while !ctl.stop.load(Ordering::Relaxed) {
@@ -385,11 +396,24 @@ pub async fn join(app: &Shared, c: Arc<Client>, host: &str, channel: &str, muted
             }
             if tick % 2 == 0 {
                 if let Ok(info) = c.voice_info(&ch).await {
-                    *participants.lock().unwrap() = info["participants"].clone();
+                    update_people(&app3, &host3, slot3, &participants, info["participants"].clone());
                 }
             }
         }
     });
+    app.voice.levels.chime(true);
+    {
+        let g = app.voice.session.lock().await;
+        if let Some(sess) = g.as_ref() {
+            let people = sess.participants.lock().unwrap().clone();
+            let vols = app.voice.settings().user_volumes;
+            for p in people.as_array().into_iter().flatten() {
+                if let (Some(slot), Some(user)) = (p["slot"].as_u64(), p["username"].as_str()) {
+                    app.voice.levels.set_slot_volume(slot as usize, vols.get(&format!("{host}|{user}")).copied().unwrap_or(100.0));
+                }
+            }
+        }
+    }
     Ok(status(app).await)
 }
 
@@ -421,9 +445,73 @@ fn order_relays(relays: &mut [SocketAddr]) {
     });
 }
 
+/// New list of who's in your call: play the join/leave chime for anyone who came or went (not you),
+/// and set each person's volume on their slot.
+fn update_people(app: &Shared, host: &str, my_slot: u64, store: &Mutex<Value>, people: Value) {
+    let others = |v: &Value| -> std::collections::HashSet<String> {
+        v.as_array().into_iter().flatten().filter(|p| p["slot"].as_u64() != Some(my_slot)).filter_map(|p| p["device"].as_str().map(str::to_string)).collect()
+    };
+    let before = others(&store.lock().unwrap());
+    let after = others(&people);
+    if after.difference(&before).next().is_some() {
+        app.voice.levels.chime(true);
+    } else if before.difference(&after).next().is_some() {
+        app.voice.levels.chime(false);
+    }
+    let vols = app.voice.settings().user_volumes;
+    for p in people.as_array().into_iter().flatten() {
+        if let (Some(slot), Some(user)) = (p["slot"].as_u64(), p["username"].as_str()) {
+            let v = vols.get(&format!("{host}|{user}")).copied().unwrap_or(100.0);
+            app.voice.levels.set_slot_volume(slot as usize, v);
+        }
+    }
+    *store.lock().unwrap() = people;
+}
+
+/// Set one person's volume (0 to 200 percent); it applies at once if they're in your call.
+pub async fn set_user_volume(app: &Shared, host: &str, username: &str, volume: f64) -> Result<(), String> {
+    let mut s = app.voice.settings();
+    let key = format!("{host}|{username}");
+    if (volume - 100.0).abs() < 0.5 {
+        s.user_volumes.remove(&key);
+    } else {
+        s.user_volumes.insert(key, volume);
+    }
+    app.voice.set_settings(s)?;
+    let g = app.voice.session.lock().await;
+    if let Some(sess) = g.as_ref().filter(|x| x.host == host) {
+        let people = sess.participants.lock().unwrap().clone();
+        drop(g);
+        let g = app.voice.session.lock().await;
+        if let Some(sess) = g.as_ref() {
+            update_people(app, host, sess.slot, &sess.participants, people);
+        }
+    }
+    Ok(())
+}
+
+/// A host said a call changed: if it's yours, fetch who's there now (instead of at the next refresh).
+pub fn refresh_soon(app: &Shared, channel: &str) {
+    let (app, channel) = (app.clone(), channel.to_string());
+    tokio::spawn(async move {
+        let found = {
+            let g = app.voice.session.lock().await;
+            g.as_ref().filter(|s| s.channel == channel).map(|s| (s.client.clone(), s.participants.clone(), s.host.clone(), s.slot))
+        };
+        if let Some((c, participants, host, slot)) = found {
+            if let Ok(info) = c.voice_info(&channel).await {
+                update_people(&app, &host, slot, &participants, info["participants"].clone());
+            }
+        }
+    });
+}
+
 /// Leave the call you're in, if any.
 pub async fn leave(app: &Shared) {
     let Some(s) = app.voice.session.lock().await.take() else { return };
+    // The "left" chime, heard before the sound closes.
+    app.voice.levels.chime(false);
+    tokio::time::sleep(Duration::from_millis(250)).await;
     let _ = tokio::task::spawn_blocking(move || s.call.stop()).await;
     let _ = s.client.voice_leave(&s.channel).await;
 }
@@ -454,12 +542,15 @@ pub async fn status(app: &Shared) -> Value {
     let speaking = v.levels.speaking_slots();
     let muted = ctl.muted.load(Ordering::Relaxed);
     let mut people = sess.participants.lock().unwrap().clone();
+    let vols = s.user_volumes.clone();
     for p in people.as_array_mut().into_iter().flatten() {
         let slot = p["slot"].as_u64().unwrap_or(u64::MAX);
         let me = slot == sess.slot;
         let talking = if me { v.levels.talking() && !muted } else { speaking.contains(&(slot as usize)) };
         p["speaking"] = json!(talking);
         p["me"] = json!(me);
+        let user = p["username"].as_str().unwrap_or_default().to_string();
+        p["volume"] = json!(vols.get(&format!("{}|{user}", sess.host)).copied().unwrap_or(100.0));
     }
     json!({
         "call": {

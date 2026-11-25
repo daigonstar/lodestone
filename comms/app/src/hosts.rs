@@ -107,7 +107,58 @@ pub fn start_sync(app: Shared) {
                     Err(_) => {}
                 }
             }
-            tokio::time::sleep(Duration::from_secs(3)).await;
+            // Sync again in a few seconds, or at once when a host's live connection says so.
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                _ = app.wake.notified() => {}
+            }
+        }
+    });
+}
+
+/// Keep a live connection to each host you've joined, so changes show up as they happen: new
+/// messages wake the sync, and people joining or leaving, statuses and calls refresh the page at once.
+/// Reconnects after a pause if it drops; the regular sync carries on either way.
+pub fn start_live(app: Shared) {
+    tokio::spawn(async move {
+        let mut running: std::collections::HashSet<String> = Default::default();
+        loop {
+            for (url, c) in app.hosts.all() {
+                if c.username().is_none() || !running.insert(url.clone()) {
+                    continue;
+                }
+                let app = app.clone();
+                tokio::spawn(async move {
+                    loop {
+                        if c.host.signed_in() {
+                            let a = app.clone();
+                            let host = url.clone();
+                            let _ = c
+                                .host
+                                .listen(move |ev| {
+                                    let kind = ev["type"].as_str().unwrap_or_default();
+                                    match kind {
+                                        "message" | "welcome" => a.wake.notify_one(),
+                                        "voice" => {
+                                            let _ = a.events.send(json!({ "type": "state" }).to_string());
+                                            let _ = a.events.send(json!({ "type": "voice", "host": host, "channel": ev["channel"] }).to_string());
+                                            crate::voice::refresh_soon(&a, ev["channel"].as_str().unwrap_or_default());
+                                        }
+                                        "hello" => {}
+                                        _ => {
+                                            // Members, statuses, channels, server settings.
+                                            a.wake.notify_one();
+                                            let _ = a.events.send(json!({ "type": "state" }).to_string());
+                                        }
+                                    }
+                                })
+                                .await;
+                        }
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    }
+                });
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
         }
     });
 }

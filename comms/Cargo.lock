@@ -2800,6 +2800,7 @@ dependencies = [
  "aes-gcm",
  "base64 0.22.1",
  "ed25519-dalek",
+ "futures-util",
  "lodestone-comms-server",
  "openmls",
  "openmls_basic_credential",
@@ -2809,11 +2810,14 @@ dependencies = [
  "rand 0.8.8",
  "reqwest",
  "rusqlite",
+ "rustls",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]
@@ -5090,7 +5094,10 @@ checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
 dependencies = [
  "futures-util",
  "log",
+ "rustls",
+ "rustls-pki-types",
  "tokio",
+ "tokio-rustls",
  "tungstenite",
 ]
 
@@ -5286,6 +5293,8 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.9.5",
+ "rustls",
+ "rustls-pki-types",
  "sha1",
  "thiserror 2.0.21",
 ]
