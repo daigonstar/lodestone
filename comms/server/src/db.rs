@@ -1,0 +1,134 @@
+//! The host's database (SQLite). Message bodies are MLS ciphertext the host can't read; secrets the host
+//! hands out (session tokens, invite and setup codes) are stored only as SHA-256 hashes.
+
+use crate::util::{hash, new_code};
+use rusqlite::Connection;
+use std::path::Path;
+use std::sync::Mutex;
+
+pub struct Db(Mutex<Connection>);
+
+const SCHEMA: &str = "
+PRAGMA foreign_keys = ON;
+PRAGMA journal_mode = WAL;
+CREATE TABLE IF NOT EXISTS accounts (
+    id INTEGER PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    host_admin INTEGER NOT NULL DEFAULT 0,
+    created INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS devices (
+    key TEXT PRIMARY KEY,
+    account INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    created INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS challenges (
+    nonce TEXT PRIMARY KEY,
+    device_key TEXT NOT NULL,
+    expires INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    device_key TEXT NOT NULL REFERENCES devices(key) ON DELETE CASCADE,
+    expires INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS setup (code_hash TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS spaces (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    owner INTEGER NOT NULL REFERENCES accounts(id),
+    created INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS members (
+    space TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    account INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    joined INTEGER NOT NULL,
+    PRIMARY KEY (space, account)
+);
+CREATE TABLE IF NOT EXISTS bans (
+    space TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    account INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    PRIMARY KEY (space, account)
+);
+CREATE TABLE IF NOT EXISTS channels (
+    id TEXT PRIMARY KEY,
+    space TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    epoch INTEGER NOT NULL DEFAULT 0,
+    next_seq INTEGER NOT NULL DEFAULT 1,
+    created INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS invites (
+    code_hash TEXT PRIMARY KEY,
+    space TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    created_by INTEGER NOT NULL REFERENCES accounts(id),
+    uses INTEGER NOT NULL DEFAULT 0,
+    max_uses INTEGER NOT NULL,
+    expires INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS keypackages (
+    id INTEGER PRIMARY KEY,
+    device_key TEXT NOT NULL REFERENCES devices(key) ON DELETE CASCADE,
+    body BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS messages (
+    channel TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    epoch INTEGER NOT NULL,
+    sender TEXT NOT NULL,
+    body BLOB NOT NULL,
+    sent_at INTEGER NOT NULL,
+    PRIMARY KEY (channel, seq)
+);
+CREATE TABLE IF NOT EXISTS welcomes (
+    id INTEGER PRIMARY KEY,
+    device_key TEXT NOT NULL REFERENCES devices(key) ON DELETE CASCADE,
+    channel TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    body BLOB NOT NULL,
+    created INTEGER NOT NULL
+);
+";
+
+impl Db {
+    pub fn open(path: &Path) -> rusqlite::Result<Self> {
+        let c = Connection::open(path)?;
+        c.execute_batch(SCHEMA)?;
+        // The database holds account metadata: keep it readable only by the host's user.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
+        Ok(Self(Mutex::new(c)))
+    }
+
+    #[cfg(test)]
+    pub fn memory() -> Self {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        Self(Mutex::new(c))
+    }
+
+    /// Run something with the connection (kept short: one lock for the whole host).
+    pub fn with<T>(&self, f: impl FnOnce(&mut Connection) -> rusqlite::Result<T>) -> rusqlite::Result<T> {
+        f(&mut self.0.lock().unwrap())
+    }
+
+    /// On a host with no accounts, make a one-time setup code for the first (admin) account.
+    /// Returns it only when it was just made; afterwards only its hash exists.
+    pub fn setup_code_if_new(&self) -> rusqlite::Result<Option<String>> {
+        self.with(|c| {
+            let accounts: i64 = c.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0))?;
+            if accounts > 0 {
+                return Ok(None);
+            }
+            // A restart before anyone registered makes a new code (the old one is forgotten).
+            c.execute("DELETE FROM setup", [])?;
+            let code = new_code();
+            c.execute("INSERT INTO setup (code_hash) VALUES (?1)", [hash(&code)])?;
+            Ok(Some(code))
+        })
+    }
+}
