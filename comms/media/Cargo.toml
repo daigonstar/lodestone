@@ -1,0 +1,15 @@
+[package]
+name = "lodestone-comms-media"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Lodestone Comms media: audio and screen capture through GStreamer and the desktop portals (phase 1 checks)"
+
+[[bin]]
+name = "lodestone-comms-mediacheck"
+path = "src/main.rs"
+
+[dependencies]
+gstreamer = "0.25"
+ashpd = { version = "0.14", default-features = false, features = ["tokio", "screencast"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
