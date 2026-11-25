@@ -168,14 +168,58 @@ function renderFilters(preLetter) {
   if (state.series && !scount.has(state.series)) series.push([state.series, state.seriesNames.get(state.series) || state.series, 0]);
   $("#f-series").innerHTML = `<option value="">All series</option>` + series.map(([k, name, n]) => `<option value="${esc(k)}" ${k === state.series ? "selected" : ""}>${esc(name)} (${n})</option>`).join("");
   const cc = COMPAT_FILTERS.map(([k, label]) => [k, label, pool.filter((g) => compatMatch(g, k)).length]);
-  $("#f-compat").classList.toggle("hidden", state.view.startsWith("sys:"));
-  if (state.view.startsWith("sys:")) state.compatF = "";
+  // System libraries: ROM filters instead of the store ones (ProtonDB, series; genres only if known).
+  const sys = state.view.startsWith("sys:");
+  $("#f-compat").classList.toggle("hidden", sys);
+  $("#f-series").classList.toggle("hidden", sys && !series.length);
+  $("#f-genre").classList.toggle("hidden", sys && !genres.length);
+  if (sys) state.compatF = "";
+  else state.achF = state.regionF = state.playedF = "";
+  renderRomFilters(sys, pool);
   $("#f-compat").innerHTML = `<option value="">All ratings</option>` + cc.map(([k, label, n]) => `<option value="${k}" ${k === state.compatF ? "selected" : ""}>${label} (${n})</option>`).join("");
   const lc = new Map();
   for (const g of pool) { const l = letterOf(g.title); lc.set(l, (lc.get(l) || 0) + 1); }
   $("#f-letters").innerHTML = ["", "#", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"].map((l) =>
     `<button data-letter="${l}" class="${state.letter === l ? "on" : ""}" ${l && !lc.get(l) ? "disabled" : ""}>${l || "All"}</button>`).join("");
-  $("#f-clear").classList.toggle("hidden", !(state.genre || state.series || state.compatF || state.letter));
+  $("#f-clear").classList.toggle("hidden", !(state.genre || state.series || state.compatF || state.letter || state.achF || state.regionF || state.playedF));
+}
+
+// ---------- ROM filters (system libraries) ----------
+const REGION_TAGS = { usa: "USA", u: "USA", us: "USA", europe: "Europe", e: "Europe", eu: "Europe", japan: "Japan", j: "Japan", jp: "Japan", world: "World", w: "World", "usa, europe": "USA", "japan, usa": "USA", "usa, japan": "USA", "europe, australia": "Europe", "japan, europe": "Europe" };
+/** A ROM's region from the tags in its file name ("(USA)", "(E)", "(Japan, USA)"), "" if none. */
+function regionOf(g) {
+  if (!g.system) return "";
+  const name = g.id.split(":").slice(2).join(":").split("/").pop();
+  for (const m of name.matchAll(/\(([^)]+)\)/g)) {
+    const t = m[1].trim().toLowerCase();
+    if (REGION_TAGS[t]) return REGION_TAGS[t];
+    const first = t.split(",")[0].trim();
+    if (["usa", "europe", "japan", "world"].includes(first)) return REGION_TAGS[first];
+    if (["germany", "france", "spain", "italy", "korea", "brazil", "australia", "china", "netherlands", "sweden", "asia"].includes(first)) return first[0].toUpperCase() + first.slice(1);
+  }
+  return "";
+}
+const played = (g) => !!(g.playtime || g.last_played);
+function romFilter(g) {
+  if (state.achF === "yes" && !g.ra_id) return false;
+  if (state.achF === "no" && g.ra_id) return false;
+  if (state.regionF && regionOf(g) !== state.regionF) return false;
+  if (state.playedF === "yes" && !played(g)) return false;
+  if (state.playedF === "no" && played(g)) return false;
+  return true;
+}
+function renderRomFilters(sys, pool) {
+  for (const id of ["#f-ach", "#f-region", "#f-played"]) $(id).classList.toggle("hidden", !sys);
+  if (!sys) return;
+  const n = (f) => pool.filter(f).length;
+  const opt = (v, label, cur) => `<option value="${v}" ${v === cur ? "selected" : ""}>${label}</option>`;
+  $("#f-ach").innerHTML = opt("", "All games", state.achF) + opt("yes", `With achievements (${n((g) => g.ra_id)})`, state.achF) + opt("no", `Without (${n((g) => !g.ra_id)})`, state.achF);
+  const rc = new Map();
+  for (const g of pool) { const r = regionOf(g) || ""; rc.set(r, (rc.get(r) || 0) + 1); }
+  const regions = [...rc].filter(([r]) => r).sort((a, b) => b[1] - a[1]);
+  $("#f-region").classList.toggle("hidden", regions.length < 2 && !state.regionF);
+  $("#f-region").innerHTML = opt("", "All regions", state.regionF) + regions.map(([r, c]) => opt(esc(r), `${esc(r)} (${c})`, state.regionF)).join("");
+  $("#f-played").innerHTML = opt("", "Played or not", state.playedF) + opt("yes", `Played (${n(played)})`, state.playedF) + opt("no", `Not played yet (${n((g) => !played(g))})`, state.playedF);
 }
 
 // ProtonDB filter: "or better" options include Native games (they need no Proton at all).
@@ -301,6 +345,7 @@ function filtered() {
   if (state.genre) list = list.filter((g) => genresOf(g).has(state.genre));
   if (state.series) list = list.filter((g) => seriesOfGame(g) === state.series);
   if (state.compatF) list = list.filter((g) => compatMatch(g, state.compatF));
+  if (state.view.startsWith("sys:")) list = list.filter(romFilter);
   state.preLetter = list;
   if (state.letter) list = list.filter((g) => letterOf(g.title) === state.letter);
   if (state.view === "modded") list.sort((a, b) => (b.kiln_managed - a.kiln_managed) || (b.installed - a.installed) || by(a, b));
@@ -514,7 +559,7 @@ function renderGrid() {
     empty.classList.add("hidden");
   } else if (!list.length) {
     empty.classList.remove("hidden");
-    empty.textContent = state.search ? `Nothing matches “${state.search}”.` : (state.genre || state.series || state.compatF || state.letter) ? "No games match these filters." : state.view === "favorites" ? "Star a game to pin it here." : "No games here yet.";
+    empty.textContent = state.search ? `Nothing matches “${state.search}”.` : (state.genre || state.series || state.compatF || state.letter || state.achF || state.regionF || state.playedF) ? "No games match these filters." : state.view === "favorites" ? "Star a game to pin it here." : "No games here yet.";
   } else empty.classList.add("hidden");
   const selGame = state.games.find((g) => g.id === state.selected);
   const selShown = list.find((g) => g.id === state.selected) || (selGame && mergeOn() && list.find((g) => titleKey(g.title) === titleKey(selGame.title)));
@@ -1664,7 +1709,10 @@ $("#btn-refresh").onclick = async () => {
 $("#f-genre").onchange = (e) => { state.genre = e.target.value; state.letter = ""; renderGrid(); };
 $("#f-series").onchange = (e) => { state.series = e.target.value; state.letter = ""; renderGrid(); };
 $("#f-compat").onchange = (e) => { state.compatF = e.target.value; state.letter = ""; renderGrid(); };
-$("#f-clear").onclick = () => { state.genre = state.series = state.compatF = state.letter = ""; renderGrid(); };
+$("#f-ach").onchange = (e) => { state.achF = e.target.value; state.letter = ""; renderGrid(); };
+$("#f-region").onchange = (e) => { state.regionF = e.target.value; state.letter = ""; renderGrid(); };
+$("#f-played").onchange = (e) => { state.playedF = e.target.value; state.letter = ""; renderGrid(); };
+$("#f-clear").onclick = () => { state.genre = state.series = state.compatF = state.letter = state.achF = state.regionF = state.playedF = ""; renderGrid(); };
 let searchTimer;
 $("#search").oninput = (e) => {
   state.search = e.target.value;
