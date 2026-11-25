@@ -13,6 +13,8 @@ async fn main() {
         blob_dir: data.join("blobs"),
         max_file: mb("COMMS_MAX_FILE_MB", 10),
         space_quota: mb("COMMS_SPACE_QUOTA_MB", 2048),
+        media_addr: std::env::var("COMMS_MEDIA_ADDR").ok().filter(|a| !a.trim().is_empty()),
+        media_bind: env("COMMS_MEDIA_BIND", "0.0.0.0:7881"),
     };
     std::fs::create_dir_all(&data).expect("can't create the data folder");
     let db = db::Db::open(&data.join("comms.db")).expect("can't open the database");

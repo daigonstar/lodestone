@@ -26,6 +26,7 @@ stores ciphertext it can't read.
 | when messages are sent, their size, and by which device | passwords (there are none: devices sign in with their key) |
 | the size of attached files and when they were sent | what's in attached files, their names or types |
 | your chosen status and status message, and when your app last checked in | |
+| who is in which call, mute and deafen state, and the size and timing of encrypted audio | what anyone says in a call |
 
 The host's logs never contain session tokens or invite codes.
 
@@ -185,6 +186,26 @@ someone else's; clients show the real `@username` beside a display name.
   `offline`, with no message.
 - The host keeps "last checked in" in memory only. Statuses and messages are visible to the host.
 
+## Calls (voice channels)
+
+Channels have a `kind`: `text` (default) or `voice` (`POST /v1/spaces/{space}/channels` `{ name, kind }`).
+Each voice channel is also an MLS group, like a text channel; its members' devices are added the same way.
+
+The host runs a media relay (an SFU) on one UDP port. It forwards each participant's audio to the others
+without decoding it. Clients encrypt every audio frame before sending (frame keys come from the voice
+channel's MLS group; details in the next protocol version), so the relay can't hear calls.
+
+- `GET /v1/channels/{channel}/voice` (members): `{ enabled, participants: [{ username, device, slot, muted, deafened }] }`.
+  Channel lists in `GET /v1/spaces/{space}` show `in_call` (usernames) for voice channels.
+- `POST /v1/channels/{channel}/voice/join` `{ offer, muted, deafened }`: a WebRTC offer (JSON) with one
+  send-only audio track and up to 16 receive-only ones, in that order. Returns `{ answer, slot, participants }`.
+  The relay writes each participant's audio into the receive track matching their `slot` on everyone
+  else's connection, so nobody needs to renegotiate when people join or leave. At most 16 people per call.
+- `POST /v1/channels/{channel}/voice/state` `{ muted, deafened }`: deafened participants aren't sent audio.
+- `POST /v1/channels/{channel}/voice/leave`. Removing someone from a server also ends their calls in it.
+- The relay is ICE-lite with one advertised address (`COMMS_MEDIA_ADDR`); transport is DTLS-SRTP. With
+  direct UDP, people in a call see that address (a home IP when self-hosted at home).
+
 ## Live connection
 
 `GET /v1/live` upgrades to a WebSocket. The session token goes in the `Sec-WebSocket-Protocol` header as
@@ -202,7 +223,6 @@ someone else's; clients show the real `@username` beside a display name.
 
 ## Later (not in version 1 yet)
 
-- Voice, video and screen share: the host forwards encrypted media between clients (an SFU) without
-  decoding it. Media keys come from the channel's MLS group (the MLS exporter), SFrame-style.
+- Video and screen share through the same relay.
 - Message edits and deletes (as encrypted application messages).
 - Safety-number checks between members (comparing everyone's keys out of band).

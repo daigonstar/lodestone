@@ -53,6 +53,8 @@ Without containers (for development): `cargo run -p lodestone-comms-server`, lis
 | `COMMS_ADMIN_ONLY_SPACES` | `false` | `true` lets only host admins create servers |
 | `COMMS_MAX_FILE_MB` | `10` | largest attachment (files are encrypted before they reach the host) |
 | `COMMS_SPACE_QUOTA_MB` | `2048` | attachment space per server |
+| `COMMS_MEDIA_ADDR` | (off) | the voice relay's address as clients reach it, `host:port` (UDP); voice is off without it |
+| `COMMS_MEDIA_BIND` | `0.0.0.0:7881` | where the voice relay listens (forward this UDP port on your router) |
 
 ## Tests
 

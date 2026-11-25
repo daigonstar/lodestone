@@ -15,7 +15,7 @@ fn host() -> (Shared, String) {
     let db = Db::memory();
     let code = db.setup_code_if_new().unwrap().unwrap();
     let blob_dir = std::env::temp_dir().join(format!("comms-blobs-{}-{}", std::process::id(), crate::util::new_id()));
-    (app(Config { public_url: HOST.into(), admin_only_spaces: false, blob_dir, max_file: 64 * 1024, space_quota: 200 * 1024 }, db), code)
+    (app(Config { public_url: HOST.into(), admin_only_spaces: false, blob_dir, max_file: 64 * 1024, space_quota: 200 * 1024, media_addr: None, media_bind: String::new() }, db), code)
 }
 
 async fn call(app: &Shared, method: &str, path: &str, token: Option<&str>, body: Value) -> (StatusCode, Value) {
@@ -441,4 +441,150 @@ async fn pairing_needs_a_code_and_approval() {
     assert_eq!(call(&app, "POST", "/v1/devices/remove", Some(&ta), json!({ "device_key": laptop.public() })).await.0, StatusCode::BAD_REQUEST);
     assert_eq!(call(&app, "POST", "/v1/devices/remove", Some(&ta), json!({ "device_key": desktop.public() })).await.0, StatusCode::OK);
     assert_eq!(call(&app, "GET", "/v1/me", Some(&td), Value::Null).await.0, StatusCode::UNAUTHORIZED);
+}
+
+// ---------- voice relay ----------
+
+mod voice_test {
+    use std::net::UdpSocket;
+    use std::time::{Duration, Instant};
+    use str0m::change::{SdpAnswer, SdpPendingOffer};
+    use str0m::media::{Direction, Frequency, MediaKind, MediaTime, Mid};
+    use str0m::net::{Protocol, Receive};
+    use str0m::{Candidate, Event, Input, Output, Rtc};
+
+    pub struct Peer {
+        pub rtc: Rtc,
+        pub socket: UdpSocket,
+        pub send: Mid,
+        pub recv: Vec<Mid>,
+        pub pending: Option<SdpPendingOffer>,
+    }
+
+    /// A test client's offer: one send-only audio track and 16 receive-only ones, like Comms will use.
+    pub fn offer() -> (Peer, serde_json::Value) {
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut rtc = Rtc::builder().clear_codecs().enable_opus(true, false).build(Instant::now());
+        rtc.add_local_candidate(Candidate::host(socket.local_addr().unwrap(), "udp").unwrap());
+        let mut api = rtc.sdp_api();
+        let send = api.add_media(MediaKind::Audio, Direction::SendOnly, None, None, None);
+        let recv: Vec<Mid> = (0..super::super::voice::SLOTS).map(|_| api.add_media(MediaKind::Audio, Direction::RecvOnly, None, None, None)).collect();
+        let (offer, pending) = api.apply().unwrap();
+        (Peer { rtc, socket, send, recv, pending: Some(pending) }, serde_json::to_value(&offer).unwrap())
+    }
+
+    pub fn accept(p: &mut Peer, answer: serde_json::Value) {
+        let answer: SdpAnswer = serde_json::from_value(answer).unwrap();
+        p.rtc.sdp_api().accept_answer(p.pending.take().unwrap(), answer).unwrap();
+    }
+
+    /// Run a client for `secs`: send a frame labelled `label` every 20 ms once connected; return what
+    /// arrived as (receive track index, payload).
+    pub fn drive(mut p: Peer, label: &'static str, secs: u64) -> Vec<(usize, Vec<u8>)> {
+        let start = Instant::now();
+        let mut got = Vec::new();
+        let mut buf = vec![0u8; 2000];
+        let mut n = 0u64;
+        let mut next = Instant::now();
+        while start.elapsed() < Duration::from_secs(secs) {
+            let mut timeout = Instant::now() + Duration::from_millis(20);
+            loop {
+                match p.rtc.poll_output().unwrap() {
+                    Output::Timeout(t) => {
+                        timeout = timeout.min(t);
+                        break;
+                    }
+                    Output::Transmit(t) => {
+                        let _ = p.socket.send_to(&t.contents, t.destination);
+                    }
+                    Output::Event(Event::MediaData(d)) => {
+                        if let Some(i) = p.recv.iter().position(|m| *m == d.mid) {
+                            got.push((i, d.data.to_vec()));
+                        }
+                    }
+                    Output::Event(_) => {}
+                }
+            }
+            if p.rtc.is_connected() && Instant::now() >= next {
+                if let Some(w) = p.rtc.writer(p.send) {
+                    let pt = w.payload_params().next().map(|x| x.pt());
+                    if let Some(pt) = pt {
+                        let _ = w.write(pt, Instant::now(), MediaTime::new(n * 960, Frequency::FORTY_EIGHT_KHZ), format!("{label}-{n}").into_bytes());
+                        n += 1;
+                    }
+                }
+                next = Instant::now() + Duration::from_millis(20);
+                continue;
+            }
+            let wait = timeout.saturating_duration_since(Instant::now()).max(Duration::from_millis(1));
+            p.socket.set_read_timeout(Some(wait)).unwrap();
+            if let Ok((len, source)) = p.socket.recv_from(&mut buf) {
+                if let Ok(contents) = buf[..len].try_into() {
+                    let input = Input::Receive(Instant::now(), Receive { proto: Protocol::Udp, source, destination: p.socket.local_addr().unwrap(), contents });
+                    let _ = p.rtc.handle_input(input);
+                }
+            }
+            let _ = p.rtc.handle_input(Input::Timeout(Instant::now()));
+        }
+        got
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn voice_relay_forwards_between_participants() {
+    let port = std::net::UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let db = Db::memory();
+    let code = db.setup_code_if_new().unwrap().unwrap();
+    let blob_dir = std::env::temp_dir().join(format!("comms-voice-{}", std::process::id()));
+    let addr = format!("127.0.0.1:{port}");
+    let app = app(Config { public_url: HOST.into(), admin_only_spaces: false, blob_dir, max_file: 1 << 20, space_quota: 1 << 20, media_addr: Some(addr.clone()), media_bind: addr }, db);
+    let (alice, bob, carol) = (Device::new(), Device::new(), Device::new());
+    alice.register(&app, "alice", &code).await;
+    let ta = alice.sign_in(&app).await;
+    let (_, sp) = call(&app, "POST", "/v1/spaces", Some(&ta), json!({ "name": "Raid night" })).await;
+    let sid = sp["id"].as_str().unwrap().to_string();
+    let text = sp["channels"][0]["id"].as_str().unwrap().to_string();
+    let (_, vc) = call(&app, "POST", &format!("/v1/spaces/{sid}/channels"), Some(&ta), json!({ "name": "Lounge", "kind": "voice" })).await;
+    let voice = vc["id"].as_str().unwrap().to_string();
+    let (_, inv) = call(&app, "POST", &format!("/v1/spaces/{sid}/invites"), Some(&ta), json!({ "max_uses": 1, "expires_in": 3600 })).await;
+    bob.register(&app, "bob", inv["code"].as_str().unwrap()).await;
+    let tb = bob.sign_in(&app).await;
+
+    // Text channels don't take calls; outsiders can't join.
+    let (_, o) = voice_test::offer();
+    assert_eq!(call(&app, "POST", &format!("/v1/channels/{text}/voice/join"), Some(&ta), json!({ "offer": o })).await.0, StatusCode::BAD_REQUEST);
+    let (_, other) = call(&app, "POST", "/v1/spaces", Some(&ta), json!({ "name": "Other" })).await;
+    let (_, inv2) = call(&app, "POST", &format!("/v1/spaces/{}/invites", other["id"].as_str().unwrap()), Some(&ta), json!({ "max_uses": 1, "expires_in": 3600 })).await;
+    carol.register(&app, "carol", inv2["code"].as_str().unwrap()).await;
+    let tc = carol.sign_in(&app).await;
+    assert_eq!(call(&app, "POST", &format!("/v1/channels/{voice}/voice/join"), Some(&tc), json!({ "offer": o })).await.0, StatusCode::NOT_FOUND);
+
+    // Alice and Bob join and get slots 0 and 1.
+    let (mut pa, oa) = voice_test::offer();
+    let (s, ja) = call(&app, "POST", &format!("/v1/channels/{voice}/voice/join"), Some(&ta), json!({ "offer": oa })).await;
+    assert_eq!(s, StatusCode::OK, "{ja}");
+    voice_test::accept(&mut pa, ja["answer"].clone());
+    let (mut pb, ob) = voice_test::offer();
+    let (_, jb) = call(&app, "POST", &format!("/v1/channels/{voice}/voice/join"), Some(&tb), json!({ "offer": ob })).await;
+    voice_test::accept(&mut pb, jb["answer"].clone());
+    assert_eq!((ja["slot"].as_u64(), jb["slot"].as_u64()), (Some(0), Some(1)));
+    let (_, st) = call(&app, "GET", &format!("/v1/channels/{voice}/voice"), Some(&tb), Value::Null).await;
+    assert_eq!(st["participants"].as_array().unwrap().len(), 2);
+    let (_, space) = call(&app, "GET", &format!("/v1/spaces/{sid}"), Some(&ta), Value::Null).await;
+    assert_eq!(space["channels"][1]["in_call"], json!(["alice", "bob"]));
+
+    // Both talk for three seconds through the relay.
+    let ha = std::thread::spawn(move || voice_test::drive(pa, "alice", 3));
+    let hb = std::thread::spawn(move || voice_test::drive(pb, "bob", 3));
+    let (got_a, got_b) = (ha.join().unwrap(), hb.join().unwrap());
+    let from = |got: &[(usize, Vec<u8>)], slot: usize, who: &str| got.iter().filter(|(i, d)| *i == slot && String::from_utf8_lossy(d).starts_with(who)).count();
+    assert!(from(&got_b, 0, "alice") > 50, "Bob heard Alice in slot 0 ({} frames)", from(&got_b, 0, "alice"));
+    assert!(from(&got_a, 1, "bob") > 50, "Alice heard Bob in slot 1 ({} frames)", from(&got_a, 1, "bob"));
+    assert_eq!(from(&got_a, 0, "alice"), 0, "nobody hears themselves");
+
+    // Leaving empties the call.
+    call(&app, "POST", &format!("/v1/channels/{voice}/voice/leave"), Some(&ta), Value::Null).await;
+    call(&app, "POST", &format!("/v1/channels/{voice}/voice/leave"), Some(&tb), Value::Null).await;
+    let (_, st) = call(&app, "GET", &format!("/v1/channels/{voice}/voice"), Some(&tb), Value::Null).await;
+    assert_eq!(st["participants"].as_array().unwrap().len(), 0);
 }

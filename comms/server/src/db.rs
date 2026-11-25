@@ -114,6 +114,7 @@ const ADDED: &[(&str, &str, &str)] = &[
     ("channels", "position", "INTEGER NOT NULL DEFAULT 0"),
     ("accounts", "status", "TEXT NOT NULL DEFAULT 'online'"),
     ("accounts", "status_text", "TEXT NOT NULL DEFAULT ''"),
+    ("channels", "kind", "TEXT NOT NULL DEFAULT 'text'"),
 ];
 
 fn migrate(c: &Connection) -> rusqlite::Result<()> {

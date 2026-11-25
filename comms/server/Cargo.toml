@@ -16,6 +16,7 @@ base64 = "0.22"
 sha2 = "0.10"
 getrandom = "0.2"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+str0m = "0.25"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

@@ -53,6 +53,10 @@ pub fn router(app: Shared) -> Router {
             post(crate::blobs::upload).layer(axum::extract::DefaultBodyLimit::max(app.cfg.max_file as usize + 64 * 1024)),
         )
         .route("/v1/blobs/{id}", get(crate::blobs::download))
+        .route("/v1/channels/{channel}/voice", get(crate::voice::state))
+        .route("/v1/channels/{channel}/voice/join", post(crate::voice::join))
+        .route("/v1/channels/{channel}/voice/state", post(crate::voice::set_state))
+        .route("/v1/channels/{channel}/voice/leave", post(crate::voice::leave))
         .route("/v1/welcomes", post(send_welcome).get(take_welcomes))
         .route("/v1/live", get(crate::live::connect))
         .route("/join/{code}", get(join_page))
@@ -140,6 +144,9 @@ async fn me(State(app): State<Shared>, me: Auth) -> ApiResult<Json<Value>> {
 #[derive(Deserialize)]
 struct NameReq {
     name: String,
+    /// "text" (default) or "voice".
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 async fn create_space(State(app): State<Shared>, me: Auth, Json(r): Json<NameReq>) -> ApiResult<Json<Value>> {
@@ -164,8 +171,14 @@ async fn get_space(State(app): State<Shared>, me: Auth, Path(space): Path<String
         let (name, description, has_icon): (String, String, bool) =
             c.query_row("SELECT name, description, icon IS NOT NULL FROM spaces WHERE id = ?1", [&space], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         let channels: Vec<Value> = c
-            .prepare("SELECT id, name, epoch, topic FROM channels WHERE space = ?1 ORDER BY position, created, name")?
-            .query_map([&space], |r| Ok(json!({ "id": r.get::<_, String>(0)?, "name": r.get::<_, String>(1)?, "epoch": r.get::<_, i64>(2)?, "topic": r.get::<_, String>(3)? })))?
+            .prepare("SELECT id, name, epoch, topic, kind FROM channels WHERE space = ?1 ORDER BY position, created, name")?
+            .query_map([&space], |r| {
+                let id: String = r.get(0)?;
+                let kind: String = r.get(4)?;
+                // Who's in a voice channel right now (usernames), for the channel list.
+                let in_call = if kind == "voice" { app.voice.usernames(&id) } else { Vec::new() };
+                Ok(json!({ "id": id, "name": r.get::<_, String>(1)?, "epoch": r.get::<_, i64>(2)?, "topic": r.get::<_, String>(3)?, "kind": kind, "in_call": in_call }))
+            })?
             .collect::<Result<_, _>>()?;
         // Members with their device keys: clients check MLS credentials against these.
         let mut members: Vec<Value> = Vec::new();
@@ -186,6 +199,10 @@ async fn get_space(State(app): State<Shared>, me: Auth, Path(space): Path<String
 async fn create_channel(State(app): State<Shared>, me: Auth, Path(space): Path<String>, Json(r): Json<NameReq>) -> ApiResult<Json<Value>> {
     require_admin(&app, &space, &me)?;
     let name = clean_name(&r.name)?;
+    let kind = r.kind.clone().unwrap_or_else(|| "text".into());
+    if kind != "text" && kind != "voice" {
+        return Err(ApiError::bad("kind must be text or voice"));
+    }
     let id = new_id();
     let count: i64 = app.db.with(|c| c.query_row("SELECT COUNT(*) FROM channels WHERE space = ?1", [&space], |r| r.get(0)))?;
     if count >= 200 {
@@ -193,12 +210,12 @@ async fn create_channel(State(app): State<Shared>, me: Auth, Path(space): Path<S
     }
     app.db.with(|c| {
         c.execute(
-            "INSERT INTO channels (id, space, name, created, position) VALUES (?1, ?2, ?3, ?4, (SELECT COALESCE(MAX(position), -1) + 1 FROM channels WHERE space = ?2))",
-            params![id, space, name, now()],
+            "INSERT INTO channels (id, space, name, created, position, kind) VALUES (?1, ?2, ?3, ?4, (SELECT COALESCE(MAX(position), -1) + 1 FROM channels WHERE space = ?2), ?5)",
+            params![id, space, name, now(), kind],
         )
     })?;
-    app.live.to_space(&app, &space, json!({ "type": "channel_created", "space": space, "channel": id, "name": name }));
-    Ok(Json(json!({ "id": id, "name": name, "epoch": 0 })))
+    app.live.to_space(&app, &space, json!({ "type": "channel_created", "space": space, "channel": id, "name": name, "kind": kind }));
+    Ok(Json(json!({ "id": id, "name": name, "epoch": 0, "kind": kind })))
 }
 
 // ---------- invites and members ----------
@@ -297,6 +314,7 @@ async fn remove_member(State(app): State<Shared>, me: Auth, Path((space, usernam
         }
         Ok(())
     })?;
+    app.voice.remove_account(target, &crate::voice::space_channels(&app, &space));
     // Their live connection stops getting this space's events at once (the hub checks membership on send).
     app.live.to_space(&app, &space, json!({ "type": "member_left", "space": space, "username": username.to_ascii_lowercase() }));
     Ok(Json(json!({ "ok": true })))

@@ -9,7 +9,7 @@ async fn start_host(dir: &Path) -> (String, String) {
     let url = format!("http://{}", listener.local_addr().unwrap());
     let db = Db::open(&dir.join("host.db")).unwrap();
     let code = db.setup_code_if_new().unwrap().unwrap();
-    let state = app(Config { public_url: url.clone(), admin_only_spaces: false, blob_dir: dir.join("blobs"), max_file: 10 << 20, space_quota: 100 << 20 }, db);
+    let state = app(Config { public_url: url.clone(), admin_only_spaces: false, blob_dir: dir.join("blobs"), max_file: 10 << 20, space_quota: 100 << 20, media_addr: None, media_bind: String::new() }, db);
     tokio::spawn(serve(listener, state));
     (url, code)
 }
