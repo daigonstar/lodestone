@@ -692,7 +692,7 @@ fn pick_article<'a>(title: &str, results: &'a [String]) -> Option<&'a String> {
 }
 
 /// The game's Wikipedia summary, plus developer, publisher, release date and website from Wikidata.
-async fn wikipedia_details(title: &str) -> Option<Details> {
+pub(crate) async fn wikipedia_details(title: &str) -> Option<Details> {
     let q = urlencoding::encode(&format!("{title} video game")).into_owned();
     let s = net::get_json(&format!("https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={q}&srlimit=6&format=json"), &[]).await.ok()?;
     let results: Vec<String> = s["query"]["search"].as_array().into_iter().flatten().filter_map(|r| r["title"].as_str().map(String::from)).collect();

@@ -2615,6 +2615,19 @@
  {
   "type": "archive",
   "archive-type": "tar-gzip",
+  "url": "https://static.crates.io/crates/md-5/md-5-0.10.6.crate",
+  "sha256": "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf",
+  "dest": "cargo/vendor/md-5-0.10.6"
+ },
+ {
+  "type": "inline",
+  "contents": "{\"package\": \"d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf\", \"files\": {}}",
+  "dest": "cargo/vendor/md-5-0.10.6",
+  "dest-filename": ".cargo-checksum.json"
+ },
+ {
+  "type": "archive",
+  "archive-type": "tar-gzip",
   "url": "https://static.crates.io/crates/memchr/memchr-2.8.3.crate",
   "sha256": "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98",
   "dest": "cargo/vendor/memchr-2.8.3"

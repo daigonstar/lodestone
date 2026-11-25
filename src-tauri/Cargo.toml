@@ -1,6 +1,6 @@
 [package]
 name = "lodestone"
-version = "0.1.2"
+version = "0.2.0"
 description = "One launcher for every game library on Linux"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/daigonstar/lodestone"
@@ -22,6 +22,8 @@ sha2 = "0.10"
 # RetroArch cores come as .zip files from libretro's build server; only plain (deflate) zips are needed.
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 crc32fast = "1"
+# RetroAchievements identifies ROMs by MD5 (same RustCrypto family as sha2).
+md-5 = "0.10"
 urlencoding = "2"
 tokio = { version = "1", features = ["sync", "time"] }
 

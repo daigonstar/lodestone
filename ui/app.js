@@ -188,13 +188,15 @@ function compatMatch(g, f) {
 }
 
 if (T) T.event.listen("series-updated", () => load(true));
+// RetroAchievements matched more ROMs or fetched box art: reload (and carry on with the next batch).
+if (T) T.event.listen("ra-updated", () => load(true));
 async function load(quiet = false) {
   await loadWinapps();
   try {
     state.games = await invoke("list_games");
     keyCache.clear();
     try { state.systems = await invoke("emu_systems"); } catch { state.systems = []; }
-    try { const st = await invoke("get_settings"); state.kilnPlay = st.kiln_play !== false; state.steamBg = st.steam_background !== false; state.mangohudAll = !!st.mangohud; } catch { state.kilnPlay = true; state.steamBg = true; }
+    try { const st = await invoke("get_settings"); state.kilnPlay = st.kiln_play !== false; state.steamBg = st.steam_background !== false; state.mangohudAll = !!st.mangohud; state.emuMenu = !!st.emu_menu_entry; } catch { state.kilnPlay = true; state.steamBg = true; }
   } catch (e) {
     toast(String(e), true);
     state.games = [];
@@ -206,6 +208,12 @@ async function load(quiet = false) {
   loadCompat();
   // Look up series for games not checked yet (no-op when everything is cached).
   if (state.games.length) invoke("refresh_series").catch(() => {});
+  // Once per session: the sync keeps going in the background and sends "ra-updated" as it goes.
+  if (!state.raSynced && state.games.some((g) => g.system)) {
+    state.raSynced = true;
+    invoke("ra_sync").catch((e) => console.warn("RetroAchievements:", e));
+    invoke("thumbs_sync").catch((e) => console.warn("libretro thumbnails:", e));
+  }
   if (!quiet) {
     const n = state.games.filter((g) => g.installed).length;
     toast(`${n} installed games across ${new Set(state.games.map((g) => g.store)).size} stores`);
@@ -348,7 +356,10 @@ function cardHTML(g) {
   const others = mergeOn() ? (state.copies.get(titleKey(g.title)) || []).filter((c) => c.id !== g.id) : [];
   const wide = state.layout === "banner";
   const fb = !wide && g.art_missing ? fallbackArt(g) : null;
-  const src = fb ? null : wide ? imgSrc(g.hero || g.cover, 640) : imgSrc(g.cover, state.layout === "compact" ? 220 : 360);
+  // ROM box art comes in every shape (square GBA boxes, wide SNES ones, title screens), so show it whole
+  // over a blurred copy instead of cropping it to the 2:3 card.
+  const fit = !wide && !fb && g.system && g.cover ? imgSrc(g.cover, state.layout === "compact" ? 220 : 360) : null;
+  const src = fb || fit ? null : wide ? imgSrc(g.hero || g.cover, 640) : imgSrc(g.cover, state.layout === "compact" ? 220 : 360);
   const run = state.running.get(g.id);
   const isSel = g.id === state.selected || (others.length && state.selKey === titleKey(g.title));
   const cls = ["card", g.installed ? "" : "uninstalled", isSel ? "selected" : "", run ? "running" : ""].join(" ");
@@ -357,6 +368,7 @@ function cardHTML(g) {
     <div class="art" style="${placeholder(g)}">
       <div class="ph">${esc(g.title)}</div>
       ${src ? `<img loading="lazy" decoding="async" src="${esc(src)}" alt="" data-err="remove">` : ""}
+      ${fit ? `<div class="fb-art fit"><div class="fb-blur" style="background-image:url('${cssUrl(fit)}')"></div><img loading="lazy" decoding="async" src="${esc(fit)}" alt="" data-err="parent"></div>` : ""}
       ${fb ? `<div class="fb-art"><div class="fb-blur" style="background-image:url('${cssUrl(fb)}')"></div><img loading="lazy" src="${esc(fb)}" alt="" data-err="parent"><div class="fb-title">${esc(g.title)}</div></div>` : ""}
       <span class="badges">${dots.map((d) => `<span class="badge" style="background:${d.color}" title="${d.label}"></span>`).join("")}</span>
       ${g.favorite ? '<span class="fav">★</span>' : ""}
@@ -430,7 +442,16 @@ function renderSystemPanel(el) {
         <select id="emu-choice">${sys.options.map((o) => `<option value="${o.index}" ${o.index === cur.index ? "selected" : ""}>${esc(o.label)}${o.installed ? "" : " (not installed)"}</option>`).join("")}</select>
       </label>
       ${!cur.installed && cur.can_install ? `<button class="play" id="emu-install" ${busy ? "disabled" : ""}>${busy ? "Installing…" : "Install"}</button>` : ""}
+      ${!cur.installed && cur.can_install && cur.in_menu == null ? `<label class="emu-menu" title="Flatpak adds installed apps to your desktop's app menu. Leave this off to only start ${esc(cur.emulator)} from Lodestone.">
+        <input type="checkbox" id="emu-menu" ${state.emuMenu ? "checked" : ""}> Add to my app menu</label>` : ""}
+      ${cur.in_menu != null ? `<label class="emu-menu" title="Hiding adds a copy of its menu entry marked NoDisplay to ~/.local/share/applications; showing removes it.">
+        <input type="checkbox" id="emu-menu-toggle" ${cur.in_menu ? "checked" : ""}> Show ${esc(cur.emulator)} in my app menu</label>` : ""}
     </div>`;
+  const mt = $("#emu-menu-toggle");
+  if (mt) mt.onchange = async (e) => {
+    try { await invoke("emu_menu_entry", { system: sys.id, index: cur.index, show: e.target.checked }); await load(true); }
+    catch (err) { e.target.checked = !e.target.checked; toast(String(err), true); }
+  };
   $("#emu-choice").onchange = async (e) => {
     try { await invoke("emu_set_choice", { system: sys.id, index: Number(e.target.value) }); await load(true); } catch (err) { toast(String(err), true); }
   };
@@ -439,7 +460,9 @@ function renderSystemPanel(el) {
     state.emuBusy = sys.id;
     renderSystemPanel(el);
     try {
-      const how = await invoke("emu_install", { system: sys.id, index: cur.index });
+      const menu = !!($("#emu-menu") && $("#emu-menu").checked);
+      state.emuMenu = menu;
+      const how = await invoke("emu_install", { system: sys.id, index: cur.index, menu });
       if (how === "installing") { toast(`Installing ${cur.emulator} in the background. Follow it in Downloads.`); pollDownloads(); }
       else { toast(how === "done" ? `${cur.label} is ready` : `${cur.label} is already installed`); await load(true); }
     } catch (err) { toast(String(err), true); }
@@ -1294,6 +1317,8 @@ $("#btn-settings").onclick = async () => {
   $("#form-settings").gamesdir.value = s.games_dir || "";
   $("#form-settings").steamkey.value = s.steam_api_key || "";
   $("#form-settings").sgdb.value = s.steamgriddb_key || "";
+  $("#form-settings").rauser.value = s.ra_user || "";
+  $("#form-settings").rakey.value = s.ra_key || "";
   renderProton().catch((e) => toast(String(e), true));
   renderMangohud().catch((e) => toast(String(e), true));
   $("#dlg-settings").showModal();
@@ -1302,7 +1327,12 @@ $("#form-settings").onsubmit = async (e) => {
   e.preventDefault();
   try {
     const keyChanged = e.target.steamkey.value.trim() !== ((await invoke("get_settings")).steam_api_key || "");
-    await invoke("save_settings", { curseforgeApiKey: e.target.cf.value, gamesDir: e.target.gamesdir.value, steamApiKey: e.target.steamkey.value, steamgriddbKey: e.target.sgdb.value });
+    const before = await invoke("get_settings");
+    await invoke("save_settings", { curseforgeApiKey: e.target.cf.value, gamesDir: e.target.gamesdir.value, steamApiKey: e.target.steamkey.value, steamgriddbKey: e.target.sgdb.value, raUser: e.target.rauser.value, raKey: e.target.rakey.value });
+    if ((e.target.rauser.value.trim() && e.target.rakey.value.trim()) && (before.ra_user !== e.target.rauser.value.trim() || before.ra_key !== e.target.rakey.value.trim())) {
+      toast("Matching your ROMs with RetroAchievements in the background…");
+      invoke("ra_sync").catch((err) => toast(String(err), true));
+    }
     await invoke("set_proton", { path: e.target.proton.value });
     $("#dlg-settings").close();
     toast("Settings saved");
@@ -1761,6 +1791,96 @@ function newsHTML(n, withGame) {
       ${n.summary ? `<div class="news-sum">${esc(n.summary)}</div>` : ""}
     </div></div>`;
 }
+// Achievements for the game in the details panel: RetroAchievements for ROMs.
+const achCache = new Map();
+/** A store game's achievements (Steam): icons, your unlocks and how rare each one is. */
+async function renderStoreAchievements(g) {
+  const wrap = $("#about-ach-wrap"), el = $("#about-ach");
+  const id = g.id;
+  const show = (info) => {
+    if (state.selected !== id) return;
+    if (!info || !info.achievements.length) return wrap.classList.add("hidden");
+    wrap.classList.remove("hidden");
+    const total = info.achievements.length;
+    const pct = Math.round((info.earned / total) * 100);
+    $("#about-ach-title").innerHTML = `Achievements <small class="muted">· ${esc(info.source)}</small>`;
+    // Earned first (newest first), then the rest from most to least common.
+    const list = [...info.achievements].sort((a, b) => (b.earned_at - a.earned_at) || ((b.percent ?? 0) - (a.percent ?? 0)));
+    const badge = (a) => {
+      const got = a.earned_at > 0;
+      const secret = a.hidden && !got;
+      const rare = a.percent != null ? `\n${a.percent < 1 ? a.percent.toFixed(1) : Math.round(a.percent)}% of players have it` : "";
+      const tip = secret ? `Hidden achievement${rare}` : `${a.title}\n${a.description || ""}${got ? `\nEarned ${new Date(a.earned_at * 1000).toLocaleDateString()}` : ""}${rare}`;
+      const src = got ? a.icon : (a.icon_locked || a.icon);
+      return `<img class="ach-badge ${got ? "got" : ""} ${a.percent != null && a.percent < 5 ? "rare" : ""}" loading="lazy" alt="" title="${esc(tip)}" src="${esc(src)}" data-err="hide">`;
+    };
+    el.innerHTML = `<div class="ach-sum"><div class="bar"><span style="width:${Math.max(2, pct)}%"></span></div>
+        <span><b>${info.earned}</b> of ${total} earned</span>
+        <button class="ghost small" data-page="${esc(info.url)}" data-page-title="${esc(g.title)}">On ${esc(info.source)}</button></div>
+      <div class="ach-grid">${list.map(badge).join("")}</div>`;
+  };
+  if (achCache.has(id)) return show(achCache.get(id));
+  wrap.classList.remove("hidden");
+  $("#about-ach-title").textContent = "Achievements";
+  el.innerHTML = '<span class="muted">Loading achievements…</span>';
+  try {
+    const info = await invoke("store_achievements", { id });
+    achCache.set(id, info);
+    show(info);
+  } catch (e) {
+    if (state.selected !== id) return;
+    el.innerHTML = String(e) === "need-key"
+      ? `<span class="muted">Add your Steam Web API key in <a href="#" data-click="btn-settings">Settings</a> to see this game's achievements.</span>`
+      : `<span class="err-text">${esc(String(e))}</span>`;
+  }
+}
+
+async function renderAchievements(g) {
+  const wrap = $("#about-ach-wrap"), el = $("#about-ach");
+  if (!g.system && g.store === "steam") return renderStoreAchievements(g);
+  if (!g.system) return wrap.classList.add("hidden");
+  wrap.classList.remove("hidden");
+  const id = g.id;
+  const show = (info) => {
+    if (state.selected !== id) return;
+    if (info === "signin") {
+      $("#about-ach-title").textContent = "Achievements";
+      el.innerHTML = `<span class="muted">Add your RetroAchievements username and Web API key in <a href="#" data-click="btn-settings">Settings</a> to see this game's achievements.</span>`;
+      return;
+    }
+    if (!info) {
+      $("#about-ach-title").textContent = "Achievements";
+      el.innerHTML = `<span class="muted">RetroAchievements doesn't know this ROM (or this version of it) yet.</span>`;
+      return;
+    }
+    const total = info.achievements.length;
+    $("#about-ach-title").innerHTML = `Achievements <small class="muted">· RetroAchievements</small>`;
+    if (!total) { el.innerHTML = `<span class="muted">${esc(info.title)} has no achievements on RetroAchievements yet.</span>`; return; }
+    const pct = Math.round((info.earned / total) * 100);
+    const badge = (a) => {
+      const got = a.earned || a.earned_hardcore;
+      const when = a.earned_hardcore || a.earned;
+      const tip = `${a.title} (${a.points} pts)\n${a.description}${got ? `\nEarned ${when}${a.earned_hardcore ? " · hardcore" : ""}` : ""}`;
+      return `<img class="ach-badge ${got ? "got" : ""} ${a.earned_hardcore ? "hc" : ""}" loading="lazy" alt="" title="${esc(tip)}" src="https://media.retroachievements.org/Badge/${encodeURIComponent(a.badge)}${got ? "" : "_lock"}.png" data-err="hide">`;
+    };
+    el.innerHTML = `<div class="ach-sum"><div class="bar"><span style="width:${Math.max(2, pct)}%"></span></div>
+        <span><b>${info.earned}</b> of ${total} earned · ${info.points_earned} / ${info.points_total} points${info.earned_hardcore ? ` · ${info.earned_hardcore} hardcore` : ""}</span>
+        <button class="ghost small" data-page="${esc(info.url)}" data-page-title="${esc(info.title)}">On RetroAchievements</button></div>
+      <div class="ach-grid">${info.achievements.map(badge).join("")}</div>`;
+  };
+  if (achCache.has(id)) return show(achCache.get(id));
+  el.innerHTML = '<span class="muted">Loading achievements…</span>';
+  try {
+    const st = await invoke("get_settings");
+    if (!(st.ra_user && st.ra_key)) return show("signin");
+    const info = await invoke("ra_game", { id });
+    achCache.set(id, info);
+    show(info);
+  } catch (e) {
+    if (state.selected === id) el.innerHTML = `<span class="err-text">${esc(String(e))}</span>`;
+  }
+}
+
 async function renderAbout(g) {
   const el = $("#about");
   if (!g || ["home", "minecraft", "downloads"].includes(state.view) || state.view.startsWith("shop:")) return el.classList.add("hidden");
@@ -1800,6 +1920,7 @@ async function renderAbout(g) {
     invoke("game_details", { id }).then((d) => { detailsCache.set(id, d); fill(d); renderCompat(g, d); }).catch(() => fill({}));
   }
   renderOwners(g);
+  renderAchievements(g);
   const nc = gameNewsCache.get(id);
   const showNews = (list) => { if (state.selected === id) $("#about-news").innerHTML = list.length ? list.slice(0, 3).map((n) => newsHTML(n, false)).join("") : '<span class="muted">No recent news.</span>'; };
   if (nc) showNews(nc);

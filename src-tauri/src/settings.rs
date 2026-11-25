@@ -36,9 +36,17 @@ pub struct Settings {
     /// An Emulation folder (with roms/<system> inside) to use besides the ones found automatically.
     #[serde(default)]
     pub emulation_dir: String,
+    /// RetroAchievements username and Web API key (retroachievements.org → Settings → Keys).
+    #[serde(default)]
+    pub ra_user: String,
+    #[serde(default)]
+    pub ra_key: String,
     /// The emulator chosen per system: system id -> index of its launch command.
     #[serde(default)]
     pub emu_choice: std::collections::HashMap<String, usize>,
+    /// Emulators Lodestone installs get an app menu entry (off: hidden, since you launch them here).
+    #[serde(default)]
+    pub emu_menu_entry: bool,
 }
 
 fn yes() -> bool {

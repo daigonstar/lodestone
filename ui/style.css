@@ -180,6 +180,17 @@ a { color: var(--accent-2); }
 
 /* Minecraft hub */
 .mc { padding: 18px 24px 80px; }
+.ra-row { gap: 12px; }
+.ra-row label { flex: 1; }
+.ach-sum { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+.ach-sum b { color: var(--text); }
+.ach-sum .bar { flex: 1; min-width: 140px; height: 8px; background: #ffffff14; border-radius: 99px; overflow: hidden; }
+.ach-sum .bar span { display: block; height: 100%; background: linear-gradient(90deg, #f5b14a, #f58a4a); }
+.ach-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+.ach-badge { width: 44px; height: 44px; border-radius: 6px; background: var(--bg-3); opacity: .55; filter: grayscale(.6); }
+.ach-badge.got { opacity: 1; filter: none; }
+.ach-badge.hc { box-shadow: 0 0 0 2px #f5b14a; }
+.ach-badge.got.rare { box-shadow: 0 0 0 2px #b58cff; }
 .emu-pick { align-items: center; gap: 10px; }
 .emu-label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
 #emu-choice { background: var(--bg-3); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: var(--text); max-width: 320px; }
@@ -566,6 +577,8 @@ dialog.wide { width: min(860px, 94vw); }
 .fb-art { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; overflow: hidden; }
 .fb-blur { position: absolute; inset: -20px; background: center/cover; filter: blur(14px) brightness(.55); }
 .fb-art img { position: relative; inset: auto; width: 100%; height: auto; object-fit: contain; box-shadow: 0 6px 20px #000a; }
+.fb-art.fit { align-items: center; }
+.fb-art.fit img { width: auto; max-width: 100%; height: auto; max-height: 100%; box-shadow: 0 4px 14px #000a; }
 .fb-title { position: absolute; left: 10px; right: 10px; bottom: 10px; font-weight: 700; font-size: 13px; line-height: 1.2; text-shadow: 0 1px 6px #000; }
 dialog.wide { max-height: 92vh; overflow-y: auto; }
 dialog label small { color: var(--muted); font-weight: 400; }
@@ -617,3 +630,5 @@ dialog label small { color: var(--muted); font-weight: 400; }
 .detail-close { position: absolute; top: 12px; right: 12px; z-index: 3; width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--line); background: #0d0f14cc; color: var(--text); font-size: 14px; cursor: pointer; backdrop-filter: blur(6px); }
 .detail-close:hover { background: var(--accent, #6d5dfc); }
 @keyframes detail-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+.emu-menu { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; }

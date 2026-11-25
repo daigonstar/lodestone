@@ -477,7 +477,102 @@ const FLATHUB_REPO: &str = "https://dl.flathub.org/repo/flathub.flatpakrepo";
 /// Install what a system's chosen way of playing needs: the emulator from Flathub (a background job
 /// in Downloads, then its core) or just the RetroArch core. Returns "installing" (watch Downloads),
 /// "done", or "already".
-pub async fn install(system: &str, index: usize) -> Result<&'static str, String> {
+/// The Flatpak app ID an installed emulator runs from, if it's a Flatpak.
+fn flatpak_id(e: &Emulator) -> Option<&str> {
+    (e.program == "flatpak").then(|| e.pre_args.get(1).map(String::as_str)).flatten()
+}
+
+const MENU_MARK: &str = "# Hidden from the app menu by Lodestone. Delete this file to show it again.";
+
+/// The menu entries Flatpak exported for an app (user and system installs).
+fn exported_entries(app_id: &str) -> Vec<PathBuf> {
+    let dirs = [home().join(".local/share/flatpak/exports/share/applications"), PathBuf::from("/var/lib/flatpak/exports/share/applications")];
+    let mut out = Vec::new();
+    for d in dirs {
+        for e in fs::read_dir(&d).into_iter().flatten().flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with(app_id) && name.ends_with(".desktop") && !out.iter().any(|p: &PathBuf| p.file_name() == Some(e.file_name().as_os_str())) {
+                out.push(e.path());
+            }
+        }
+    }
+    out
+}
+
+fn menu_override(entry: &Path) -> PathBuf {
+    home().join(".local/share/applications").join(entry.file_name().unwrap_or_default())
+}
+
+/// An exported menu entry with NoDisplay=true added to its [Desktop Entry] section.
+fn hidden_entry(original: &str) -> String {
+    let mut out = format!("{MENU_MARK}\n");
+    let mut in_main = false;
+    for line in original.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            in_main = t == "[Desktop Entry]";
+            out.push_str(line);
+            out.push('\n');
+            if in_main {
+                out.push_str("NoDisplay=true\n");
+            }
+            continue;
+        }
+        if in_main && t.starts_with("NoDisplay") {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn menu_hidden(app_id: &str) -> bool {
+    exported_entries(app_id).iter().any(|e| fs::read_to_string(menu_override(e)).is_ok_and(|t| t.starts_with(MENU_MARK)))
+}
+
+/// Show or hide an emulator in the desktop's app menu. Hiding puts a copy of Flatpak's menu entry with
+/// NoDisplay=true in ~/.local/share/applications (which wins over Flatpak's); showing removes that copy.
+/// Files Lodestone didn't write are never touched.
+pub fn set_menu_entry(app_id: &str, show: bool) -> Result<(), String> {
+    let entries = exported_entries(app_id);
+    if entries.is_empty() && !show {
+        return Err("This emulator has no menu entry to hide".into());
+    }
+    for e in entries {
+        let target = menu_override(&e);
+        let ours = fs::read_to_string(&target).ok().map(|t| t.starts_with(MENU_MARK));
+        if show {
+            if ours == Some(true) {
+                fs::remove_file(&target).map_err(|err| err.to_string())?;
+            }
+        } else {
+            if ours == Some(false) {
+                return Err(format!("{} already has its own menu entry in ~/.local/share/applications; Lodestone left it alone", app_id));
+            }
+            let text = fs::read_to_string(&e).map_err(|err| err.to_string())?;
+            let _ = fs::create_dir_all(target.parent().unwrap());
+            fs::write(&target, hidden_entry(&text)).map_err(|err| err.to_string())?;
+        }
+    }
+    // Ask the desktop to notice (not needed everywhere; harmless when missing).
+    let mut cmd = std::process::Command::new("update-desktop-database");
+    cmd.arg(home().join(".local/share/applications"));
+    let _ = crate::host::wrap(cmd).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+    Ok(())
+}
+
+/// Show or hide the emulator a system plays with in the app menu.
+pub fn set_system_menu_entry(system: &str, index: usize, show: bool) -> Result<(), String> {
+    let sys = systems().into_iter().find(|s| s.id == system).ok_or("Unknown system")?;
+    let opt = sys.options.into_iter().find(|o| o.index == index).ok_or("Unknown emulator choice")?;
+    let def = EMULATORS.iter().find(|e| e.1 == opt.emulator).ok_or("Unknown emulator")?;
+    let emus = installed_emulators();
+    let id = emus.get(def.0).and_then(flatpak_id).ok_or("Only Flatpak emulators can be hidden from here")?;
+    set_menu_entry(id, show)
+}
+
+pub async fn install(system: &str, index: usize, menu: bool) -> Result<&'static str, String> {
     let sys = systems().into_iter().find(|s| s.id == system).ok_or("Unknown system")?;
     let opt = sys.options.into_iter().find(|o| o.index == index).ok_or("Unknown emulator choice")?;
     let def = EMULATORS.iter().find(|e| e.1 == opt.emulator).ok_or("Lodestone can't install this emulator")?;
@@ -495,10 +590,19 @@ pub async fn install(system: &str, index: usize) -> Result<&'static str, String>
         add.args(["remote-add", "--user", "--if-not-exists", "flathub", FLATHUB_REPO]);
         let _ = crate::host::wrap(add).stdin(std::process::Stdio::null()).output();
         let spec = LaunchSpec::new("flatpak", &["install", "--user", "-y", "--noninteractive", "flathub", app_id]);
-        let finish: Option<Box<dyn FnOnce() -> Result<(), String> + Send>> = match core.filter(|_| def.0 == "RETROARCH") {
-            Some(c) => Some(Box::new(move || tauri::async_runtime::block_on(download_core(&c)))),
-            None => None,
-        };
+        // After Flatpak finishes: hide its menu entry if you asked to, then RetroArch's core.
+        let core = core.filter(|_| def.0 == "RETROARCH");
+        let finish: Option<Box<dyn FnOnce() -> Result<(), String> + Send>> = Some(Box::new(move || {
+            if !menu {
+                if let Err(e) = set_menu_entry(app_id, false) {
+                    eprintln!("menu entry for {app_id}: {e}");
+                }
+            }
+            match core {
+                Some(c) => tauri::async_runtime::block_on(download_core(&c)),
+                None => Ok(()),
+            }
+        }));
         crate::downloads::start(&format!("emulation-install:{}", def.0.to_ascii_lowercase()), &format!("Installing {}", def.1), &spec, finish)?;
         return Ok("installing");
     }
@@ -574,6 +678,8 @@ pub struct EmuOption {
     pub installed: bool,
     /// Lodestone can install what's missing (a Flathub emulator, a core from libretro).
     pub can_install: bool,
+    /// For an installed Flatpak emulator: whether it shows in your desktop's app menu.
+    pub in_menu: Option<bool>,
 }
 
 /// One system with games, for the sidebar and its library.
@@ -636,6 +742,7 @@ fn options_for(info: &SystemInfo, emus: &HashMap<&'static str, Emulator>) -> Vec
                 installed: emu.is_some() && core_ok,
                 // RetroArch cores come from libretro's server, so only for the Flatpak or a missing RetroArch.
                 can_install: (emu.is_none() && flatpak) || (emu.is_some() && !core_ok && core.as_deref().is_some_and(valid_core) && emu.is_some_and(|e| e.program == "flatpak")),
+                in_menu: emu.and_then(flatpak_id).map(|id| !menu_hidden(id)),
                 core,
             })
         })
@@ -649,6 +756,12 @@ fn chosen(system: &str, options: &[EmuOption]) -> Option<usize> {
 }
 
 static SYSTEMS_SEEN: Mutex<Vec<System>> = Mutex::new(Vec::new());
+static ROMS_SEEN: Mutex<Vec<(String, PathBuf)>> = Mutex::new(Vec::new());
+
+/// (system, ROM path) of every game in the last scan.
+pub fn roms() -> Vec<(String, PathBuf)> {
+    ROMS_SEEN.lock().unwrap().clone()
+}
 
 pub fn systems() -> Vec<System> {
     SYSTEMS_SEEN.lock().unwrap().clone()
@@ -659,6 +772,7 @@ pub fn scan() -> Vec<Game> {
     let mut out = Vec::new();
     let mut seen: HashSet<(String, String, u64)> = HashSet::new();
     let mut by_system: HashMap<String, System> = HashMap::new();
+    let mut rom_paths: Vec<(String, PathBuf)> = Vec::new();
     for root in roots() {
         let media = media_roots(&root);
         let Ok(rd) = fs::read_dir(root.join("roms")) else { continue };
@@ -684,8 +798,23 @@ pub fn scan() -> Vec<Game> {
                 let file = Path::new(&rom.rel).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 let ext = info.exts.iter().filter(|e| file.to_ascii_lowercase().ends_with(e.as_str())).max_by_key(|e| e.len()).map(String::as_str);
                 let listed = names.get(&rom.rel);
-                let title = listed.map(|l| l.0.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| clean_title(&file, ext));
-                let cover = listed.and_then(|l| l.1.clone()).or_else(|| cover_for(&media, &info.id, &rom));
+                let mut title = listed.map(|l| l.0.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| clean_title(&file, ext));
+                let es_cover = listed.and_then(|l| l.1.clone()).or_else(|| cover_for(&media, &info.id, &rom)).map(|p| path_str(&p));
+                // RetroAchievements first (your choice): its title and box art, then ES-DE's, then
+                // libretro's thumbnails, then RA's icon.
+                let ra = super::retroachievements::match_rom(&info.id, &rom.path, &title);
+                let stem = Path::new(&file).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                let cover = match &ra {
+                    Some(g) => {
+                        title = super::retroachievements::display_title(&g.title);
+                        super::retroachievements::cached_box_art(g.id)
+                            .or(es_cover)
+                            .or_else(|| super::libretro_thumbs::cover(&info.id, &stem, &[&g.title, &title]))
+                            .or_else(|| (!g.icon.is_empty()).then(|| format!("{}{}", super::retroachievements::MEDIA, g.icon)))
+                    }
+                    None => es_cover.or_else(|| super::libretro_thumbs::cover(&info.id, &stem, &[&title])),
+                };
+                rom_paths.push((info.id.clone(), rom.path.clone()));
                 let launch = ordered.iter().find_map(|c| build_launch(c, &rom.path, &dir, &emus));
                 let no_emulator = launch.is_none();
                 let via = match &launch {
@@ -698,7 +827,8 @@ pub fn scan() -> Vec<Game> {
                     via,
                     title,
                     installed: true,
-                    cover: cover.map(|p| path_str(&p)),
+                    cover,
+                    ra_id: ra.as_ref().map(|g| g.id),
                     size: (rom.size > 0).then_some(rom.size),
                     launch: launch.map(|l| l.0),
                     detect: Some(Detect::Contains(file)),
@@ -725,6 +855,7 @@ pub fn scan() -> Vec<Game> {
     let mut list: Vec<System> = by_system.into_values().collect();
     list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     *SYSTEMS_SEEN.lock().unwrap() = list;
+    *ROMS_SEEN.lock().unwrap() = rom_paths;
     out
 }
 
@@ -743,6 +874,15 @@ mod tests {
         assert_eq!(core_crc(index, "bsnes_libretro.so.zip"), None);
         assert_eq!(core_label("mupen64plus_next_libretro.so"), "Mupen64Plus-Next");
         assert_eq!(core_label("beetle_new_thing_libretro.so"), "Beetle New Thing");
+    }
+
+    #[test]
+    fn hides_menu_entries_with_nodisplay() {
+        let src = "[Desktop Entry]\nName=RetroArch\nNoDisplay=false\nExec=flatpak run org.libretro.RetroArch\n\n[Desktop Action x]\nNoDisplay=false\n";
+        let out = hidden_entry(src);
+        assert!(out.starts_with(MENU_MARK));
+        assert!(out.contains("[Desktop Entry]\nNoDisplay=true\nName=RetroArch\nExec="));
+        assert_eq!(out.matches("NoDisplay=false").count(), 1, "other sections stay as they were");
     }
 
     #[test]

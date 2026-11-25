@@ -72,6 +72,21 @@
     <display_length compare="ge">768</display_length>
   </requires>
   <releases>
+    <release version="0.2.0" date="2026-11-25" type="development">
+      <description>
+        <p>The Emulation Update (beta): your ROMs as libraries in Lodestone, with achievements.</p>
+        <ul>
+          <li>ROMs in EmuDeck's folder layout show up as one library per system, with ES-DE's game names and covers</li>
+          <li>Choose the emulator for each system, and install missing emulators from Flathub (and RetroArch cores from libretro) in one click</li>
+          <li>Emulators installed by Lodestone stay out of your app menu unless you ask for them</li>
+          <li>RetroAchievements: ROMs are matched by fingerprint, with RetroAchievements names, box art and your achievement progress</li>
+          <li>Box art from libretro's thumbnail collection for ROMs that have none</li>
+          <li>Steam achievements in a game's details, with how rare each one is</li>
+          <li>Lodestone's version is shown in the sidebar and Settings</li>
+          <li>Steam updates requested from Lodestone start straight away instead of being scheduled for later</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.2" date="2026-11-22">
       <description>
         <p>Security and reliability release, following the first full security review (published in the repository).</p>

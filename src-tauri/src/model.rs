@@ -58,6 +58,9 @@ pub struct Game {
     /// Emulated games: the system ("snes", "psx"…), which is also its library in the sidebar.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
+    /// The matching RetroAchievements game, for emulated games.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ra_id: Option<u64>,
     /// An emulated game with no emulator installed that can run it yet.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub needs_emulator: bool,

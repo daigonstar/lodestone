@@ -72,8 +72,16 @@ api.curseforge.com                            # mod search, with your key
 console.curseforge.com                        # link to get a CurseForge key (opened in your browser)
 
 # --- Tools Lodestone sets up (official GitHub releases) ---
-api.github.com                                # newest release of umu-launcher, legendary, gogdl and MangoHud
+api.github.com                                # newest release of umu-launcher, legendary, gogdl and MangoHud; libretro box art lists
 github.com                                    # links to MangoHud's documentation (opened in your browser)
+
+# --- RetroAchievements (only with your RA username and Web API key set) ---
+retroachievements.org                         # game lists with ROM fingerprints, a game's details and your progress
+media.retroachievements.org                   # box art, screenshots and achievement badges
+
+# --- libretro thumbnails (box art for ROMs that RetroAchievements and ES-DE have none for) ---
+# The file lists come from api.github.com (above); the images from libretro's official repositories:
+raw.githubusercontent.com                     # libretro-thumbnails box art images
 
 # --- Emulation (only when you install an emulator or core from a system's library) ---
 buildbot.libretro.com                         # official RetroArch cores (checked against libretro's CRC32 list)

@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod achievements;
 mod downloads;
 mod friends;
 mod gog_setup;
@@ -973,7 +974,32 @@ async fn art_check(inner: State<'_, Shared>) -> Result<usize, String> {
 #[tauri::command]
 async fn game_details(id: String, inner: State<'_, Shared>) -> Result<meta::Details, String> {
     let title = game_title(&inner, &id)?;
-    meta::details(&id, &title).await
+    let (ra_id, emulated) = inner.games.lock().unwrap().get(&id).map(|g| (g.ra_id, g.system.is_some())).unwrap_or((None, false));
+    if !emulated {
+        return meta::details(&id, &title).await;
+    }
+    // ROMs: RetroAchievements first (developer, publisher, genre, release, images, its page), with a
+    // description from Wikipedia, which RA doesn't have.
+    let wiki = meta::wikipedia_details(&title).await.unwrap_or_default();
+    let ra = match ra_id {
+        Some(r) => stores::retroachievements::game_info(r).await.ok(),
+        None => None,
+    };
+    let Some(i) = ra else { return Ok(wiki) };
+    let one = |s: &str| if s.is_empty() { vec![] } else { vec![s.to_string()] };
+    let shots: Vec<(String, String)> = [&i.title_image, &i.ingame_image].into_iter().filter(|u| !u.is_empty()).map(|u| (u.clone(), u.clone())).collect();
+    Ok(meta::Details {
+        description: wiki.description,
+        developers: if i.developer.is_empty() { wiki.developers } else { one(&i.developer) },
+        publishers: if i.publisher.is_empty() { wiki.publishers } else { one(&i.publisher) },
+        release: if i.released.is_empty() { wiki.release } else { i.released.split(' ').next().unwrap_or("").to_string() },
+        features: one(&i.genre),
+        screenshots: shots,
+        store_url: i.url.clone(),
+        website: wiki.website,
+        source: "RetroAchievements".into(),
+        ..Default::default()
+    })
 }
 
 #[tauri::command]
@@ -1227,6 +1253,71 @@ fn emu_systems() -> Vec<stores::emulation::System> {
     stores::emulation::systems()
 }
 
+/// RetroAchievements: refresh the game lists for your systems, fingerprint ROMs not seen yet (reads
+/// them once), then fetch box art for matched games a few at a time. Emits "ra-updated" when the
+/// library should reload. Does nothing until a username and key are set.
+#[tauri::command]
+async fn ra_sync(app: AppHandle, inner: State<'_, Shared>) -> Result<usize, String> {
+    use stores::retroachievements as ra;
+    if !ra::signed_in() {
+        return Ok(0);
+    }
+    static RUNNING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let Ok(_guard) = RUNNING.try_lock() else { return Ok(0) };
+    let mut consoles: Vec<u32> = stores::emulation::systems().iter().filter_map(|s| ra::console_for(&s.id)).collect();
+    consoles.sort_unstable();
+    consoles.dedup();
+    let lists = ra::refresh_lists(&consoles).await?;
+    let roms = stores::emulation::roms();
+    let new = blocking(move || ra::fingerprint_all(&roms)).await?;
+    if lists > 0 || new > 0 {
+        let _ = app.emit("ra-updated", ());
+    }
+    // Box art for matched games, 40 at a time with a pause between requests (RA asks clients not to
+    // hammer its API). The library refreshes after each batch; this stops when a batch gets nothing.
+    let mut art = 0;
+    loop {
+        let ids: Vec<u64> = inner.games.lock().unwrap().values().filter_map(|g| g.ra_id).collect();
+        let got = ra::fetch_missing_art(ids, 40).await;
+        if got == 0 {
+            break;
+        }
+        art += got;
+        let _ = app.emit("ra-updated", ());
+    }
+    Ok(lists + new + art)
+}
+
+/// Refresh libretro's box art lists for the systems you have ROMs for (weekly), then reload the library.
+#[tauri::command]
+async fn thumbs_sync(app: AppHandle) -> Result<usize, String> {
+    let systems: Vec<String> = stores::emulation::systems().iter().map(|s| s.id.clone()).collect();
+    let n = stores::libretro_thumbs::refresh(&systems).await;
+    if n > 0 {
+        let _ = app.emit("ra-updated", ());
+    }
+    Ok(n)
+}
+
+/// A store game's achievements with your progress (Steam for now). "need-key" without a Steam Web API key.
+#[tauri::command]
+async fn store_achievements(id: String) -> Result<Option<achievements::Achievements>, String> {
+    match id.strip_prefix("steam:").and_then(|a| a.parse::<u32>().ok()) {
+        Some(appid) => achievements::steam(appid).await.map(Some),
+        None => Ok(None),
+    }
+}
+
+/// A game's RetroAchievements details: achievements and your progress.
+#[tauri::command]
+async fn ra_game(id: String, inner: State<'_, Shared>) -> Result<Option<stores::retroachievements::GameInfo>, String> {
+    let ra_id = inner.games.lock().unwrap().get(&id).and_then(|g| g.ra_id);
+    match ra_id {
+        Some(r) => stores::retroachievements::game_info(r).await.map(Some),
+        None => Ok(None),
+    }
+}
+
 /// Choose how a system's games are played (the index of one of its emulator options).
 #[tauri::command]
 fn emu_set_choice(system: String, index: usize) -> Result<(), String> {
@@ -1237,8 +1328,19 @@ fn emu_set_choice(system: String, index: usize) -> Result<(), String> {
 
 /// Install what a system's chosen emulator needs ("installing", "done" or "already").
 #[tauri::command]
-async fn emu_install(system: String, index: usize) -> Result<&'static str, String> {
-    stores::emulation::install(&system, index).await
+async fn emu_install(system: String, index: usize, menu: bool) -> Result<&'static str, String> {
+    let mut st = settings::load();
+    if st.emu_menu_entry != menu {
+        st.emu_menu_entry = menu;
+        settings::save(&st)?;
+    }
+    stores::emulation::install(&system, index, menu).await
+}
+
+/// Show or hide a system's emulator in the desktop's app menu.
+#[tauri::command]
+async fn emu_menu_entry(system: String, index: usize, show: bool) -> Result<(), String> {
+    blocking(move || stores::emulation::set_system_menu_entry(&system, index, show)).await?
 }
 
 /// Lodestone's version (from Cargo.toml), shown in the sidebar and Settings.
@@ -1253,8 +1355,14 @@ fn get_settings() -> settings::Settings {
 }
 
 #[tauri::command]
-fn save_settings(curseforge_api_key: String, games_dir: Option<String>, steam_api_key: Option<String>, steamgriddb_key: Option<String>) -> Result<(), String> {
+fn save_settings(curseforge_api_key: String, games_dir: Option<String>, steam_api_key: Option<String>, steamgriddb_key: Option<String>, ra_user: Option<String>, ra_key: Option<String>) -> Result<(), String> {
     let mut s = settings::load();
+    if let Some(u) = ra_user {
+        s.ra_user = u.trim().to_string();
+    }
+    if let Some(k) = ra_key {
+        s.ra_key = k.trim().to_string();
+    }
     if let Some(k) = steamgriddb_key {
         s.steamgriddb_key = k.trim().to_string();
     }
@@ -1362,6 +1470,11 @@ fn main() {
             emu_systems,
             emu_set_choice,
             emu_install,
+            ra_sync,
+            thumbs_sync,
+            store_achievements,
+            emu_menu_entry,
+            ra_game,
             downloads_history,
             downloads_history_clear,
             mangohud_info,

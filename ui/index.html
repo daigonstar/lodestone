@@ -98,6 +98,7 @@
       <div class="about-side">
         <div class="about-links" id="about-links"></div>
         <div id="about-friends-wrap" class="hidden"><h4 id="about-friends-title">Friends who own this</h4><div id="about-friends" class="owners"></div></div>
+        <div id="about-ach-wrap" class="hidden"><h4 id="about-ach-title">Achievements</h4><div id="about-ach" class="ach"></div></div>
         <h4>Latest news</h4>
         <div id="about-news" class="about-news"><span class="muted">Loading…</span></div>
       </div>
@@ -414,6 +415,12 @@
       <h3>Artwork</h3>
       <label><span>SteamGridDB API key <small>(optional)</small></span><input name="sgdb" autocomplete="off" spellcheck="false" placeholder="paste key" /></label>
       <p class="hint">Without a key, Lodestone finds artwork from Steam's store. A free SteamGridDB key (<a href="#" data-href="https://www.steamgriddb.com/profile/preferences/api">steamgriddb.com → Preferences → API</a>) adds thousands of community covers and banners, including for games that aren't on Steam.</p>
+      <h3>RetroAchievements</h3>
+      <div class="row-line ra-row">
+        <label><span>Username</span><input name="rauser" autocomplete="off" spellcheck="false" placeholder="your RA username" /></label>
+        <label><span>Web API key</span><input name="rakey" type="password" autocomplete="off" spellcheck="false" placeholder="paste key" /></label>
+      </div>
+      <p class="hint">For your ROMs: proper names, box art and details from RetroAchievements, and each game's achievements with your progress. Get the key from your <a href="#" data-href="https://retroachievements.org/controlpanel.php">RetroAchievements settings → Keys</a>. Lodestone matches ROMs to RA on your PC (no ROM or fingerprint is sent) and only sends your username and key to RA. Your progress counts when you play with achievements turned on in the emulator (RetroArch: Settings → Achievements).</p>
       <h3>Performance overlay (MangoHud)</h3>
       <div class="row-line"><span id="mh-status" class="muted">Checking…</span><button type="button" id="mh-setup" class="ghost">Set up MangoHud</button></div>
       <div class="row-line"><button type="button" class="ghost" id="mh-config">Customize the overlay…</button></div>

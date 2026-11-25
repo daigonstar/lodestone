@@ -85,7 +85,7 @@ only talks to the stores and services below, when you use a feature that needs t
 
 | What | Where |
 |---|---|
-| Steam Web API, SteamGridDB and CurseForge keys (optional) | `~/.config/lodestone/settings.json` |
+| Steam Web API, SteamGridDB and CurseForge keys, RetroAchievements username and Web API key (all optional) | `~/.config/lodestone/settings.json` |
 | EA and Ubisoft sessions | `~/.config/lodestone/ea.json`, `ubisoft.json` |
 | Epic sign-in (kept by legendary) | `~/.local/share/lodestone/legendary/` |
 | GOG sign-in (kept by gogdl) | `~/.local/share/lodestone/gog/` |
@@ -104,6 +104,19 @@ Wine prefix; Lodestone only turns its "keep me logged in" option back on. Signin
   runs locally on your PC and is only reached on `127.0.0.1`.
 - **Game information and artwork:** ProtonDB, Wikipedia and Wikidata, GOG's public catalog, SteamGridDB
   (with your key), Modrinth and CurseForge (Minecraft).
+- **Steam achievements (with your Steam Web API key):** a game's achievement list and your unlocks from
+  `api.steampowered.com`, sending your key, your Steam ID and the game's app ID, plus how rare each one is
+  (public, no key). The list is cached for a week in `~/.local/share/lodestone/achievements/`. Your Steam
+  profile's *Game details* must be public for Steam to share your unlocks.
+- **RetroAchievements (only if you add your RA username and Web API key):** `retroachievements.org` for
+  each system's game list, a game's details and your achievement progress, and `media.retroachievements.org`
+  for box art and badges. Only your username and key are sent. Your ROMs are identified on your PC by
+  fingerprint (an MD5 hash, the same one RetroAchievements uses); the ROM files and their names never
+  leave your PC. Game lists, fingerprints and details are cached in `~/.local/share/lodestone/retroachievements/`.
+- **libretro thumbnails (for ROMs with no other box art):** the list of each system's box art from
+  libretro's official GitHub repositories (`api.github.com`, two requests per system, refreshed weekly and
+  cached in `~/.local/share/lodestone/libretro-thumbnails/`), and the images from `raw.githubusercontent.com`.
+  ROMs are matched on your PC; only the system's name is sent. No key or account.
 - **Tools Lodestone sets up for you:** the official GitHub releases of umu-launcher (runs Proton),
   legendary (Epic), gogdl (GOG) and MangoHud, and the official installers of Battle.net, the EA app,
   Ubisoft Connect and Guild Wars 2. These are downloaded over HTTPS from their publishers. The GitHub tools are
@@ -132,6 +145,10 @@ named, and are listed so nothing is a surprise:
   it's missing), and for RetroArch the chosen core from libretro's official build server into
   `~/.var/app/org.libretro.RetroArch/config/retroarch/cores/`, checked against libretro's published CRC32.
   Your emulator choice per system is saved in `settings.json`. Lodestone never downloads games or BIOS files.
+  Unless you tick *Add to my app menu* when installing, the emulator is hidden from your desktop's app menu:
+  Lodestone copies Flatpak's menu entry into `~/.local/share/applications/` with `NoDisplay=true` added and
+  a comment marking it as Lodestone's. Ticking *Show in my app menu* in the system's library deletes that copy;
+  Lodestone never touches menu entries it didn't write.
 - **Minecraft (ATLauncher):** the instance's `instance.json` when you add or remove mods (backed up as
   `instance.json.lodestone-backup` first).
 - **Wine prefixes:** Battle.net, EA, Ubisoft and games run in prefixes under
