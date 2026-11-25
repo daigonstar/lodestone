@@ -15,6 +15,7 @@ const STORES = {
   minecraft: { label: "Minecraft", color: "#62b47a" },
   lutris: { label: "Lutris", color: "#ff9c2b" },
   custom: { label: "Custom", color: "#9aa0a6" },
+  emulation: { label: "Emulation", color: "#e0598b" },
 };
 const store = (s) => STORES[s] || { label: s, color: "#9aa0a6" };
 
@@ -192,6 +193,7 @@ async function load(quiet = false) {
   try {
     state.games = await invoke("list_games");
     keyCache.clear();
+    try { state.systems = await invoke("emu_systems"); } catch { state.systems = []; }
     try { const st = await invoke("get_settings"); state.kilnPlay = st.kiln_play !== false; state.steamBg = st.steam_background !== false; state.mangohudAll = !!st.mangohud; } catch { state.kilnPlay = true; state.steamBg = true; }
   } catch (e) {
     toast(String(e), true);
@@ -211,7 +213,7 @@ async function load(quiet = false) {
 }
 
 // ---------- one entry per game across stores ----------
-const DEFAULT_STORE_ORDER = ["steam", "epic", "gog", "battlenet", "amazon", "arenanet", "ea", "ubisoft", "rockstar", "lutris", "minecraft", "custom"];
+const DEFAULT_STORE_ORDER = ["steam", "epic", "gog", "battlenet", "amazon", "arenanet", "ea", "ubisoft", "rockstar", "lutris", "minecraft", "custom", "emulation"];
 function storeOrder() {
   const saved = ls.get("storeOrder", null);
   const order = Array.isArray(saved) ? saved.filter((s) => STORES[s]) : [];
@@ -277,6 +279,9 @@ function filtered() {
     if (state.view === "recent" && !g.last_played) return false;
     if (state.view === "modded" && !(g.kiln && (g.installed || g.kiln_managed))) return false;
     if (state.view === "updates" && !(g.installed && g.update)) return false;
+    // Emulated games live in their system's library, not in All games.
+    if (state.view.startsWith("sys:")) { if (g.system !== state.view.slice(4)) return false; }
+    else if (state.view === "all" && g.system) return false;
     if (STORES[state.view] && g.store !== state.view) return false;
     if (q && !g.title.toLowerCase().includes(q)) return false;
     return true;
@@ -305,7 +310,7 @@ function renderNav() {
   const lib = [
     ["home", "Home", ""],
     ["downloads", "Downloads", (state.dl || []).filter((d) => d.state === "downloading").length || ""],
-    ["all", "All games", ls.get("mergeDupes", true) ? mergeList(visible.filter(inst)).length : visible.filter(inst).length],
+    ["all", "All games", ls.get("mergeDupes", true) ? mergeList(visible.filter((g) => inst(g) && !g.system)).length : visible.filter((g) => inst(g) && !g.system).length],
     ["favorites", "Favorites", visible.filter((g) => g.favorite).length],
     ["recent", "Recently played", visible.filter((g) => g.last_played && inst(g)).length],
   ];
@@ -324,8 +329,16 @@ function renderNav() {
   const counts = {};
   for (const g of visible) if (inst(g)) counts[g.store] = (counts[g.store] || 0) + 1;
   $("#nav-stores").innerHTML = Object.keys(STORES)
-    .filter((k) => counts[k] || ["battlenet", "ea", "ubisoft", "arenanet"].includes(k))
+    .filter((k) => k !== "emulation" && (counts[k] || ["battlenet", "ea", "ubisoft", "arenanet"].includes(k)))
     .map((k) => `<button data-view="${k}" class="${state.view === k ? "active" : ""}"><span class="dot" style="background:${STORES[k].color}"></span>${STORES[k].label}<span class="count">${counts[k] || 0}</span></button>`)
+    .join("");
+  // Each emulated system is its own library.
+  const sysCount = {};
+  for (const g of visible) if (g.system) sysCount[g.system] = (sysCount[g.system] || 0) + 1;
+  const systems = (state.systems || []).filter((s) => sysCount[s.id]);
+  $("#nav-systems-label").classList.toggle("hidden", !systems.length);
+  $("#nav-systems").innerHTML = systems
+    .map((s) => `<button data-view="sys:${esc(s.id)}" class="${state.view === "sys:" + s.id ? "active" : ""}" title="${esc(s.emulators.length ? "Plays with " + s.emulators.join(", ") : "No emulator installed for this system yet")}"><span class="dot" style="background:${s.emulators.length ? STORES.emulation.color : "#5b5f6a"}"></span>${esc(s.name)}<span class="count">${sysCount[s.id]}</span></button>`)
     .join("");
 }
 
@@ -435,7 +448,8 @@ function renderGrid() {
   document.querySelectorAll("#layout [data-layout]").forEach((b) => b.classList.toggle("on", b.dataset.layout === state.layout));
   parkDetail();
   $("#grid").innerHTML = (state.layout === "list" && list.length ? `<div class="row-head"><span></span><span>Game</span><span>Genres</span><span>Played</span><span>Last played</span><span>Size</span><span>ProtonDB</span><span></span></div>` : "") + list.map(cardHTML).join("");
-  const title = { missing: "Missing artwork", all: "All games", favorites: "Favorites", recent: "Recently played", hidden: "Hidden", modded: "Modded with Kiln", updates: "Updates available" }[state.view] || store(state.view).label;
+  const sysView = state.view.startsWith("sys:") && (state.systems || []).find((s) => s.id === state.view.slice(4));
+  const title = sysView ? sysView.name : { missing: "Missing artwork", all: "All games", favorites: "Favorites", recent: "Recently played", hidden: "Hidden", modded: "Modded with Kiln", updates: "Updates available" }[state.view] || store(state.view).label;
   $("#grid-title").textContent = title;
   $("#grid-count").textContent = `${list.length} game${list.length === 1 ? "" : "s"}`;
   const empty = $("#empty");
@@ -553,9 +567,9 @@ function renderHero() {
   const run = state.running.get(g.id);
   const play = $("#btn-play");
   play.classList.toggle("running", !!run);
-  play.disabled = (!g.installed && !g.can_install) || !!run;
-  play.textContent = !g.installed ? (g.can_install ? "⤓ Install" : "Not installed") : run ? (run.state === "launching" ? "Launching…" : "● Running") : g.kiln_managed && state.kilnPlay ? "▶ Play modded" : "▶ Play";
-  play.title = g.kiln_managed && state.kilnPlay ? "Launches through Kiln, which checks your mods first" : "";
+  play.disabled = (!g.installed && !g.can_install) || !!run || !!g.needs_emulator;
+  play.textContent = g.needs_emulator ? "No emulator yet" : !g.installed ? (g.can_install ? "⤓ Install" : "Not installed") : run ? (run.state === "launching" ? "Launching…" : "● Running") : g.kiln_managed && state.kilnPlay ? "▶ Play modded" : "▶ Play";
+  play.title = g.needs_emulator ? "None of the emulators this system uses is installed yet" : g.kiln_managed && state.kilnPlay ? "Launches through Kiln, which checks your mods first" : "";
   const options = playOptions(g);
   $("#play-menu").innerHTML = options.map(([mode, label, hint]) => `<button data-play-mode="${esc(mode)}">${label}${hint ? ` <small class="muted">${hint}</small>` : ""}</button>`).join("");
   const split = !!(options.length && g.installed && !run);

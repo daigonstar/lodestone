@@ -151,6 +151,10 @@ pub fn edited(id: &str) -> bool {
 
 /// No cover, a local cover file that's gone, or a remote one that turned out missing.
 pub fn art_missing(g: &Game) -> bool {
+    // ROMs get their covers from ES-DE's scraper, not from store artwork searches.
+    if g.system.is_some() {
+        return false;
+    }
     match &g.cover {
         None => true,
         Some(c) if c.starts_with("http") => with(|d| d.checked.get(c) == Some(&false)),
@@ -414,7 +418,7 @@ pub async fn steam_appid(id: &str, title: &str) -> Option<u32> {
 
 /// Fill in covers (and banners) for games missing them. Returns how many were fixed.
 pub async fn autofix(games: Vec<Game>) -> usize {
-    let missing: Vec<Game> = games.into_iter().filter(|g| art_missing(g) && !edited(&g.id)).collect();
+    let missing: Vec<Game> = games.into_iter().filter(|g| g.system.is_none() && art_missing(g) && !edited(&g.id)).collect();
     let key = sgdb_key();
     let fixed = parallel(missing, 4, move |g: Game| {
         let key = key.clone();

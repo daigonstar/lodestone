@@ -55,6 +55,12 @@ pub struct Game {
     #[serde(skip)]
     pub alt_launch: Option<LaunchSpec>,
     pub alt_label: Option<String>,
+    /// Emulated games: the system ("snes", "psx"…), which is also its library in the sidebar.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    /// An emulated game with no emulator installed that can run it yet.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub needs_emulator: bool,
     /// It can start with its server/realm list showing (WoW started directly).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub pick_realm: bool,

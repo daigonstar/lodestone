@@ -33,6 +33,9 @@ pub struct Settings {
     /// Show MangoHud (performance overlay) in every game Lodestone starts, unless a game turns it off.
     #[serde(default)]
     pub mangohud: bool,
+    /// An Emulation folder (with roms/<system> inside) to use besides the ones found automatically.
+    #[serde(default)]
+    pub emulation_dir: String,
 }
 
 fn yes() -> bool {

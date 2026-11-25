@@ -166,6 +166,9 @@ fn launch_game(id: String, mode: Option<String>, inner: State<'_, Shared>, app: 
     if inner.sessions.lock().unwrap().contains_key(&id) {
         return Err(format!("{} is already running", game.title));
     }
+    if game.needs_emulator {
+        return Err(format!("No emulator that can run {} is installed yet ({}).", game.title, game.via.split(" · ").next().unwrap_or("this system")));
+    }
     // Kiln-managed games go through Kiln's Guarded Play so their mods are deployed and loaders set up.
     // mode: "modded" / "vanilla" from the Play menu; None = the default from Settings.
     let mode = mode.unwrap_or_else(|| if settings::load().kiln_play { "modded".into() } else { "plain".into() });
@@ -988,7 +991,8 @@ async fn games_compat(ids: Vec<String>) -> Vec<meta::Compat> {
 async fn game_news(ids: Vec<String>, inner: State<'_, Shared>) -> Result<Vec<meta::News>, String> {
     let games: Vec<(String, String)> = {
         let g = inner.games.lock().unwrap();
-        ids.into_iter().filter_map(|id| g.get(&id).map(|x| (id.clone(), x.title.clone()))).collect()
+        // Emulated games have no store news; skip them rather than searching Steam for ROM titles.
+        ids.into_iter().filter_map(|id| g.get(&id).filter(|x| x.system.is_none()).map(|x| (id.clone(), x.title.clone()))).collect()
     };
     Ok(meta::news(games).await)
 }
@@ -1217,6 +1221,12 @@ fn startup_view() -> Option<String> {
     args.iter().position(|a| a == "--view").and_then(|i| args.get(i + 1)).cloned()
 }
 
+/// Systems that have games (from the last library scan), for the sidebar.
+#[tauri::command]
+fn emu_systems() -> Vec<stores::emulation::System> {
+    stores::emulation::systems()
+}
+
 /// Lodestone's version (from Cargo.toml), shown in the sidebar and Settings.
 #[tauri::command]
 fn app_version() -> &'static str {
@@ -1335,6 +1345,7 @@ fn main() {
             refresh_series,
             proton_info,
             app_version,
+            emu_systems,
             downloads_history,
             downloads_history_clear,
             mangohud_info,
