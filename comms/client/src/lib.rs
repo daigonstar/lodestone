@@ -171,6 +171,9 @@ pub struct Client {
     dir: std::path::PathBuf,
     op: tokio::sync::Mutex<()>,
     touched: std::sync::Mutex<Vec<String>>,
+    /// What people are playing: username -> (game, when we heard it). Kept in memory only, and
+    /// forgotten when it isn't renewed (people's clients repeat it every few minutes while playing).
+    activities: std::sync::Mutex<std::collections::HashMap<String, (String, std::time::Instant)>>,
     /// Channels where our profile should be (re-)sent: new members can't read anything older.
     announce: std::sync::Mutex<std::collections::BTreeSet<String>>,
 }
@@ -197,7 +200,7 @@ impl Client {
         let signer = SignatureKeyPair::from_raw(SignatureScheme::ED25519, key.to_bytes().to_vec(), public.clone());
         let storage = MemoryStorage::default();
         *storage.values.write().unwrap() = store.load_mls()?;
-        Ok(Self { store, provider: Provider { crypto: RustCrypto::default(), storage }, host: Host::new(host_url), key, signer, device: b64(&public), dir: dir.to_path_buf(), op: Default::default(), touched: Default::default(), announce: Default::default() })
+        Ok(Self { store, provider: Provider { crypto: RustCrypto::default(), storage }, host: Host::new(host_url), key, signer, device: b64(&public), dir: dir.to_path_buf(), op: Default::default(), touched: Default::default(), activities: Default::default(), announce: Default::default() })
     }
 
     pub fn device_key(&self) -> &str {
@@ -629,6 +632,38 @@ impl Client {
         Ok(())
     }
 
+    /// Tell everyone in your servers what you're playing (None: nothing). End-to-end encrypted like
+    /// everything else: the host doesn't see it. Repeat it every few minutes while playing.
+    pub async fn set_playing(&self, game: Option<&str>) -> Result<()> {
+        let _g = self.op.lock().await;
+        let me = self.username().unwrap_or_default();
+        {
+            let mut a = self.activities.lock().unwrap();
+            match game {
+                Some(g) => a.insert(me.clone(), (g.to_string(), std::time::Instant::now())),
+                None => a.remove(&me),
+            };
+        }
+        let payload = Payload { t: "activity".into(), body: game.unwrap_or_default().chars().take(100).collect(), ..Default::default() };
+        let bytes = serde_json::to_vec(&payload).map_err(local)?;
+        for (channel, ..) in self.store.channels()? {
+            let Some(mut group) = self.group(&channel)? else { continue };
+            let out = group.create_message(&self.provider, &self.signer, &bytes).map_err(local)?;
+            self.persist()?;
+            if let Err(e) = self.host.send(&channel, "application", group.epoch().as_u64(), &out.tls_serialize_detached().map_err(local)?).await {
+                eprintln!("comms: couldn't share what you're playing in a channel: {e}");
+            }
+        }
+        Ok(())
+    }
+
+    /// What people are playing (heard in the last 12 minutes).
+    pub fn activities(&self) -> std::collections::HashMap<String, String> {
+        let mut a = self.activities.lock().unwrap();
+        a.retain(|_, (_, at)| at.elapsed() < std::time::Duration::from_secs(12 * 60));
+        a.iter().map(|(u, (g, _))| (u.clone(), g.clone())).collect()
+    }
+
     /// Our encrypted picture for a server, uploaded once per server (files belong to a server).
     async fn avatar_ref(&self, space: &str, channel: &str) -> Result<Option<Value>> {
         use aes_gcm::aead::{Aead, KeyInit};
@@ -862,6 +897,23 @@ impl Client {
                                 if !t.iter().any(|c| c == "profiles") {
                                     t.push("profiles".to_string());
                                 }
+                            }
+                        }
+                        None
+                    }
+                    // What someone is playing: only from a verified sender, a short single line.
+                    Some(p) if p.t == "activity" => {
+                        if !name.starts_with('⚠') {
+                            let game: String = p.body.chars().filter(|c| !c.is_control()).take(100).collect();
+                            let mut a = self.activities.lock().unwrap();
+                            if game.trim().is_empty() {
+                                a.remove(&name);
+                            } else {
+                                a.insert(name.clone(), (game.trim().to_string(), std::time::Instant::now()));
+                            }
+                            let mut t = self.touched.lock().unwrap();
+                            if !t.iter().any(|c| c == "profiles") {
+                                t.push("profiles".to_string());
                             }
                         }
                         None

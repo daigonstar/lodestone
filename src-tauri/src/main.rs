@@ -329,7 +329,7 @@ fn running(inner: State<'_, Shared>) -> Vec<Running> {
     running_now(&inner)
 }
 
-fn running_now(inner: &Inner) -> Vec<Running> {
+pub(crate) fn running_now(inner: &Inner) -> Vec<Running> {
     let procs = launcher::process_table();
     let mut sessions = inner.sessions.lock().unwrap();
     sessions

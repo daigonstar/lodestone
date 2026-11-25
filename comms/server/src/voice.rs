@@ -13,7 +13,8 @@
 //! the sharer for a keyframe. Video frames are end-to-end encrypted too (PROTOCOL.md).
 //!
 //! Webcams have their own video tracks (one sent, `SLOTS` received, after the screen share ones), so
-//! someone can share their screen and be on camera at once. Cameras go to everyone in the call who has
+//! someone can share their screen and be on camera at once. A share's sound has audio tracks of its
+//! own (after the camera tracks) and, like the picture, only goes to the share's watchers. Cameras go to everyone in the call who has
 //! the call view open (`cameras` on), not to people who only have the chat in front of them.
 //!
 //! Settings: `COMMS_MEDIA_ADDR` (the addresses clients reach, `host:port`, names or IPs, separated by
@@ -89,6 +90,9 @@ struct Peer {
     to_client_cam: Vec<Mid>,
     /// They receive cameras (their call view is open).
     cameras: bool,
+    /// The track their share's sound comes on, and the ones they receive shares' sound on.
+    from_client_share: Option<Mid>,
+    to_client_share: Vec<Mid>,
     deafened: bool,
 }
 
@@ -191,6 +195,7 @@ fn voice_changed(app: &Shared, space: &str, channel: &str) {
 const AUDIO: u8 = 0;
 const SCREEN: u8 = 1;
 const CAMERA: u8 = 2;
+const SHARE_SOUND: u8 = 3;
 
 /// Ask whoever sends video (their screen, or their camera if `cam`) in `slot` of a call for a keyframe.
 fn request_keyframe(peers: &mut [Peer], channel: &str, slot: usize, cam: bool) {
@@ -260,8 +265,11 @@ fn relay(socket: UdpSocket, rx: mpsc::Receiver<Cmd>, calls: Calls) {
                         let _ = socket.send_to(&t.contents, t.destination);
                     }
                     Ok(Output::Event(Event::MediaAdded(m))) => match (m.kind, m.direction) {
-                        (MediaKind::Audio, Direction::RecvOnly) => p.from_client = Some(m.mid),
-                        (MediaKind::Audio, Direction::SendOnly) => p.to_client.push(m.mid),
+                        // Audio tracks: the voice's first, then the share's sound.
+                        (MediaKind::Audio, Direction::RecvOnly) if p.from_client.is_none() => p.from_client = Some(m.mid),
+                        (MediaKind::Audio, Direction::RecvOnly) => p.from_client_share = Some(m.mid),
+                        (MediaKind::Audio, Direction::SendOnly) if p.to_client.len() < SLOTS => p.to_client.push(m.mid),
+                        (MediaKind::Audio, Direction::SendOnly) => p.to_client_share.push(m.mid),
                         // Video tracks come in order: the screen share's, then the camera's.
                         (MediaKind::Video, Direction::RecvOnly) if p.from_client_video.is_none() => p.from_client_video = Some(m.mid),
                         (MediaKind::Video, Direction::RecvOnly) => p.from_client_cam = Some(m.mid),
@@ -271,6 +279,7 @@ fn relay(socket: UdpSocket, rx: mpsc::Receiver<Cmd>, calls: Calls) {
                     },
                     Ok(Output::Event(Event::MediaData(d))) if Some(d.mid) == p.from_client => forward.push((p.channel.clone(), p.device.clone(), p.slot, AUDIO, d)),
                     Ok(Output::Event(Event::MediaData(d))) if Some(d.mid) == p.from_client_video => forward.push((p.channel.clone(), p.device.clone(), p.slot, SCREEN, d)),
+                    Ok(Output::Event(Event::MediaData(d))) if Some(d.mid) == p.from_client_share => forward.push((p.channel.clone(), p.device.clone(), p.slot, SHARE_SOUND, d)),
                     Ok(Output::Event(Event::MediaData(d))) if Some(d.mid) == p.from_client_cam => forward.push((p.channel.clone(), p.device.clone(), p.slot, CAMERA, d)),
                     // A viewer lost a frame: ask the sharer of that slot for a keyframe.
                     Ok(Output::Event(Event::KeyframeRequest(k))) => {
@@ -297,7 +306,7 @@ fn relay(socket: UdpSocket, rx: mpsc::Receiver<Cmd>, calls: Calls) {
             // Audio to everyone in the call who isn't deafened; a screen share only to people watching
             // it; cameras to people with the call view open.
             let wants = |p: &Peer| match *kind {
-                SCREEN => p.watching.contains(slot),
+                SCREEN | SHARE_SOUND => p.watching.contains(slot),
                 CAMERA => p.cameras,
                 _ => !p.deafened,
             };
@@ -305,6 +314,7 @@ fn relay(socket: UdpSocket, rx: mpsc::Receiver<Cmd>, calls: Calls) {
                 let mids = match *kind {
                     SCREEN => &p.to_client_video,
                     CAMERA => &p.to_client_cam,
+                    SHARE_SOUND => &p.to_client_share,
                     _ => &p.to_client,
                 };
                 let Some(mid) = mids.get(*slot).copied() else { continue };
@@ -433,7 +443,7 @@ pub async fn join(State(app): State<Shared>, me: Auth, Path(channel): Path<Strin
             return Err(ApiError::bad(format!("Couldn't set up the call: {e}")));
         }
     };
-    app.voice.send(Cmd::Add(Box::new(Peer { addr: public, channel: channel.clone(), device: me.device.clone(), slot, rtc, from_client: None, to_client: Vec::new(), from_client_video: None, to_client_video: Vec::new(), watching: Vec::new(), from_client_cam: None, to_client_cam: Vec::new(), cameras: false, deafened: r.deafened })));
+    app.voice.send(Cmd::Add(Box::new(Peer { addr: public, channel: channel.clone(), device: me.device.clone(), slot, rtc, from_client: None, to_client: Vec::new(), from_client_video: None, to_client_video: Vec::new(), watching: Vec::new(), from_client_cam: None, to_client_cam: Vec::new(), cameras: false, from_client_share: None, to_client_share: Vec::new(), deafened: r.deafened })));
     voice_changed(&app, &space, &channel);
     Ok(Json(json!({ "answer": answer, "slot": slot, "participants": app.voice.participants(&channel) })))
 }

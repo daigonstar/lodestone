@@ -193,3 +193,28 @@ async fn encrypted_chat_end_to_end() {
     let mode = std::fs::metadata(tmp.path().join("alice/comms.db")).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn what_youre_playing_reaches_your_server_encrypted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (url, setup) = start_host(tmp.path()).await;
+    let alice = Client::open(&tmp.path().join("alice"), &url).unwrap();
+    alice.register("alice", &setup).await.unwrap();
+    let space = alice.create_space("Raid night").await.unwrap();
+    let invite = alice.create_invite(&space, 1, 3600).await.unwrap();
+    let bob = Client::open(&tmp.path().join("bob"), &url).unwrap();
+    bob.register("bob", invite["code"].as_str().unwrap()).await.unwrap();
+    alice.sync().await.unwrap();
+    bob.sync().await.unwrap();
+
+    alice.set_playing(Some("Hades II")).await.unwrap();
+    bob.sync().await.unwrap();
+    assert_eq!(bob.activities().get("alice").map(String::as_str), Some("Hades II"));
+    // Not shown as a chat message.
+    let general = bob.channels().unwrap()[0].0.clone();
+    assert!(bob.messages(&general, 50).unwrap().iter().all(|m| !m.body.contains("Hades")));
+
+    alice.set_playing(None).await.unwrap();
+    bob.sync().await.unwrap();
+    assert_eq!(bob.activities().get("alice"), None);
+}

@@ -303,3 +303,22 @@ html, body { overflow: hidden; }
 .stage-people:not(.strip) { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); width: 100%; max-width: 1300px; margin: 0 auto; justify-items: center; }
 .stage-people:not(.strip) .tile { width: 100%; max-width: 640px; }
 .stage { z-index: 5; }
+
+/* mentions */
+.mention { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); border-radius: 4px; padding: 0 3px; font-weight: 600; }
+.mention.me { color: #fff; background: color-mix(in srgb, var(--accent) 55%, transparent); }
+.msg.mentions-me { background: color-mix(in srgb, #f5b14a 8%, transparent); box-shadow: inset 3px 0 0 #f5b14a; }
+.mention-badge { float: right; background: var(--danger); color: #fff; border-radius: 999px; font-size: 11px; font-weight: 700; padding: 0 6px; margin-top: 2px; }
+.composer { position: relative; }
+.mention-pick { position: absolute; left: 16px; right: 16px; bottom: calc(100% - 6px); background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 4px; display: grid; gap: 2px; box-shadow: 0 10px 30px #0008; z-index: 6; }
+.mention-pick button { display: flex; align-items: center; gap: 8px; background: transparent; text-align: left; padding: 5px 8px; }
+.mention-pick button.on, .mention-pick button:hover { background: var(--bg-3); }
+.mention-pick .av-wrap, .mention-pick .av { width: 22px; height: 22px; font-size: 11px; margin: 0; }
+.mention-pick small { color: var(--muted); }
+
+/* what people are playing */
+.playing { color: #3ddc97 !important; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.tile-foot b .playing { font-weight: 500; }
+
+/* "You started a game: share it?" */
+.game-offer { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 30; display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--bg-2); border: 1px solid #3ddc9788; border-radius: 12px; box-shadow: 0 10px 30px #000a; }

@@ -22,6 +22,7 @@ pub fn describe(p: &str) -> Option<&'static str> {
     match p {
         "friends:read" => Some("See your Steam and Epic friends list: names, avatars and whether they're online"),
         "chat:open" => Some("Open a friend's Steam chat with an invite ready to paste (it never sends anything itself)"),
+        "game:read" => Some("See the name of the game you're playing from Lodestone, to show your friends in Comms (end-to-end encrypted)"),
         _ => None,
     }
 }
@@ -171,6 +172,7 @@ fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Value, String
     let needed = match method {
         "friends" => "friends:read",
         "open_chat" => "chat:open",
+        "playing" => "game:read",
         _ => return Err("unknown method".into()),
     };
     if !approved().iter().any(|p| p == needed) {
@@ -180,6 +182,13 @@ fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Value, String
         "friends" => {
             let (list, _) = tauri::async_runtime::block_on(crate::friends::list(false));
             Ok(list.iter().map(|f| json!({ "store": f.store, "id": f.id, "name": f.name, "avatar": f.avatar, "status": f.status })).collect())
+        }
+        // The game you're playing from Lodestone (its title only), or null.
+        "playing" => {
+            use tauri::Manager;
+            let inner = app.state::<crate::Shared>();
+            let now = crate::running_now(&inner);
+            Ok(now.iter().find(|r| r.state == "running").map(|r| json!({ "title": r.title })).unwrap_or(Value::Null))
         }
         "open_chat" => {
             let store = params["store"].as_str().unwrap_or_default();
@@ -224,7 +233,7 @@ pub fn list() -> Vec<PluginInfo> {
     let s = status();
     let granted = approved();
     let mut perms: Vec<String> = s.requested.iter().map(|(p, _)| p.clone()).collect();
-    for p in ["friends:read", "chat:open"] {
+    for p in ["friends:read", "chat:open", "game:read"] {
         if !perms.iter().any(|x| x == p) {
             perms.push(p.to_string());
         }

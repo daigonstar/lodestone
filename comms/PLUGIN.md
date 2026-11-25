@@ -20,7 +20,7 @@ program on the PATH. Messages are JSON, one per line.
 The plug-in's first line is a `hello`:
 
 ```json
-{"type":"hello","name":"Lodestone Comms","version":"0.1.0","ui":"http://127.0.0.1:41234/#t=<secret>","permissions":["friends:read","chat:open"]}
+{"type":"hello","name":"Lodestone Comms","version":"0.1.0","ui":"http://127.0.0.1:41234/#t=<secret>","permissions":["friends:read","chat:open","game:read"]}
 ```
 
 - `ui`: the page to show. The part after `#` is a per-launch secret the page uses to call its own
@@ -40,9 +40,11 @@ The plug-in's first line is a `hello`:
 | Method | Permission | What it gives |
 |---|---|---|
 | `friends` | `friends:read` | Your Steam and Epic friends: store, ID, name, avatar URL, online status. Nothing else about them. |
+| `playing` | `game:read` | The title of the game you launched from Lodestone, while it's running (or null). Comms shows it to people in your servers, end-to-end encrypted. Nothing about other programs. |
 | `open_chat` `{store, id, text}` | `chat:open` | Puts `text` on your clipboard and opens that friend's Steam chat, so you can paste it. Lodestone shows a note saying so. It never sends anything itself. |
 
-The bridge never offers sign-in data, keys, cookies, file paths, or running programs.
+The bridge never offers sign-in data, keys, cookies, file paths, or other running programs (with
+`game:read`, only the title of the game you launched from Lodestone).
 
 ## Events (Lodestone to plug-in)
 

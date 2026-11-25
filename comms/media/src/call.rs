@@ -33,6 +33,8 @@ pub trait Audio: Send + 'static {
     fn take_captured(&mut self) -> Vec<Vec<u8>>;
     /// Play an encoded frame from the participant in `slot`.
     fn play(&mut self, slot: usize, frame: &[u8]);
+    /// Play an encoded frame of the sound of the share in `slot` (only arrives while watching it).
+    fn play_share(&mut self, _slot: usize, _frame: &[u8]) {}
 }
 
 /// Call keys: the current epoch's (epoch, own leaf, base), and a few older bases for late frames.
@@ -80,6 +82,8 @@ pub struct Controls {
     pub undecryptable: AtomicU64,
     /// Encoded VP8 frames to send (your screen share). Kept short by the app.
     pub video_out: Mutex<VecDeque<Vec<u8>>>,
+    /// Encoded Opus frames (20 ms, stereo) of your share's sound to send.
+    pub share_sound_out: Mutex<VecDeque<Vec<u8>>>,
     /// Encoded VP8 frames of your camera to send.
     pub cam_out: Mutex<VecDeque<Vec<u8>>>,
     /// Where decrypted VP8 frames go: (slot, camera rather than screen, frame).
@@ -104,6 +108,8 @@ pub struct Pending {
     recv_video: Vec<Mid>,
     send_cam: Mid,
     recv_cam: Vec<Mid>,
+    send_share: Mid,
+    recv_share: Vec<Mid>,
 }
 
 /// Bind a socket towards the relay and make the offer to send to `POST .../voice/join`.
@@ -123,9 +129,11 @@ pub fn prepare(relay: SocketAddr) -> std::io::Result<(Pending, serde_json::Value
     let recv_video: Vec<Mid> = (0..SLOTS).map(|_| api.add_media(MediaKind::Video, Direction::RecvOnly, None, None, None)).collect();
     let send_cam = api.add_media(MediaKind::Video, Direction::SendOnly, None, None, None);
     let recv_cam: Vec<Mid> = (0..SLOTS).map(|_| api.add_media(MediaKind::Video, Direction::RecvOnly, None, None, None)).collect();
+    let send_share = api.add_media(MediaKind::Audio, Direction::SendOnly, None, None, None);
+    let recv_share: Vec<Mid> = (0..SLOTS).map(|_| api.add_media(MediaKind::Audio, Direction::RecvOnly, None, None, None)).collect();
     let (offer, pending) = api.apply().ok_or_else(|| std::io::Error::other("no offer"))?;
     let json = serde_json::to_value(&offer).map_err(std::io::Error::other)?;
-    Ok((Pending { rtc, socket, pending, send, recv, send_video, recv_video, send_cam, recv_cam }, json))
+    Ok((Pending { rtc, socket, pending, send, recv, send_video, recv_video, send_cam, recv_cam, send_share, recv_share }, json))
 }
 
 pub struct Call {
@@ -154,7 +162,7 @@ impl Pending {
         let answer: SdpAnswer = serde_json::from_value(answer).map_err(|_| "not a WebRTC answer".to_string())?;
         self.rtc.sdp_api().accept_answer(self.pending, answer).map_err(|e| e.to_string())?;
         let c = controls.clone();
-        let tracks = Tracks { send: self.send, recv: self.recv, send_video: self.send_video, recv_video: self.recv_video, send_cam: self.send_cam, recv_cam: self.recv_cam };
+        let tracks = Tracks { send: self.send, recv: self.recv, send_video: self.send_video, recv_video: self.recv_video, send_cam: self.send_cam, recv_cam: self.recv_cam, send_share: self.send_share, recv_share: self.recv_share };
         let (rtc, socket) = (self.rtc, self.socket);
         let thread = std::thread::Builder::new().name("comms-call".into()).spawn(move || run(rtc, socket, tracks, audio, c)).map_err(|e| e.to_string())?;
         Ok(Call { controls, thread: Some(thread) })
@@ -168,10 +176,13 @@ struct Tracks {
     recv_video: Vec<Mid>,
     send_cam: Mid,
     recv_cam: Vec<Mid>,
+    send_share: Mid,
+    recv_share: Vec<Mid>,
 }
 
 fn run(mut rtc: Rtc, socket: UdpSocket, t: Tracks, mut audio: impl Audio, c: Arc<Controls>) {
-    let Tracks { send, recv, send_video, recv_video, send_cam, recv_cam } = t;
+    let Tracks { send, recv, send_video, recv_video, send_cam, recv_cam, send_share, recv_share } = t;
+    let mut share_frames = 0u64;
     let mut buf = vec![0u8; 2000];
     let local = socket.local_addr().ok();
     // One counter for audio and video: both use this device's key, so nonces must never repeat.
@@ -206,6 +217,19 @@ fn run(mut rtc: Rtc, socket: UdpSocket, t: Tracks, mut audio: impl Audio, c: Arc
                                 sink(slot, cam, frame);
                             }
                         }
+                        None => {
+                            c.undecryptable.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+                Ok(Output::Event(Event::MediaData(d))) if recv_share.contains(&d.mid) => {
+                    let slot = recv_share.iter().position(|m| *m == d.mid).unwrap_or(0);
+                    let opened = {
+                        let keys = c.keys.lock().unwrap();
+                        frames::open(|e| keys.base_for(e), &d.data)
+                    };
+                    match opened {
+                        Some((_, frame)) => audio.play_share(slot, &frame),
                         None => {
                             c.undecryptable.fetch_add(1, Ordering::Relaxed);
                         }
@@ -262,6 +286,24 @@ fn run(mut rtc: Rtc, socket: UdpSocket, t: Tracks, mut audio: impl Audio, c: Arc
                         if w.write(pt, Instant::now(), time, sealed).is_ok() {
                             c.video_sent.fetch_add(1, Ordering::Relaxed);
                         }
+                    }
+                }
+            }
+        }
+
+        // Your share's sound (not affected by mute: it's the screen's sound, not your voice).
+        let sound: Vec<Vec<u8>> = c.share_sound_out.lock().unwrap().drain(..).collect();
+        if !sound.is_empty() && rtc.is_connected() {
+            let key = c.keys.lock().unwrap().current;
+            let pt = rtc.writer(send_share).and_then(|w| w.payload_params().next().map(|p| p.pt()));
+            if let (Some((epoch, leaf, base)), Some(pt)) = (key, pt) {
+                for frame in sound {
+                    let sealed = frames::seal(&base, epoch, leaf, counter, &frame);
+                    counter += 1;
+                    let time = MediaTime::new(share_frames * 960, Frequency::FORTY_EIGHT_KHZ);
+                    share_frames += 1;
+                    if let Some(w) = rtc.writer(send_share) {
+                        let _ = w.write(pt, Instant::now(), time, sealed);
                     }
                 }
             }

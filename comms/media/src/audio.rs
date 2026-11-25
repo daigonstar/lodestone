@@ -96,6 +96,8 @@ pub struct Levels {
     /// A sound to play: 1 = someone joined, 2 = someone left.
     tone: AtomicU8,
     error: Mutex<Option<String>>,
+    /// The current call's echo reference (so a screen share's sound can have the call removed from it).
+    probe: Mutex<String>,
     pub frames_in: AtomicU64,
 }
 
@@ -112,6 +114,7 @@ impl Default for Levels {
             slot_volume: Mutex::new([100; SLOTS]),
             tone: AtomicU8::new(0),
             error: Mutex::new(None),
+            probe: Mutex::new(String::new()),
             frames_in: AtomicU64::new(0),
         }
     }
@@ -161,6 +164,10 @@ impl Levels {
     pub fn error(&self) -> Option<String> {
         self.error.lock().unwrap().clone()
     }
+    /// Set (or clear) the problem shown in the call bar.
+    pub fn error_slot(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.error.lock().unwrap()
+    }
     pub fn clear_error(&self) {
         *self.error.lock().unwrap() = None;
     }
@@ -204,7 +211,14 @@ pub fn devices() -> Result<Vec<Device>, String> {
             // PulseAudio/PipeWire names its devices; WASAPI gives an endpoint id.
             name: ["internal-name", "device"].iter().find(|p| d.has_property(p)).and_then(|p| d.property_value(p).get::<String>().ok()).unwrap_or_default(),
         })
-        .filter(|d| !d.name.is_empty() && !d.name.ends_with(".monitor"))
+        // Outputs' monitors (Linux) are what a screen share's sound can come from, not microphones.
+        .map(|mut d| {
+            if d.name.ends_with(".monitor") {
+                d.kind = "monitor";
+            }
+            d
+        })
+        .filter(|d| !d.name.is_empty())
         .collect();
     list.sort_by(|a, b| (a.kind, &a.label).cmp(&(b.kind, &b.label)));
     Ok(list)
@@ -264,7 +278,8 @@ pub struct GstAudio {
     preroll: VecDeque<Vec<i16>>,
     open_for: u32,
     encoded: u64,
-    next_pts: [Option<gst::ClockTime>; SLOTS],
+    /// Jitter buffer positions: voices in 0..SLOTS, shares' sound in SLOTS..2*SLOTS.
+    next_pts: [Option<gst::ClockTime>; 2 * SLOTS],
 }
 
 impl GstAudio {
@@ -282,27 +297,35 @@ impl GstAudio {
         gst::init().map_err(|e| format!("GStreamer didn't start: {e}"))?;
         let probe = format!("commsprobe{}", NEXT.fetch_add(1, Ordering::Relaxed));
         let raw = format!("audio/x-raw,format=S16LE,rate={RATE},channels=1,layout=interleaved");
+        // The speakers' mix is stereo (shared game or music sound keeps its stereo; voices are mono in it).
+        let raw2 = format!("audio/x-raw,format=S16LE,rate={RATE},channels=2,layout=interleaved");
+        // A second echo reference of the same speaker sound for a screen share's sound (each reference
+        // can only serve one echo canceller, and the microphone's has the first).
+        *self_probe(&levels) = format!("{probe}s");
 
         // Playback first: the echo canceller looks its reference (the probe) up by name when it starts.
         let playback = if full {
             let mut desc = format!(
-                "audiomixer name=mix latency=20000000 ! audioconvert ! audioresample ! {raw} ! volume name=outvol ! webrtcechoprobe name={probe} ! audioconvert ! audioresample ! {} \
-                 audiotestsrc wave=silence is-live=true samplesperbuffer=960 ! {raw} ! mix. \
-                 appsrc name=tone format=time is-live=true do-timestamp=true caps=\"{raw}\" ! queue ! mix. ",
+                "audiomixer name=mix latency=20000000 ! audioconvert ! audioresample ! {raw2} ! volume name=outvol ! webrtcechoprobe name={probe} ! webrtcechoprobe name={probe}s ! audioconvert ! audioresample ! {} \
+                 audiotestsrc wave=silence is-live=true samplesperbuffer=960 ! audioconvert ! {raw2} ! mix. \
+                 appsrc name=tone format=time is-live=true do-timestamp=true caps=\"{raw}\" ! audioconvert ! {raw2} ! queue ! mix. ",
                 if opts.silent { "fakesink sync=true".to_string() } else { format!("{SPEAKERS} name=speakers") }
             );
             for i in 0..SLOTS {
                 desc.push_str(&format!(
                     "appsrc name=s{i} format=time is-live=true do-timestamp=false min-latency=0 \
                      caps=\"audio/x-opus,channel-mapping-family=(int)0,channels=(int)1,rate=(int)48000\" ! \
-                     opusdec plc=true ! audioconvert ! audioresample ! {raw} ! volume name=v{i} ! queue max-size-time=500000000 ! mix. "
+                     opusdec plc=true ! audioconvert ! audioresample ! {raw2} ! volume name=v{i} ! queue max-size-time=500000000 ! mix. \
+                     appsrc name=h{i} format=time is-live=true do-timestamp=false min-latency=0 \
+                     caps=\"audio/x-opus,channel-mapping-family=(int)0,channels=(int)2,rate=(int)48000\" ! \
+                     opusdec plc=true ! audioconvert ! audioresample ! {raw2} ! volume name=hv{i} ! queue max-size-time=500000000 ! mix. "
                 ));
             }
             let p = pipeline(&desc)?;
             if !opts.silent {
                 set_device(&p, "speakers", opts.speakers.as_deref())?;
             }
-            let srcs = (0..SLOTS).map(|i| by_name::<AppSrc>(&p, &format!("s{i}"))).collect::<Result<Vec<_>, _>>()?;
+            let srcs = (0..SLOTS).map(|i| by_name::<AppSrc>(&p, &format!("s{i}"))).chain((0..SLOTS).map(|i| by_name::<AppSrc>(&p, &format!("h{i}")))).collect::<Result<Vec<_>, _>>()?;
             p.set_state(gst::State::Playing).map_err(|_| "Couldn't open your speakers".to_string())?;
             Some((p, srcs))
         } else {
@@ -338,9 +361,10 @@ impl GstAudio {
         };
 
         let outvol = playback.as_ref().and_then(|(p, _)| p.by_name("outvol"));
-        let slot_vols: Vec<gst::Element> = playback.as_ref().map(|(p, _)| (0..SLOTS).filter_map(|i| p.by_name(&format!("v{i}"))).collect()).unwrap_or_default();
+        // A person's volume applies to their voice and their share's sound (inputs i and SLOTS + i).
+        let slot_vols: Vec<gst::Element> = playback.as_ref().map(|(p, _)| (0..SLOTS).filter_map(|i| p.by_name(&format!("v{i}"))).chain((0..SLOTS).filter_map(|i| p.by_name(&format!("hv{i}")))).collect()).unwrap_or_default();
         let tone_src = playback.as_ref().and_then(|(p, _)| p.by_name("tone")).and_then(|e| e.downcast::<AppSrc>().ok());
-        Ok(Self { capture, pcm, encoder, playback, outvol, applied_volume: -1, slot_vols, applied_slots: [100; SLOTS], tone_src, levels, pending: Vec::new(), preroll: VecDeque::new(), open_for: 0, encoded: 0, next_pts: [None; SLOTS] })
+        Ok(Self { capture, pcm, encoder, playback, outvol, applied_volume: -1, slot_vols, applied_slots: [100; SLOTS], tone_src, levels, pending: Vec::new(), preroll: VecDeque::new(), open_for: 0, encoded: 0, next_pts: [None; 2 * SLOTS] })
     }
 
     /// Note the first pipeline error for the interface.
@@ -409,8 +433,8 @@ impl Audio for GstAudio {
         let wanted = *self.levels.slot_volume.lock().unwrap();
         if wanted != self.applied_slots {
             for (i, e) in self.slot_vols.iter().enumerate() {
-                if wanted[i] != self.applied_slots[i] {
-                    e.set_property("volume", wanted[i] as f64 / 100.0);
+                if wanted[i % SLOTS] != self.applied_slots[i % SLOTS] {
+                    e.set_property("volume", wanted[i % SLOTS] as f64 / 100.0);
                 }
             }
             self.applied_slots = wanted;
@@ -456,10 +480,26 @@ impl Audio for GstAudio {
     }
 
     fn play(&mut self, slot: usize, frame: &[u8]) {
-        let Some((p, srcs)) = &self.playback else { return };
-        let Some(src) = srcs.get(slot) else { return };
+        if slot >= SLOTS {
+            return;
+        }
         self.levels.heard.lock().unwrap()[slot] = Some(Instant::now());
         self.levels.frames_in.fetch_add(1, Ordering::Relaxed);
+        self.queue(slot, frame);
+    }
+
+    fn play_share(&mut self, slot: usize, frame: &[u8]) {
+        if slot < SLOTS {
+            self.queue(SLOTS + slot, frame);
+        }
+    }
+}
+
+impl GstAudio {
+    /// Into the jitter buffer of input `i` (voices 0..SLOTS, shares' sound after them).
+    fn queue(&mut self, slot: usize, frame: &[u8]) {
+        let Some((p, srcs)) = &self.playback else { return };
+        let Some(src) = srcs.get(slot) else { return };
         let Some(now) = p.current_running_time() else { return };
         // A small jitter buffer: queue frames back to back, starting JITTER from now; start again
         // from now after a pause, or if the queue has run too far ahead.
@@ -508,4 +548,86 @@ fn chime(joined: bool) -> gst::Buffer {
         }
     }
     gst::Buffer::from_mut_slice(pcm)
+}
+
+fn self_probe(levels: &Levels) -> std::sync::MutexGuard<'_, String> {
+    levels.probe.lock().unwrap()
+}
+
+/// What a screen share's sound comes from.
+#[derive(Clone, Debug)]
+pub enum ShareSoundFrom {
+    /// Everything you hear on your default output (Linux), or everything except Comms (Windows).
+    Default,
+    /// One output (its monitor on Linux; loopback of that device on Windows).
+    Output(String),
+}
+
+/// Your screen share's sound: captured, the call's own voices taken out, encoded as stereo Opus
+/// (128 kbps, 20 ms frames) for the call engine, which encrypts it. Nothing is recorded or kept.
+pub struct ShareSound {
+    pipeline: gst::Pipeline,
+}
+
+impl ShareSound {
+    pub fn start(from: ShareSoundFrom, levels: &Levels, out: impl Fn(Vec<u8>) + Send + Sync + 'static) -> Result<Self, String> {
+        gst::init().map_err(|e| format!("GStreamer didn't start: {e}"))?;
+        let raw2 = format!("audio/x-raw,format=S16LE,rate={RATE},channels=2,layout=interleaved");
+        // Linux: your output's monitor, with the call's voices removed by the echo canceller (it's given
+        // the exact call sound as its reference). Windows: Windows itself leaves Comms out.
+        #[cfg(not(windows))]
+        let (source, clean) = {
+            let probe = levels.probe.lock().unwrap().clone();
+            let clean = if probe.is_empty() {
+                String::new()
+            } else {
+                format!("webrtcdsp probe={probe} echo-cancel=true echo-suppression-level=high noise-suppression=false gain-control=false high-pass-filter=false delay-agnostic=true ! ")
+            };
+            ("pulsesrc name=src ! audioconvert ! audioresample", clean)
+        };
+        #[cfg(windows)]
+        let (source, clean) = {
+            let _ = levels;
+            ("wasapi2src name=src loopback=true ! audioconvert ! audioresample", String::new())
+        };
+        let p = pipeline(&format!(
+            "{source} ! {raw2} ! {clean}audioconvert ! {raw2} ! opusenc bitrate=128000 frame-size=20 audio-type=generic ! appsink name=out sync=false max-buffers=50 drop=true"
+        ))?;
+        let src = p.by_name("src").ok_or("sound setup failed")?;
+        #[cfg(not(windows))]
+        match &from {
+            ShareSoundFrom::Default => src.set_property_from_str("device", "@DEFAULT_MONITOR@"),
+            ShareSoundFrom::Output(name) if valid_device(name) => src.set_property_from_str("device", name),
+            ShareSoundFrom::Output(_) => return Err("That isn't a sound device".into()),
+        }
+        #[cfg(windows)]
+        match &from {
+            ShareSoundFrom::Default => {
+                src.set_property_from_str("loopback-mode", "exclude-process-tree");
+                src.set_property_from_str("loopback-target-pid", &std::process::id().to_string());
+            }
+            ShareSoundFrom::Output(name) if valid_device(name) => src.set_property_from_str("device", name),
+            ShareSoundFrom::Output(_) => return Err("That isn't a sound device".into()),
+        }
+        let sink = by_name::<AppSink>(&p, "out")?;
+        sink.set_callbacks(
+            gstreamer_app::AppSinkCallbacks::builder()
+                .new_sample(move |s| {
+                    let sample = s.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                    if let Some(map) = sample.buffer().and_then(|b| b.map_readable().ok()) {
+                        out(map.to_vec());
+                    }
+                    Ok(gst::FlowSuccess::Ok)
+                })
+                .build(),
+        );
+        p.set_state(gst::State::Playing).map_err(|_| "Couldn't capture the sound to share".to_string())?;
+        Ok(Self { pipeline: p })
+    }
+}
+
+impl Drop for ShareSound {
+    fn drop(&mut self) {
+        let _ = self.pipeline.set_state(gst::State::Null);
+    }
 }

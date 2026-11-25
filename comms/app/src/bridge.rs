@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{oneshot, Notify};
 
-pub const PERMISSIONS: &[&str] = &["friends:read", "chat:open"];
+pub const PERMISSIONS: &[&str] = &["friends:read", "chat:open", "game:read"];
 
 #[derive(Default)]
 pub struct Bridge {

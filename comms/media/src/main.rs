@@ -12,6 +12,9 @@
 //!   (voice gate, Opus, jitter buffer, mixing, echo cancellation) with your audio played straight back
 //!   to you, as one other person in a call would hear it. Shows the level and when the gate is open.
 //!   `--open` sends all the time instead of on voice activity; `--silent` plays into nothing.
+//! - `share-sound [seconds]`: the call's sound (silently, so the call's voices can be taken out) plus
+//!   a screen share's sound from your default output, encoded as it would be sent. Shows frames per
+//!   second. Nothing is recorded or sent.
 //! - `video [seconds] [720p]`: the screen share encoder (1080p30 VP8 by default) fed a moving test
 //!   pattern, end-to-end encrypted and decrypted, then decoded into pictures as a viewer would. Shows
 //!   frame rates and sizes. Nothing is captured from your screen.
@@ -229,6 +232,54 @@ fn voice(secs: u64, mic: Option<&String>, speakers: Option<&String>, open: bool,
     Ok(())
 }
 
+fn share_sound(secs: u64) -> Result<(), String> {
+    use lodestone_comms_media::audio::{GstAudio, Levels, Options, ShareSound, ShareSoundFrom};
+    use lodestone_comms_media::call::Audio;
+    let levels = Arc::new(Levels::default());
+    // The call's sound (silent) gives the echo reference that takes the call out on Linux; if no
+    // microphone opens, the share's sound is still checked on its own.
+    let mut call = match GstAudio::call(&Options { silent: true, ..Default::default() }, levels.clone()) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            println!("  (call sound not started: {e}; checking the share's sound on its own)");
+            None
+        }
+    };
+    let frames = Arc::new(AtomicU64::new(0));
+    let (f, bytes) = (frames.clone(), Arc::new(AtomicU64::new(0)));
+    let b = bytes.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let _share = ShareSound::start(ShareSoundFrom::Default, &levels, move |frame| {
+        f.fetch_add(1, Ordering::Relaxed);
+        b.fetch_add(frame.len() as u64, Ordering::Relaxed);
+        let _ = tx.send(frame);
+    })?;
+    println!("Capturing your default output's sound for {secs} s (play something to see the size grow)...");
+    let t = Instant::now();
+    while t.elapsed() < Duration::from_secs(secs) {
+        if let Some(call) = call.as_mut() {
+            let _ = call.take_captured();
+            // Played back as a watcher would hear it (into nothing: this check is silent).
+            while let Ok(frame) = rx.try_recv() {
+                call.play_share(0, &frame);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        if let Some(e) = levels.error() {
+            return Err(e);
+        }
+    }
+    let s = secs as f64;
+    if call.is_some() {
+        println!("  played back with no errors as a watcher would hear it");
+    }
+    println!("  {:.1} Opus frames/s (50 expected), {:.0} kbps", frames.load(Ordering::Relaxed) as f64 / s, bytes.load(Ordering::Relaxed) as f64 * 8.0 / s / 1000.0);
+    if frames.load(Ordering::Relaxed) == 0 {
+        return Err("no sound frames came out".into());
+    }
+    Ok(())
+}
+
 fn video(secs: u64, quality: &str) -> Result<(), String> {
     use lodestone_comms_media::frames;
     use lodestone_comms_media::video::{Quality, Capture, Viewer};
@@ -365,6 +416,7 @@ async fn main() {
         #[cfg(target_os = "linux")]
         "loopback" => loopback(secs(1, 15), flag("--mic"), flag("--speakers")),
         "voice" => voice(secs(1, 15), flag("--mic"), flag("--speakers"), args.iter().any(|a| a == "--open"), args.iter().any(|a| a == "--silent")),
+        "share-sound" => share_sound(secs(1, 4)),
         "video" => video(secs(1, 5), args.get(2).map(String::as_str).unwrap_or("1080p")),
         #[cfg(target_os = "linux")]
         "camera" => camera(secs(1, 5)).await,

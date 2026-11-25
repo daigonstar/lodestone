@@ -51,6 +51,8 @@ pub fn router(app: Shared) -> Router {
         .route("/api/friends", get(friends))
         .route("/api/invite-friend", post(invite_friend))
         .route("/api/open-chat", post(open_chat))
+        .route("/api/mentions", get(get_mentions))
+        .route("/api/mentions/clear", post(clear_mentions))
         .route("/api/events", get(events))
         .route("/api/manage", post(manage))
         .route("/api/icon", get(icon).post(set_icon))
@@ -420,8 +422,16 @@ struct HostQuery {
 async fn profiles(State(app): State<Shared>, Query(q): Query<HostQuery>) -> R {
     let c = client(&app, &q.host)?;
     let (name, color, has_avatar) = c.my_profile();
-    let list: Vec<Value> = c.profiles()?.into_iter().map(|(user, name, color, has)| json!({ "user": user, "name": name, "color": color, "has_avatar": has })).collect();
-    Ok(Json(json!({ "me": { "user": c.username(), "name": name, "color": color, "has_avatar": has_avatar }, "profiles": list })))
+    let playing = c.activities();
+    let mut list: Vec<Value> = c.profiles()?.into_iter().map(|(user, name, color, has)| json!({ "user": user, "name": name, "color": color, "has_avatar": has, "playing": playing.get(&user) })).collect();
+    // People playing something who haven't set a profile.
+    for (user, game) in &playing {
+        if !list.iter().any(|p| p["user"] == json!(user)) {
+            list.push(json!({ "user": user, "name": "", "color": "", "has_avatar": false, "playing": game }));
+        }
+    }
+    let me = c.username().unwrap_or_default();
+    Ok(Json(json!({ "me": { "user": c.username(), "name": name, "color": color, "has_avatar": has_avatar, "playing": playing.get(&me) }, "profiles": list })))
 }
 
 #[derive(Deserialize)]
@@ -869,5 +879,21 @@ struct UserVolume {
 
 async fn voice_user_volume(State(app): State<Shared>, Json(r): Json<UserVolume>) -> R {
     crate::voice::set_user_volume(&app, &r.host, &r.username, r.volume).await.map_err(Fail)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Unread mentions of you, by "host|channel".
+async fn get_mentions(State(app): State<Shared>) -> R {
+    Ok(Json(json!(app.mentions.lock().unwrap().clone())))
+}
+
+#[derive(Deserialize)]
+struct ChannelRef {
+    host: String,
+    channel: String,
+}
+
+async fn clear_mentions(State(app): State<Shared>, Json(r): Json<ChannelRef>) -> R {
+    app.mentions.lock().unwrap().remove(&format!("{}|{}", r.host.trim_end_matches('/'), r.channel));
     Ok(Json(json!({ "ok": true })))
 }

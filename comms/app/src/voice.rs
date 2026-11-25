@@ -39,6 +39,14 @@ pub struct Settings {
     /// Each person's volume in percent, by "host|username" (100 when not set).
     #[serde(default)]
     pub user_volumes: HashMap<String, f64>,
+    /// A screen share's sound: "off", "default" (what you hear on your default output; Windows: everything
+    /// except Comms) or an output's id (its monitor on Linux). The call's own voices are never included.
+    #[serde(default = "default_sound")]
+    pub share_sound: String,
+    /// When you start a game during a call: "ask" (offer to share it; the default), "auto" (start
+    /// sharing at once) or "off".
+    #[serde(default = "ask")]
+    pub game_share: String,
     /// Screen share quality: "1080p" (the default) or "720p".
     #[serde(default = "full")]
     pub share_quality: String,
@@ -46,6 +54,14 @@ pub struct Settings {
 
 fn hundred() -> f64 {
     100.0
+}
+
+fn ask() -> String {
+    "ask".into()
+}
+
+fn default_sound() -> String {
+    "default".into()
 }
 
 fn full() -> String {
@@ -61,7 +77,7 @@ fn threshold() -> f64 {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { mic: String::new(), speakers: String::new(), mode: voice(), threshold: threshold(), camera: String::new(), volume: hundred(), user_volumes: HashMap::new(), share_quality: full() }
+        Self { mic: String::new(), speakers: String::new(), mode: voice(), threshold: threshold(), camera: String::new(), volume: hundred(), user_volumes: HashMap::new(), share_sound: default_sound(), game_share: ask(), share_quality: full() }
     }
 }
 
@@ -86,6 +102,7 @@ struct Session {
 #[derive(Default)]
 struct Video {
     share: Mutex<Option<Capture>>,
+    share_sound: Mutex<Option<audio::ShareSound>>,
     viewers: Mutex<HashMap<usize, Viewer>>,
     camera: Mutex<Option<Capture>>,
     /// Cameras are coming in (your call view is open).
@@ -132,6 +149,12 @@ impl Voice {
         }
         if Gate::parse(&s.mode).is_none() {
             return Err("Unknown microphone mode".into());
+        }
+        if !["ask", "auto", "off"].contains(&s.game_share.as_str()) {
+            return Err("Unknown game sharing choice".into());
+        }
+        if s.share_sound != "off" && s.share_sound != "default" && !audio::valid_device(&s.share_sound) {
+            return Err("That isn't a sound device".into());
         }
         if !audio::valid_device(&s.camera) {
             return Err("That isn't a camera id".into());
@@ -563,7 +586,7 @@ pub async fn status(app: &Shared) -> Value {
             "sent": ctl.sent.load(Ordering::Relaxed),
             "received": ctl.received.load(Ordering::Relaxed),
             "undecryptable": ctl.undecryptable.load(Ordering::Relaxed),
-            "sharing": sess.video.share.lock().unwrap().as_ref().map(|s| json!({ "width": s.size.0, "height": s.size.1, "frames": s.frames.load(Ordering::Relaxed) })),
+            "sharing": sess.video.share.lock().unwrap().as_ref().map(|s| json!({ "width": s.size.0, "height": s.size.1, "frames": s.frames.load(Ordering::Relaxed), "sound": sess.video.share_sound.lock().unwrap().is_some() })),
             "watching": sess.video.viewers.lock().unwrap().keys().collect::<Vec<_>>(),
             "camera": sess.video.camera.lock().unwrap().is_some(),
             "cameras": sess.video.cams.lock().unwrap().keys().collect::<Vec<_>>(),
@@ -599,6 +622,25 @@ pub async fn start_share(app: &Shared, source: Option<String>) -> Result<(), Str
     .await?;
     share.keyframe();
     *video.share.lock().unwrap() = Some(share);
+    // The share's sound, if wanted. If it can't start, the picture is still shared.
+    let from = match app.voice.settings().share_sound.as_str() {
+        "off" => None,
+        "default" => Some(audio::ShareSoundFrom::Default),
+        other => Some(audio::ShareSoundFrom::Output(other.to_string())),
+    };
+    if let Some(from) = from {
+        let ctl = controls.clone();
+        match audio::ShareSound::start(from, &app.voice.levels, move |frame| {
+            let mut q = ctl.share_sound_out.lock().unwrap();
+            while q.len() >= 10 {
+                q.pop_front();
+            }
+            q.push_back(frame);
+        }) {
+            Ok(snd) => *video.share_sound.lock().unwrap() = Some(snd),
+            Err(e) => *app.voice.levels.error_slot() = Some(format!("Sharing without sound: {e}")),
+        }
+    }
     client.voice_share(&channel, true).await.map_err(|e| e.to_string())
 }
 
@@ -615,6 +657,7 @@ pub async fn stop_share(app: &Shared) -> Result<(), String> {
         (s.client.clone(), s.channel.clone(), s.video.clone())
     };
     let old = video.share.lock().unwrap().take();
+    video.share_sound.lock().unwrap().take();
     if old.is_none() {
         return Ok(());
     }

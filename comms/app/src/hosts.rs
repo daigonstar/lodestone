@@ -87,6 +87,13 @@ pub fn start_sync(app: Shared) {
                 }
                 match c.sync().await {
                     Ok(new) => {
+                        // Mentions of you in new messages from others.
+                        if let Some(me) = c.username() {
+                            for m in new.iter().filter(|m| m.sender != me && mentions(&m.body, &me)) {
+                                *app.mentions.lock().unwrap().entry(format!("{url}|{}", m.channel)).or_default() += 1;
+                                let _ = app.events.send(json!({ "type": "mention", "host": url, "channel": m.channel, "from": m.sender }).to_string());
+                            }
+                        }
                         let mut touched = c.take_touched();
                         if let Some(i) = touched.iter().position(|t| t == "profiles") {
                             touched.remove(i);
@@ -114,6 +121,37 @@ pub fn start_sync(app: Shared) {
             }
         }
     });
+}
+
+/// Does `body` mention `@username` (as a whole name, any case)?
+pub fn mentions(body: &str, username: &str) -> bool {
+    let lower = body.to_lowercase();
+    let want = format!("@{}", username.to_lowercase());
+    let mut from = 0;
+    while let Some(i) = lower[from..].find(&want) {
+        let at = from + i;
+        let end = at + want.len();
+        let before_ok = at == 0 || !lower[..at].chars().last().is_some_and(|c| c.is_alphanumeric() || "_.-".contains(c));
+        let after_ok = !lower[end..].chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '-');
+        if before_ok && after_ok {
+            return true;
+        }
+        from = end;
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn finds_whole_mentions_only() {
+        assert!(super::mentions("hey @Robb, look", "robb"));
+        assert!(super::mentions("@robb", "robb"));
+        assert!(super::mentions("cc @robb.", "robb"));
+        assert!(!super::mentions("hey @robbie", "robb"));
+        assert!(!super::mentions("mail me at x@robb", "robb"));
+        assert!(!super::mentions("robb without at", "robb"));
+    }
 }
 
 /// Keep a live connection to each host you've joined, so changes show up as they happen: new
@@ -159,6 +197,57 @@ pub fn start_live(app: Shared) {
                 });
             }
             tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+    });
+}
+
+/// Show your servers what you're playing: ask Lodestone every 10 s (only with your `game:read`
+/// permission; it gives just the title of the game you launched from it), and tell each host when it
+/// changes, then every 5 minutes while you play (so people who open Comms later see it too). Nothing
+/// is sent while you're invisible.
+pub fn start_playing(app: Shared) {
+    tokio::spawn(async move {
+        let mut current: Option<String> = None;
+        let mut sent_at: Option<std::time::Instant> = None;
+        loop {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            if !app.bridge.connected() {
+                continue;
+            }
+            let now = match app.bridge.request("playing", json!({})).await {
+                Ok(v) => v["title"].as_str().map(|t| t.chars().take(100).collect::<String>()),
+                // Not allowed (or an older Lodestone): ask again later.
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    continue;
+                }
+            };
+            let changed = now != current;
+            // A game just started: the page offers to share it if you're in a call (or starts sharing,
+            // as you chose in settings).
+            if changed {
+                if let Some(title) = &now {
+                    let _ = app.events.send(json!({ "type": "game-started", "title": title }).to_string());
+                }
+            }
+            let renew = now.is_some() && sent_at.is_none_or(|t| t.elapsed() >= Duration::from_secs(5 * 60));
+            if !changed && !renew {
+                continue;
+            }
+            for (url, c) in app.hosts.all() {
+                if c.username().is_none() || !c.host.signed_in() {
+                    continue;
+                }
+                let invisible = c.host.get("/v1/me").await.ok().is_some_and(|me| me["status"] == "invisible");
+                if invisible && now.is_some() {
+                    continue;
+                }
+                if c.set_playing(now.as_deref()).await.is_ok() {
+                    let _ = app.events.send(json!({ "type": "profiles", "host": url }).to_string());
+                }
+            }
+            current = now;
+            sent_at = Some(std::time::Instant::now());
         }
     });
 }

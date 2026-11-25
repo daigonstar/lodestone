@@ -178,6 +178,15 @@ every channel when it changes, and again into a channel whenever members are add
 can't read anything older). Receivers keep only a verified sender's own profile, so nobody can set
 someone else's; clients show the real `@username` beside a display name.
 
+What someone is playing is an application message with `t: "activity"` and the game's title (up to 100
+characters, one line) as `body`; an empty body means nothing. Clients send it to every channel when it
+changes and every 5 minutes while playing; receivers keep it in memory only and forget it after 12
+minutes without a repeat, so a client that vanished doesn't leave someone "playing" forever. It isn't
+sent while the sender's status is invisible. The host never sees it.
+
+Mentions (`@username` in a message) are found by each client after decrypting: the host never learns
+who was mentioned.
+
 ## Status
 
 - `PUT /v1/me/status` `{ status, text }`: `online`, `away`, `busy` or `invisible`, and an optional message
@@ -226,7 +235,9 @@ without decoding it. Clients encrypt every audio frame before sending, so the re
   looking at them.
 - Screen shares: the join offer also has one send-only video track and 16 receive-only ones (after the
   audio tracks), VP8, slots matching the audio ones. Cameras: another send-only video track and 16
-  receive-only ones after those (1280x720, 30 frames a second, about 1.5 Mbps). When someone starts watching, or a viewer reports
+  receive-only ones after those (1280x720, 30 frames a second, about 1.5 Mbps). A screen share's sound
+  comes last: one send-only audio track and 16 receive-only ones (stereo Opus, 128 kbps), encrypted like
+  voice, and forwarded only to that share's watchers. When someone starts watching, or a viewer reports
   a lost frame, the relay asks the sharer for a keyframe (RTCP PLI).
 - Video frames are encrypted with the same sender keys, but laid out differently so the transport can
   still tell keyframes apart: the first bytes of the VP8 frame stay readable (10 on a keyframe, 3

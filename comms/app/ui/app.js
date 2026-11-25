@@ -48,6 +48,7 @@ async function loadState() {
   try {
     const s = await api("/api/state");
     state.hosts = s.hosts;
+    state.mentions = await api("/api/mentions").catch(() => ({}));
     state.pairing = s.pairing || [];
     state.bridge = s.bridge;
     applyTheme(s.theme);
@@ -73,7 +74,7 @@ function render() {
   if (!sp || state.home) return renderHome();
   const admin = sp.your_role === "owner" || sp.your_role === "admin";
   $("#channels").innerHTML = `<h2><span>${esc(sp.name)}</span><button class="gear" data-act="settings" title="Server settings">⚙</button></h2><div class="host" title="${esc(sp.host)}">${esc(sp.me)} · ${esc(sp.host.replace(/^https?:\/\//, ""))}</div>
-    <div class="chlist">${sp.channels.filter((c) => c.kind !== "voice").map((c) => `<button class="ch ${c.id === state.sel.channel ? "on" : ""}" data-channel="${esc(c.id)}"># ${esc(c.name)}${c.ready ? "" : ' <span class="wait">(waiting for keys)</span>'}</button>`).join("")}
+    <div class="chlist">${sp.channels.filter((c) => c.kind !== "voice").map((c) => `<button class="ch ${c.id === state.sel.channel ? "on" : ""}" data-channel="${esc(c.id)}"># ${esc(c.name)}${c.ready ? "" : ' <span class="wait">(waiting for keys)</span>'}${mentionBadge(sp.host, c.id)}</button>`).join("")}
     ${sp.channels.some((c) => c.kind === "voice") ? '<h4 class="chhead">Voice</h4>' : ""}
     ${sp.channels.filter((c) => c.kind === "voice").map((c) => `<button class="ch vc" data-voice="${esc(c.id)}" title="${c.ready ? "Join the call" : "Waiting for this device's keys"}">🔊 ${esc(c.name)}${c.ready ? "" : ' <span class="wait">(waiting for keys)</span>'}</button><div class="vc-people" data-vc="${esc(c.id)}"></div>`).join("")}</div>
     <div class="side-actions"><button data-act="invite">Invite people</button>${admin ? '<button class="ghost" data-act="channel">New channel</button>' : ""}</div>
@@ -115,7 +116,9 @@ function render() {
     });
     showPending();
     t.focus();
+    mentionPicker(t);
     t.addEventListener("keydown", async (e) => {
+      if (e.defaultPrevented) return;
       if (e.key !== "Enter" || e.shiftKey) return;
       e.preventDefault();
       const text = t.value.trim();
@@ -244,7 +247,8 @@ async function loadMessages() {
       if (m.sender.startsWith("⚠")) who.title = "This sender's encryption key doesn't match what the host lists for them";
       const body = document.createElement("span");
       body.className = "body";
-      body.textContent = m.body;
+      body.append(withMentions(m.body, r.me));
+      if (r.me && mentionsMe(m.body, r.me) && m.sender !== r.me) row.classList.add("mentions-me");
       const add = document.createElement("button");
       add.className = "react-add";
       add.type = "button";
@@ -320,7 +324,7 @@ function renderMembers(sp) {
   const on = sorted.filter((m) => m.presence !== "offline"), off = sorted.filter((m) => m.presence === "offline");
   const row = (m) => `<div class="member ${m.presence}" title="${esc(STATUS_WORDS[m.presence] || m.presence)}${m.status_text ? " · " + esc(m.status_text) : ""}">
       <span class="av-wrap" data-avatar-user="${esc(m.username)}">${avatarHTML(m.username)}<span class="dot ${esc(m.presence)}"></span></span><span class="grow"><span class="mline"><span class="mname" ${profileOf(m.username).color ? `style="color:${esc(profileOf(m.username).color)}"` : ""}>${esc(profileOf(m.username).name || m.username)}</span>${m.role === "owner" ? '<span class="badge" title="Owner">👑</span>' : m.role === "admin" ? '<span class="badge" title="Admin">🛡</span>' : ""}</span>
-      <small>${profileOf(m.username).name && profileOf(m.username).name !== m.username ? "@" + esc(m.username) + (m.status_text ? " · " : "") : ""}${esc(m.status_text || "")}</small></span></div>`;
+      <small>${profileOf(m.username).name && profileOf(m.username).name !== m.username ? "@" + esc(m.username) + (m.status_text ? " · " : "") : ""}${esc(m.status_text || "")}</small>${profileOf(m.username).playing && m.presence !== "offline" ? `<small class="playing" title="Playing ${esc(profileOf(m.username).playing)}">🎮 ${esc(profileOf(m.username).playing)}</small>` : ""}</span></div>`;
   el.innerHTML = `<h4>Online — ${on.length}</h4>${on.map(row).join("")}<h4>Offline — ${off.length}</h4>${off.map(row).join("")}`;
 }
 document.addEventListener("click", (e) => {
@@ -367,7 +371,7 @@ async function loadProfiles(host) {
     const r = await api(`/api/profiles?host=${encodeURIComponent(host)}`);
     const map = {};
     for (const p of r.profiles) map[p.user] = p;
-    if (r.me.user) map[r.me.user] = { ...(map[r.me.user] || {}), user: r.me.user, name: r.me.name, color: r.me.color, has_avatar: r.me.has_avatar };
+    if (r.me.user) map[r.me.user] = { ...(map[r.me.user] || {}), user: r.me.user, name: r.me.name, color: r.me.color, has_avatar: r.me.has_avatar, playing: r.me.playing };
     state.profiles[host] = map;
   } catch {}
 }
@@ -1037,7 +1041,7 @@ document.addEventListener("click", (e) => {
   if (s) { state.home = false; state.sel = { host: s.dataset.host, space: s.dataset.space, channel: "" }; return loadState(); }
   if (e.target.closest("#home-btn")) { state.home = true; voice.view = false; renderStage(); return render(); }
   const c = e.target.closest("[data-channel]");
-  if (c) { state.sel.channel = c.dataset.channel; voice.view = false; renderStage(); return render(); }
+  if (c) { state.sel.channel = c.dataset.channel; voice.view = false; clearMentions(state.sel.host, c.dataset.channel); renderStage(); return render(); }
   const v = e.target.closest("[data-voice]");
   if (v) return joinVoice(v.dataset.voice);
   const w = e.target.closest("[data-watch]");
@@ -1070,6 +1074,12 @@ async function listen() {
           try { ev = JSON.parse(line); } catch { continue; }
           if (ev.type === "state") { clearTimeout(listen.reload); listen.reload = setTimeout(loadState, 150); }
           else if (ev.type === "voice") setTimeout(pollVoice, 300);
+          else if (ev.type === "game-started") gameStarted(ev.title);
+          else if (ev.type === "mention") {
+            const here = ev.host === state.sel.host && ev.channel === state.sel.channel && !voice.view && !state.home && document.visibilityState === "visible";
+            if (here) clearMentions(ev.host, ev.channel);
+            else { state.mentions[`${ev.host}|${ev.channel}`] = (state.mentions[`${ev.host}|${ev.channel}`] || 0) + 1; render(); toast(`${profileOf(ev.from, ev.host).name || ev.from} mentioned you`); }
+          }
           else if (ev.type === "theme") applyTheme(ev.data);
           else if (ev.type === "profiles") { forgetAvatars(ev.host); loadProfiles(ev.host).then(render); }
           else if (ev.type === "messages" && ev.host === state.sel.host && ev.channels.includes(state.sel.channel)) loadMessages();
@@ -1116,7 +1126,7 @@ function renderVoice() {
   const ch = spaces().find((x) => x.host === call.host)?.channels.find((c) => c.id === call.channel);
   const trouble = voice.audio?.error;
   setHTML(bar, `<div class="callbar">
-    <div class="call-info"><b class="${call.connected ? "ok" : "wait"}">${call.connected ? "Voice connected" : "Connecting…"}</b><small title="${esc(call.host)}">🔊 ${esc(ch?.name || "call")}${call.sharing ? ` · sharing ${call.sharing.width}×${call.sharing.height}` : ""}${trouble ? ` · <span class="bad">${esc(trouble)}</span>` : ""}</small></div>
+    <div class="call-info"><b class="${call.connected ? "ok" : "wait"}">${call.connected ? "Voice connected" : "Connecting…"}</b><small title="${esc(call.host)}">🔊 ${esc(ch?.name || "call")}${call.sharing ? ` · sharing ${call.sharing.width}×${call.sharing.height}${call.sharing.sound ? " with sound" : ""}` : ""}${trouble ? ` · <span class="bad">${esc(trouble)}</span>` : ""}</small></div>
     <div class="call-btns">
       <button type="button" data-call="mute" class="${call.muted ? "active" : ""}" title="${call.muted ? "Unmute" : "Mute"}"><span class="${call.muted ? "muted-mic" : ""}">🎙</span></button>
       <button type="button" data-call="deafen" class="${call.deafened ? "active" : ""}" title="${call.deafened ? "Undeafen" : "Deafen (hear no one, and mute)"}">${call.deafened ? "🔇" : "🎧"}</button>
@@ -1159,7 +1169,8 @@ async function callAction(act) {
       else {
         // Windows: Comms lists your screens and windows. Linux: the desktop's own dialog asks.
         const { sources } = await api("/api/voice/screens");
-        const source = sources.length ? await pickScreen(sources) : null;
+        const source = sources.length ? await pickScreen(sources, voice.preferWindow) : null;
+        voice.preferWindow = null;
         if (sources.length && !source) return;
         if (!sources.length) toast("Your desktop will ask which screen or window to share…");
         await api("/api/voice/share", { on: true, source });
@@ -1183,8 +1194,25 @@ async function callAction(act) {
   pollVoice();
 }
 
+// A game started (Lodestone told Comms): offer to share it if you're in a call, or share it at once.
+function gameStarted(title) {
+  const c = voice.call;
+  const mode = voice.audio?.settings?.game_share || "ask";
+  if (!c || c.sharing || mode === "off") return;
+  voice.preferWindow = title;
+  if (mode === "auto") { toast(`Sharing ${title}…`); return callAction("share"); }
+  const bar = document.createElement("div");
+  bar.className = "game-offer";
+  bar.innerHTML = `<span>🎮 You started <b>${esc(title)}</b>. Share it with the call?</span><button type="button" class="primary" data-go>Share it</button><button type="button" class="ghost" data-no>Not now</button>`;
+  document.body.appendChild(bar);
+  const done = () => bar.remove();
+  bar.querySelector("[data-go]").onclick = () => { done(); callAction("share"); };
+  bar.querySelector("[data-no]").onclick = () => { done(); voice.preferWindow = null; };
+  setTimeout(done, 30000);
+}
+
 // Choose a screen or window to share (Windows).
-function pickScreen(sources) {
+function pickScreen(sources, prefer) {
   return new Promise((done) => {
     let chosen = null;
     const group = (kind, title) => {
@@ -1192,7 +1220,9 @@ function pickScreen(sources) {
       return list.length ? `<h4 class="chhead">${title}</h4><div class="pick-list">${list.map((x) => `<label class="pick"><input type="radio" name="src" value="${esc(x.id)}">${esc(x.label)}</label>`).join("")}</div>` : "";
     };
     ask("Share your screen", `${group("monitor", "Screens")}${group("window", "Windows")}<p class="muted small">Windows shows a yellow border around what's being shared.</p>`, "Share", (f) => { chosen = f.get("src"); if (!chosen) throw new Error("Pick a screen or window"); });
-    const first = $("#dlg-body input[name=src]");
+    // A game you just started: its window is chosen for you if Comms finds one with its name.
+    const match = prefer && sources.find((x) => x.kind === "window" && x.label.toLowerCase().includes(prefer.toLowerCase()));
+    const first = match ? $(`#dlg-body input[name=src][value="${CSS.escape(match.id)}"]`) : $("#dlg-body input[name=src]");
     if (first) first.checked = true;
     $("#dlg").addEventListener("close", () => done(chosen), { once: true });
   });
@@ -1230,6 +1260,12 @@ async function soundDialog() {
       <option value="ptt" ${s.mode === "ptt" ? "selected" : ""}>While I hold \` (push to talk, while Comms has focus)</option>
       <option value="open" ${s.mode === "open" ? "selected" : ""}>All the time</option></select></label>
     <label>Camera<span class="row"><select name="camera" id="cam-select"><option value="${esc(s.camera || "")}">${s.camera ? "Chosen camera" : "First camera"}</option></select><button type="button" class="ghost" id="cam-find" title="Lists your cameras (your desktop may ask to allow camera access)">Find cameras</button></span></label>
+    <label>Sound with your screen share<select name="share_sound">${shareSoundOpts([], s.share_sound ?? "default")}</select></label>
+    <p class="muted small">Your friends hear what you hear, but never the call itself (their own voices are taken out). Choose an output to share only what plays there, for example a DAW or game bus.</p>
+    <label>When I start a game during a call<select name="game_share">
+      <option value="ask" ${(s.game_share || "ask") === "ask" ? "selected" : ""}>Offer to share it</option>
+      <option value="auto" ${s.game_share === "auto" ? "selected" : ""}>Share it right away</option>
+      <option value="off" ${s.game_share === "off" ? "selected" : ""}>Do nothing</option></select></label>
     <label>Screen share quality<select name="share_quality">
       <option value="1080p" ${s.share_quality !== "720p" ? "selected" : ""}>1080p, 30 frames a second (about 5 Mbps per viewer)</option>
       <option value="720p" ${s.share_quality === "720p" ? "selected" : ""}>720p, 30 frames a second (about 2.5 Mbps per viewer)</option></select></label>
@@ -1241,7 +1277,7 @@ async function soundDialog() {
   const form = $("#dlg-form");
   const save = async () => {
     const f = new FormData(form);
-    const body = { mic: f.get("mic"), speakers: f.get("speakers"), mode: f.get("mode"), threshold: Number(f.get("threshold")), share_quality: f.get("share_quality"), camera: f.get("camera") || "", volume: Number(f.get("volume")) };
+    const body = { mic: f.get("mic"), speakers: f.get("speakers"), mode: f.get("mode"), threshold: Number(f.get("threshold")), share_quality: f.get("share_quality"), camera: f.get("camera") || "", volume: Number(f.get("volume")), share_sound: f.get("share_sound") || "default", game_share: f.get("game_share") || "ask", user_volumes: voice.audio?.settings?.user_volumes || {} };
     $("#vol-val").textContent = `${body.volume}%`;
     $("#thr-val").textContent = `${body.threshold} dB`;
     try { await api("/api/voice/settings", body); if (voice.audio) voice.audio.settings = body; } catch (e) { toast(e.message, true); }
@@ -1255,6 +1291,8 @@ async function soundDialog() {
     const mic = form.querySelector("[name=mic]"), spk = form.querySelector("[name=speakers]");
     mic.innerHTML = opts(devices, "microphone", mic.value);
     spk.innerHTML = opts(devices, "speakers", spk.value);
+    const ss = form.querySelector("[name=share_sound]");
+    ss.innerHTML = shareSoundOpts(devices, ss.value);
   }).catch((e) => toast(e.message, true));
   $("#cam-find").onclick = async () => {
     try {
@@ -1271,6 +1309,16 @@ async function soundDialog() {
   };
   $("#dlg").addEventListener("close", () => { if (voice.audio?.testing) api("/api/voice/test", { on: false }).catch(() => {}); setTimeout(pollVoice, 300); }, { once: true });
   pollVoice();
+}
+// Choices for a screen share's sound: off, everything you hear, or one output (Linux: its monitor;
+// Windows: that device's loopback).
+function shareSoundOpts(list, cur) {
+  const outs = list.filter((d) => d.kind === "monitor").length ? list.filter((d) => d.kind === "monitor") : list.filter((d) => d.kind === "speakers");
+  const label = (d) => d.label.replace(/^Monitor of /, "");
+  return `<option value="default" ${cur === "default" ? "selected" : ""}>Everything you hear (except the call)</option>`
+    + `<option value="off" ${cur === "off" ? "selected" : ""}>No sound</option>`
+    + outs.map((d) => `<option value="${esc(d.name)}" ${d.name === cur ? "selected" : ""}>Only what plays on: ${esc(label(d))}</option>`).join("")
+    + (cur && cur !== "default" && cur !== "off" && !outs.some((d) => d.name === cur) ? `<option value="${esc(cur)}" selected>Chosen output</option>` : "");
 }
 function soundMeter() {
   const fill = $("#meter-fill");
@@ -1398,7 +1446,7 @@ function renderStage() {
     t.classList.toggle("speaking", !!p.speaking);
     t.classList.toggle("has-cam", camOn);
     setHTML(t.querySelector(".tile-media"), camOn ? `<img data-stream="c${p.slot}" alt="${who(p)}'s camera">` : avatarHTML(p.username));
-    setHTML(t.querySelector("b"), `${who(p)}${p.me ? " (you)" : ""}`);
+    setHTML(t.querySelector("b"), `${who(p)}${p.me ? " (you)" : ""}${profileOf(p.username).playing ? `<small class="playing">🎮 ${esc(profileOf(p.username).playing)}</small>` : ""}`);
     const watching = call.watching.includes(p.slot);
     const live = p.sharing && !p.me ? `<button type="button" class="live ${watching ? "on" : ""}" data-watch="${p.slot}">${watching ? "Watching" : "Watch"}</button>` : p.sharing ? '<span class="live">LIVE</span>' : "";
     setHTML(t.querySelector(".tile-state"), `${p.deafened ? '<span title="Deafened">🔇</span>' : p.muted ? '<span title="Muted" class="muted-mic">🎙</span>' : ""}${live}`);
@@ -1471,3 +1519,79 @@ document.addEventListener("input", (e) => {
   clearTimeout(pvolTimer);
   pvolTimer = setTimeout(() => api("/api/voice/user-volume", { host: voice.call?.host, username: r.dataset.pvol, volume: Number(r.value) }).catch((err) => toast(err.message, true)), 150);
 });
+
+// ---------- mentions ----------
+// @name in messages: highlighted, and a mention of you marks the message and the channel (worked out on
+// this PC: the host never learns who was mentioned).
+function mentionsMe(text, me) {
+  const re = new RegExp(`(^|[^\\w.-])@${me.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "i");
+  return re.test(text);
+}
+function withMentions(text, me) {
+  const frag = document.createDocumentFragment();
+  const { sp } = current();
+  const names = new Set((sp?.members || []).map((m) => m.username.toLowerCase()));
+  let last = 0;
+  for (const m of text.matchAll(/(^|[^\w.-])@([a-z0-9_.-]{2,32})/gi)) {
+    const name = m[2].replace(/[.]+$/, "");
+    if (!names.has(name.toLowerCase())) continue;
+    const at = m.index + m[1].length;
+    frag.append(text.slice(last, at));
+    const span = document.createElement("span");
+    span.className = "mention" + (me && name.toLowerCase() === me.toLowerCase() ? " me" : "");
+    span.textContent = "@" + (profileOf(name.toLowerCase()).name || name);
+    span.title = "@" + name;
+    frag.append(span);
+    last = at + 1 + name.length;
+  }
+  frag.append(text.slice(last));
+  return frag;
+}
+function mentionBadge(host, channel) {
+  const n = (state.mentions || {})[`${host}|${channel}`];
+  return n ? `<span class="mention-badge" title="${n} mention${n > 1 ? "s" : ""} of you">@${n > 1 ? n : ""}</span>` : "";
+}
+function clearMentions(host, channel) {
+  const k = `${host}|${channel}`;
+  if (!state.mentions?.[k]) return;
+  delete state.mentions[k];
+  api("/api/mentions/clear", { host, channel }).catch(() => {});
+}
+// Typing @ shows the server's members: arrow keys or the mouse to pick, Tab or Enter to insert.
+function mentionPicker(t) {
+  const box = document.createElement("div");
+  box.className = "mention-pick hidden";
+  t.closest(".composer").appendChild(box);
+  let items = [], pick = 0;
+  const query = () => {
+    const before = t.value.slice(0, t.selectionStart);
+    const m = before.match(/(^|\s)@([\w.-]{0,32})$/);
+    return m ? m[2].toLowerCase() : null;
+  };
+  const show = () => {
+    const q = query();
+    const { sp } = current();
+    items = q === null ? [] : (sp?.members || []).filter((x) => x.username.includes(q) || (profileOf(x.username).name || "").toLowerCase().includes(q)).slice(0, 8);
+    if (!items.length) { box.classList.add("hidden"); return; }
+    pick = Math.min(pick, items.length - 1);
+    box.innerHTML = items.map((x, i) => `<button type="button" class="${i === pick ? "on" : ""}" data-pick="${esc(x.username)}">${avatarHTML(x.username)}<b>${esc(profileOf(x.username).name || x.username)}</b><small>@${esc(x.username)}</small></button>`).join("");
+    box.classList.remove("hidden");
+  };
+  const insert = (name) => {
+    const pos = t.selectionStart;
+    const before = t.value.slice(0, pos).replace(/@[\w.-]*$/, `@${name} `);
+    t.value = before + t.value.slice(pos);
+    t.selectionStart = t.selectionEnd = before.length;
+    box.classList.add("hidden");
+    t.focus();
+  };
+  t.addEventListener("input", () => { pick = 0; show(); });
+  t.addEventListener("keydown", (e) => {
+    if (box.classList.contains("hidden")) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); pick = (pick + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length; show(); }
+    else if (e.key === "Tab" || e.key === "Enter") { e.preventDefault(); insert(items[pick].username); }
+    else if (e.key === "Escape") { e.preventDefault(); box.classList.add("hidden"); }
+  });
+  box.addEventListener("mousedown", (e) => { const b = e.target.closest("[data-pick]"); if (b) { e.preventDefault(); insert(b.dataset.pick); } });
+  t.addEventListener("blur", () => setTimeout(() => box.classList.add("hidden"), 150));
+}

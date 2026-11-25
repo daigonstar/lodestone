@@ -27,6 +27,9 @@ pub struct App {
     pub voice: voice::Voice,
     /// Wakes the background sync early (a host said something changed).
     pub wake: tokio::sync::Notify,
+    /// Unread mentions of you, by "host|channel" (worked out here after decrypting; the host never
+    /// knows who was mentioned).
+    pub mentions: std::sync::Mutex<std::collections::HashMap<String, u32>>,
 }
 
 pub type Shared = Arc<App>;
@@ -95,6 +98,7 @@ async fn run(ready: Option<std::sync::mpsc::Sender<String>>) {
         hosts,
         voice,
         wake: tokio::sync::Notify::new(),
+        mentions: Default::default(),
         bridge: bridge::Bridge::default(),
         token: token.clone(),
         authority: format!("127.0.0.1:{port}"),
@@ -109,6 +113,7 @@ async fn run(ready: Option<std::sync::mpsc::Sender<String>>) {
     }
     hosts::start_sync(app.clone());
     hosts::start_live(app.clone());
+    hosts::start_playing(app.clone());
     // Have the sound device list ready before anyone opens the settings.
     tokio::spawn(voice::refresh_devices(app.clone()));
     let server = axum::serve(listener, web::router(app.clone()));

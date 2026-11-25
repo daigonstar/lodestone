@@ -29,6 +29,10 @@ impl Audio for FakeAudio {
     fn play(&mut self, slot: usize, frame: &[u8]) {
         self.played.lock().unwrap().push((slot, frame.to_vec()));
     }
+    fn play_share(&mut self, slot: usize, frame: &[u8]) {
+        // Share sound is recorded with its slot plus 100, to tell it apart from voices.
+        self.played.lock().unwrap().push((slot + 100, frame.to_vec()));
+    }
 }
 
 async fn join(c: &Client, channel: &str, label: &'static str) -> (call::Call, Arc<Mutex<Vec<(usize, Vec<u8>)>>>, u64) {
@@ -146,8 +150,8 @@ async fn screen_share_reaches_only_watchers_encrypted() {
     carol.sync().await.unwrap();
 
     let (call_a, _, slot_a) = join(&alice, &voice, "alice").await;
-    let (call_b, _, _) = join(&bob, &voice, "bob").await;
-    let (call_c, _, _) = join(&carol, &voice, "carol").await;
+    let (call_b, played_b, _) = join(&bob, &voice, "bob").await;
+    let (call_c, played_c, _) = join(&carol, &voice, "carol").await;
     let got_b: Arc<Mutex<Vec<(usize, Vec<u8>)>>> = Default::default();
     let got_c: Arc<Mutex<Vec<(usize, Vec<u8>)>>> = Default::default();
     for (call, got) in [(&call_b, got_b.clone()), (&call_c, got_c.clone())] {
@@ -174,9 +178,13 @@ async fn screen_share_reaches_only_watchers_encrypted() {
         let f = fake_vp8(n, key);
         sent.lock().unwrap().push(f.clone());
         call_a.controls.video_out.lock().unwrap().push_back(f);
+        call_a.controls.share_sound_out.lock().unwrap().push_back(format!("sound-{n}").into_bytes());
         tokio::time::sleep(Duration::from_millis(33)).await;
     }
     tokio::time::sleep(Duration::from_millis(500)).await;
+    let sound = |p: &Mutex<Vec<(usize, Vec<u8>)>>| p.lock().unwrap().iter().filter(|(s, f)| *s as u64 == slot_a + 100 && f.starts_with(b"sound-")).count();
+    assert!(sound(&played_b) > 40, "Bob hears the share's sound: {}", sound(&played_b));
+    assert_eq!(sound(&played_c), 0, "Carol isn't watching, so she gets no share sound");
 
     let b = got_b.lock().unwrap().clone();
     assert!(b.len() > 40, "Bob saw Alice's share: {} frames", b.len());
