@@ -22,6 +22,12 @@ pub fn router(app: Shared) -> Router {
         .route("/v1/challenge", post(auth::challenge))
         .route("/v1/session", post(auth::new_session).delete(auth::sign_out))
         .route("/v1/devices", post(auth::add_device))
+        .route("/v1/devices/remove", post(crate::pairing::remove_device))
+        .route("/v1/pairing", post(crate::pairing::start).get(crate::pairing::waiting))
+        .route("/v1/pairing/claim", post(crate::pairing::claim))
+        .route("/v1/pairing/status", post(crate::pairing::status))
+        .route("/v1/pairing/approve", post(crate::pairing::approve))
+        .route("/v1/pairing/refuse", post(crate::pairing::refuse))
         .route("/v1/me", get(me))
         .route("/v1/me/status", axum::routing::put(crate::presence::set_status))
         .route("/v1/spaces", post(create_space))
@@ -125,6 +131,7 @@ async fn me(State(app): State<Shared>, me: Auth) -> ApiResult<Json<Value>> {
             .collect::<Result<_, _>>()?;
         Ok((devices, spaces))
     })?;
+    let devices: Vec<Value> = devices.iter().map(|d| json!({ "key": d, "fingerprint": crate::pairing::fingerprint(d), "this": d == &me.device })).collect();
     Ok(Json(json!({ "username": me.username, "device": me.device, "host_admin": me.host_admin, "devices": devices, "spaces": spaces, "status": status, "status_text": status_text })))
 }
 

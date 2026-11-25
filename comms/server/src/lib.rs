@@ -16,6 +16,7 @@ pub mod auth;
 pub mod db;
 pub mod blobs;
 pub mod live;
+pub mod pairing;
 pub mod presence;
 pub mod settings;
 pub mod util;

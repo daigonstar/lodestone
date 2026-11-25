@@ -281,6 +281,76 @@ impl Client {
         Ok(out.len())
     }
 
+    // ---------- devices and pairing ----------
+
+    /// This device's fingerprint: the same short code the host and your other devices show for it.
+    pub fn fingerprint(&self) -> String {
+        use sha2::Digest;
+        let d = sha2::Sha256::digest(self.device.as_bytes());
+        d[..8].chunks(2).map(|c| format!("{:02x}{:02x}", c[0], c[1])).collect::<Vec<_>>().join("-")
+    }
+
+    /// On a device you already use: a one-time code (10 minutes) for adding another device.
+    pub async fn pair_start(&self) -> Result<(String, i64)> {
+        let r = self.host.post("/v1/pairing", json!({})).await?;
+        Ok((r["code"].as_str().unwrap_or_default().to_string(), r["expires"].as_i64().unwrap_or(0)))
+    }
+
+    /// Devices that used one of your codes and are waiting for approval: (device key, fingerprint).
+    pub async fn pair_waiting(&self) -> Result<Vec<(String, String)>> {
+        let r = self.host.get("/v1/pairing").await?;
+        Ok(r["waiting"].as_array().into_iter().flatten().map(|w| (w["device_key"].as_str().unwrap_or_default().to_string(), w["fingerprint"].as_str().unwrap_or_default().to_string())).collect())
+    }
+
+    pub async fn pair_decide(&self, device_key: &str, approve: bool) -> Result<()> {
+        self.host.post(if approve { "/v1/pairing/approve" } else { "/v1/pairing/refuse" }, json!({ "device_key": device_key })).await?;
+        Ok(())
+    }
+
+    /// On the new device: offer this device for a code. Returns (username, this device's fingerprint);
+    /// then wait for `pair_check` to say it was approved.
+    pub async fn pair_claim(&self, code: &str) -> Result<(String, String)> {
+        let code = code.trim().to_ascii_lowercase();
+        let sig = self.sign(&format!("lodestone-comms/v1 pair {} {code} {}", self.host.url, self.device));
+        let r = self.host.post("/v1/pairing/claim", json!({ "code": code, "device_key": self.device, "signature": sig })).await?;
+        let user = r["username"].as_str().unwrap_or_default().to_string();
+        self.store.set("pairing", &json!({ "code": code, "username": user }).to_string())?;
+        Ok((user, self.fingerprint()))
+    }
+
+    /// On the new device: "waiting", "approved" (now signed in and ready) or "refused".
+    pub async fn pair_check(&self) -> Result<String> {
+        let p: Value = self.store.get("pairing").and_then(|t| serde_json::from_str(&t).ok()).ok_or_else(|| Error::Local("Not pairing".into()))?;
+        let r = self.host.post("/v1/pairing/status", json!({ "code": p["code"], "device_key": self.device })).await?;
+        let status = r["status"].as_str().unwrap_or("waiting").to_string();
+        if status == "approved" {
+            self.store.set("username", p["username"].as_str().unwrap_or_default())?;
+            self.store.with(|c| c.execute("DELETE FROM settings WHERE k = 'pairing'", []).map(|_| ()))?;
+            self.sign_in().await?;
+            self.top_up_key_packages().await?;
+        } else if status == "refused" {
+            self.store.with(|c| c.execute("DELETE FROM settings WHERE k = 'pairing'", []).map(|_| ()))?;
+        }
+        Ok(status)
+    }
+
+    /// Whether this device is waiting for approval (and for which username).
+    pub fn pairing(&self) -> Option<String> {
+        self.store.get("pairing").and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|p| p["username"].as_str().map(String::from))
+    }
+
+    /// Your devices: (device key, fingerprint, is this one).
+    pub async fn devices(&self) -> Result<Vec<(String, String, bool)>> {
+        let me = self.host.get("/v1/me").await?;
+        Ok(me["devices"].as_array().into_iter().flatten().map(|d| (d["key"].as_str().unwrap_or_default().to_string(), d["fingerprint"].as_str().unwrap_or_default().to_string(), d["this"].as_bool().unwrap_or(false))).collect())
+    }
+
+    /// Remove one of your other devices; your apps then take it out of every channel.
+    pub async fn remove_device(&self, device_key: &str) -> Result<()> {
+        self.host.post("/v1/devices/remove", json!({ "device_key": device_key })).await?;
+        Ok(())
+    }
+
     // ---------- spaces and channels ----------
 
     /// Create a server (space) with its `general` channel, and its encrypted group.
@@ -411,7 +481,11 @@ impl Client {
 
     /// Your own profile as stored on this device: (display name, colour, has a picture).
     pub fn my_profile(&self) -> (String, String, bool) {
-        let p: Value = self.store.get("profile").and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+        let Some(p) = self.store.get("profile").and_then(|t| serde_json::from_str::<Value>(&t).ok()) else {
+            // Not set on this device: use the one your other device sent, if any.
+            let me = self.username().unwrap_or_default();
+            return self.store.profiles().ok().and_then(|l| l.into_iter().find(|x| x.0 == me)).map(|x| (x.1, x.2, x.3.is_some())).unwrap_or_default();
+        };
         let has = self.store.get("avatar").is_some_and(|a| !a.is_empty());
         (p["name"].as_str().unwrap_or_default().to_string(), p["color"].as_str().unwrap_or_default().to_string(), has)
     }
@@ -424,7 +498,7 @@ impl Client {
             .profiles()?
             .into_iter()
             .map(|(u, n, c, a)| {
-                let has = if u == me { self.my_profile().2 } else { a.is_some() };
+                let has = if u == me && self.store.get("profile").is_some() { self.my_profile().2 } else { a.is_some() };
                 (u, n, c, has)
             })
             .collect())
@@ -433,9 +507,10 @@ impl Client {
     /// Someone's profile picture, decrypted (yours comes from this device).
     pub async fn avatar(&self, user: &str) -> Result<(Vec<u8>, String)> {
         if Some(user.to_string()) == self.username() {
-            let a = self.store.get("avatar").and_then(|a| unb64(&a)).filter(|a| !a.is_empty()).ok_or_else(|| Error::Local("No picture".into()))?;
-            let mime = sniff_image(&a).unwrap_or("application/octet-stream").to_string();
-            return Ok((a, mime));
+            if let Some(a) = self.store.get("avatar").and_then(|a| unb64(&a)).filter(|a| !a.is_empty()) {
+                let mime = sniff_image(&a).unwrap_or("application/octet-stream").to_string();
+                return Ok((a, mime));
+            }
         }
         let f = self.store.profiles()?.into_iter().find(|p| p.0 == user).and_then(|p| p.3).ok_or_else(|| Error::Local("No picture".into()))?;
         let (bytes, mime) = self.decrypt_ref(&f).await?;

@@ -48,6 +48,7 @@ async function loadState() {
   try {
     const s = await api("/api/state");
     state.hosts = s.hosts;
+    state.pairing = s.pairing || [];
     state.bridge = s.bridge;
     applyTheme(s.theme);
     for (const h of s.hosts) if (h.error) toast(`${h.url}: ${h.error}`, true);
@@ -74,7 +75,8 @@ function render() {
     $("#channels").innerHTML = "";
     $("#chat").innerHTML = `<div class="empty"><h2>Lodestone Comms</h2>
       <p class="muted">End-to-end encrypted chat on servers you or your friends host. Messages are encrypted on your PC; the host only passes them on.</p>
-      <div class="row"><button class="primary" data-act="join">Join with an invite</button><button class="ghost" data-act="setup">Set up a new host</button></div></div>`;
+      <div class="row"><button class="primary" data-act="join">Join with an invite</button><button class="ghost" data-act="pair">Sign in with another device</button><button class="ghost" data-act="setup">Set up a new host</button></div>
+      ${(state.pairing || []).map((p) => `<p class="muted">Waiting for approval as <b>${esc(p.username)}</b> on ${esc(p.url.replace(/^https?:\/\//, ""))}… Your other device should show <code>${esc(p.fingerprint)}</code>.</p>`).join("")}</div>`;
     return;
   }
   const admin = sp.your_role === "owner" || sp.your_role === "admin";
@@ -235,6 +237,7 @@ $("#status-menu").onclick = (e) => {
   if (b.dataset.status) return setStatus(b.dataset.status, h.status_text || "");
   if (b.hasAttribute("data-profile")) return profileDialog();
   if (b.hasAttribute("data-appearance")) return appearanceDialog();
+  if (b.hasAttribute("data-devices")) return devicesDialog();
   ask("Status message", `<label>What are you up to? <span class="muted">(up to 80 characters; empty to clear)</span><input name="text" maxlength="80" value="${esc(h.status_text || "")}"></label>`, "Save", (f) => setStatus(h.status || "online", String(f.get("text") || "")));
 };
 // Away by itself after 15 minutes without using Comms, and back when you return (only from Online).
@@ -327,6 +330,81 @@ function profileDialog() {
     pic = await fileBase64(file);
     $("#pf-preview").innerHTML = `<img class="av" src="${esc(URL.createObjectURL(file))}" alt="">`;
   };
+}
+
+// ---------- devices and pairing ----------
+let pairPoll = null;
+async function devicesDialog() {
+  const h = myHost();
+  let d;
+  try { d = await api(`/api/devices?host=${encodeURIComponent(h.url)}`); } catch (e) { return toast(e.message, true); }
+  const list = d.devices.map((x) => `<div class="set-row"><div class="grow">${x.this ? "<b>This device</b>" : "Another device"}<br><small><code>${esc(x.fingerprint)}</code></small></div>
+      ${x.this ? "" : `<button type="button" class="danger" data-rm="${esc(x.key)}">Remove</button>`}</div>`).join("");
+  ask("Your devices", `<p class="muted">Each device has its own key. Removing one takes it out of every channel: it can't read anything new.</p>${list}
+      <div id="pair-box"><button type="button" class="primary" id="pair-start">Add a device…</button></div>`, null, null);
+  $("#dlg-body").onclick = async (e) => {
+    const rm = e.target.closest("[data-rm]");
+    if (rm) {
+      if (!(await confirmBox("Remove this device? It will no longer be able to read new messages.", "Remove device"))) return;
+      try { await api("/api/devices/remove", { host: h.url, device_key: rm.dataset.rm }); toast("Device removed"); } catch (err) { toast(err.message, true); }
+      return;
+    }
+    if (e.target.closest("#pair-start")) startPairing(h);
+    const dec = e.target.closest("[data-decide]");
+    if (dec) {
+      try {
+        await api("/api/pair/decide", { host: h.url, device_key: dec.dataset.key, approve: dec.dataset.decide === "yes" });
+        toast(dec.dataset.decide === "yes" ? "Device added. It joins your channels in a few seconds." : "Device refused");
+        clearInterval(pairPoll);
+        $("#dlg").close();
+      } catch (err) { toast(err.message, true); }
+    }
+  };
+  $("#dlg").addEventListener("close", () => clearInterval(pairPoll), { once: true });
+}
+async function startPairing(h) {
+  let p;
+  try { p = await api("/api/pair/start", { host: h.url }); } catch (e) { return toast(e.message, true); }
+  const box = $("#pair-box");
+  const show = (waiting) => {
+    box.innerHTML = `<div class="pair-code"><p>On the new device choose <b>Sign in with another device</b> and enter:</p>
+      <p>Host <code>${esc(p.host)}</code> · Code <code class="big">${esc(p.code)}</code></p>
+      <p class="muted">Valid for 10 minutes, once.</p>
+      ${waiting.length ? waiting.map((w) => `<div class="set-row"><div class="grow">A device is asking to join. Approve only if it shows<br><code class="big">${esc(w.fingerprint)}</code></div>
+        <button type="button" class="primary" data-decide="yes" data-key="${esc(w.key)}">Approve</button><button type="button" class="danger" data-decide="no" data-key="${esc(w.key)}">Refuse</button></div>`).join("") : '<p class="muted">Waiting for the new device…</p>'}</div>`;
+  };
+  show([]);
+  clearInterval(pairPoll);
+  let shown = "";
+  pairPoll = setInterval(async () => {
+    try {
+      const d = await api(`/api/devices?host=${encodeURIComponent(h.url)}`);
+      // Redraw only when the waiting list changes, so the Approve button doesn't move under the pointer.
+      const key = d.waiting.map((w) => w.key).join(",");
+      if (key !== shown) { shown = key; show(d.waiting); }
+    } catch {}
+  }, 3000);
+}
+function pairDialog() {
+  ask("Sign in with another device", `<p class="muted">On a device where you're already signed in, open your name → <b>Devices…</b> → <b>Add a device</b>, then enter what it shows.</p>
+    <label>Host's domain<input name="host" placeholder="comms.yourdomain.com" autocomplete="off" spellcheck="false" required></label>
+    <label>Code<input name="code" autocomplete="off" spellcheck="false" required></label>`, "Continue", async (f) => {
+      const r = await api("/api/pair/claim", { host: String(f.get("host")), code: String(f.get("code")) });
+      await loadState();
+      waitForApproval(r);
+    });
+}
+function waitForApproval(r) {
+  ask("Waiting for approval", `<p>Signing in as <b>${esc(r.username)}</b>. On your other device, approve the request only if it shows:</p><p><code class="big">${esc(r.fingerprint)}</code></p><p class="muted" id="pair-status">Waiting…</p>`, null, null);
+  clearInterval(pairPoll);
+  pairPoll = setInterval(async () => {
+    try {
+      const s = await api("/api/pair/check", { host: r.host });
+      if (s.status === "approved") { clearInterval(pairPoll); $("#dlg").close(); toast("Signed in. Your channels appear as your other device adds this one."); loadState(); }
+      if (s.status === "refused") { clearInterval(pairPoll); $("#pair-status").textContent = "The request was refused or the code expired."; }
+    } catch (e) { $("#pair-status").textContent = e.message; }
+  }, 3000);
+  $("#dlg").addEventListener("close", () => clearInterval(pairPoll), { once: true });
 }
 
 // ---------- appearance ----------
@@ -735,6 +813,7 @@ function addDialog() {
   ask("Servers", `<div class="choices">
       <button type="button" class="primary" data-act="join">Join a server with an invite</button>
       ${hosts.map((h) => `<button type="button" class="ghost" data-act="create" data-host="${esc(h)}">Create a server on <b>${esc(h.replace(/^https?:\/\//, ""))}</b></button>`).join("")}
+      <button type="button" class="ghost" data-act="pair">Sign in with another device…</button>
       <button type="button" class="ghost" data-act="setup">Set up a new host…</button></div>`, null, null);
 }
 
@@ -781,7 +860,7 @@ document.addEventListener("click", (e) => {
   if (e.target.closest("#add-server")) return addDialog();
   const a = e.target.closest("[data-act]");
   if (!a) return;
-  ({ join: joinDialog, setup: setupDialog, invite: inviteDialog, channel: channelDialog, settings: () => openSettings("overview"), create: () => newServerDialog(a.dataset.host) })[a.dataset.act]?.();
+  ({ join: joinDialog, pair: pairDialog, setup: setupDialog, invite: inviteDialog, channel: channelDialog, settings: () => openSettings("overview"), create: () => newServerDialog(a.dataset.host) })[a.dataset.act]?.();
 });
 
 // ---------- live updates ----------

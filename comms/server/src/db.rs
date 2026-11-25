@@ -90,6 +90,12 @@ CREATE TABLE IF NOT EXISTS blobs (
     size INTEGER NOT NULL,
     created INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pairings (
+    code_hash TEXT PRIMARY KEY,
+    account INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    expires INTEGER NOT NULL,
+    device_key TEXT
+);
 CREATE TABLE IF NOT EXISTS welcomes (
     id INTEGER PRIMARY KEY,
     device_key TEXT NOT NULL REFERENCES devices(key) ON DELETE CASCADE,

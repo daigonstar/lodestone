@@ -36,6 +36,12 @@ pub fn router(app: Shared) -> Router {
         .route("/api/send", post(send))
         .route("/api/react", post(react))
         .route("/api/status", post(set_status))
+        .route("/api/devices", get(devices))
+        .route("/api/devices/remove", post(remove_device))
+        .route("/api/pair/start", post(pair_start))
+        .route("/api/pair/decide", post(pair_decide))
+        .route("/api/pair/claim", post(pair_claim))
+        .route("/api/pair/check", post(pair_check))
         .route("/api/profiles", get(profiles))
         .route("/api/profile", post(set_profile).layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)))
         .route("/api/avatar", get(avatar))
@@ -116,7 +122,11 @@ async fn ensure_signed_in(c: &Client) -> Result<(), Fail> {
 /// Everything the interface shows: hosts, your servers on each, their channels and members.
 async fn state(State(app): State<Shared>) -> R {
     let mut hosts = Vec::new();
+    let mut pairing = Vec::new();
     for (url, c) in app.hosts.all() {
+        if let (None, Some(user)) = (c.username(), c.pairing()) {
+            pairing.push(json!({ "url": url, "username": user, "fingerprint": c.fingerprint() }));
+        }
         let Some(username) = c.username() else { continue };
         let joined: Vec<String> = c.channels().map(|v| v.into_iter().map(|x| x.0).collect()).unwrap_or_default();
         let mut entry = json!({ "url": url, "username": username, "spaces": [], "status": "online", "status_text": "" });
@@ -147,7 +157,7 @@ async fn state(State(app): State<Shared>) -> R {
         }
         hosts.push(entry);
     }
-    Ok(Json(json!({ "hosts": hosts, "bridge": app.bridge.connected(), "theme": app.bridge.theme.lock().unwrap().clone() })))
+    Ok(Json(json!({ "hosts": hosts, "pairing": pairing, "bridge": app.bridge.connected(), "theme": app.bridge.theme.lock().unwrap().clone() })))
 }
 
 /// "https://host/join/CODE" -> (host URL, code).
@@ -480,6 +490,71 @@ async fn set_prefs(State(app): State<Shared>, Json(r): Json<Prefs>) -> R {
     }
     std::fs::write(app.hosts.prefs_file(), json!({ "theme": r.theme, "accent": accent }).to_string()).map_err(|e| Fail(e.to_string()))?;
     Ok(Json(json!({ "ok": true })))
+}
+
+/// Your devices on a host, this device's fingerprint, and devices waiting for your approval.
+async fn devices(State(app): State<Shared>, Query(q): Query<HostQuery>) -> R {
+    let c = client(&app, &q.host)?;
+    ensure_signed_in(&c).await?;
+    let list: Vec<Value> = c.devices().await?.into_iter().map(|(k, f, this)| json!({ "key": k, "fingerprint": f, "this": this })).collect();
+    let waiting: Vec<Value> = c.pair_waiting().await?.into_iter().map(|(k, f)| json!({ "key": k, "fingerprint": f })).collect();
+    Ok(Json(json!({ "fingerprint": c.fingerprint(), "devices": list, "waiting": waiting })))
+}
+
+#[derive(Deserialize)]
+struct DeviceReq {
+    host: String,
+    device_key: String,
+    #[serde(default)]
+    approve: bool,
+}
+
+async fn remove_device(State(app): State<Shared>, Json(r): Json<DeviceReq>) -> R {
+    let c = client(&app, &r.host)?;
+    ensure_signed_in(&c).await?;
+    c.remove_device(&r.device_key).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn pair_start(State(app): State<Shared>, Json(r): Json<HostQuery>) -> R {
+    let c = client(&app, &r.host)?;
+    ensure_signed_in(&c).await?;
+    let (code, expires) = c.pair_start().await?;
+    Ok(Json(json!({ "code": code, "expires": expires, "host": c.host.url.trim_start_matches("https://") })))
+}
+
+async fn pair_decide(State(app): State<Shared>, Json(r): Json<DeviceReq>) -> R {
+    let c = client(&app, &r.host)?;
+    ensure_signed_in(&c).await?;
+    c.pair_decide(&r.device_key, r.approve).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct PairClaim {
+    host: String,
+    code: String,
+}
+
+/// On a new device: offer this device to an account, using a code from one of its devices.
+async fn pair_claim(State(app): State<Shared>, Json(r): Json<PairClaim>) -> R {
+    let host = lodestone_comms_client::discover::discover(&r.host).await.map_err(Fail)?;
+    let c = app.hosts.open(&host).map_err(Fail)?;
+    if c.username().is_some() {
+        return Err(Fail("This device already has an account on that host".into()));
+    }
+    let (username, fingerprint) = c.pair_claim(&r.code).await?;
+    let _ = app.events.send(json!({ "type": "state" }).to_string());
+    Ok(Json(json!({ "host": host, "username": username, "fingerprint": fingerprint })))
+}
+
+async fn pair_check(State(app): State<Shared>, Json(r): Json<HostQuery>) -> R {
+    let c = app.hosts.get(&r.host).ok_or_else(|| Fail("Unknown host".into()))?;
+    let status = c.pair_check().await?;
+    if status != "waiting" {
+        let _ = app.events.send(json!({ "type": "state" }).to_string());
+    }
+    Ok(Json(json!({ "status": status })))
 }
 
 /// Your Steam and Epic friends, through the bridge (needs the friends:read permission in Lodestone).

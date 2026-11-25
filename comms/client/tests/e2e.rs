@@ -136,6 +136,40 @@ async fn encrypted_chat_end_to_end() {
     carol.sync().await.unwrap();
     assert_eq!(bodies(&carol, &general), vec!["alice: welcome carol"]);
 
+    // Alice pairs a second device: a code, then approval on the first, matching fingerprints.
+    let desktop = Client::open(&tmp.path().join("alice-desktop"), &url).unwrap();
+    let (pcode, _) = alice.pair_start().await.unwrap();
+    let (user, fp) = desktop.pair_claim(&pcode).await.unwrap();
+    assert_eq!(user, "alice");
+    assert_eq!(desktop.pair_check().await.unwrap(), "waiting");
+    let waiting = alice.pair_waiting().await.unwrap();
+    assert_eq!(waiting, vec![(desktop.device_key().to_string(), fp.clone())]);
+    alice.pair_decide(desktop.device_key(), true).await.unwrap();
+    assert_eq!(desktop.pair_check().await.unwrap(), "approved");
+    assert_eq!(desktop.username().as_deref(), Some("alice"));
+    // Alice's laptop (or any member) adds the new device to the channels.
+    alice.sync().await.unwrap();
+    desktop.sync().await.unwrap();
+    assert!(!desktop.channels().unwrap().is_empty(), "the desktop joined the channels");
+    desktop.send_text(&general, "from my desktop").await.unwrap();
+    carol.sync().await.unwrap();
+    assert_eq!(bodies(&carol, &general).last().unwrap(), "alice: from my desktop");
+    // The desktop learns Alice's profile from her laptop's encrypted profile message.
+    alice.sync().await.unwrap();
+    desktop.sync().await.unwrap();
+    assert_eq!(desktop.my_profile().0, "Alice ⚔");
+    let devices = alice.devices().await.unwrap();
+    assert_eq!(devices.len(), 2);
+    assert!(devices.iter().any(|d| d.0 == desktop.device_key() && !d.2));
+    // Removing the desktop takes it out of the channels: it reads nothing new.
+    alice.remove_device(desktop.device_key()).await.unwrap();
+    alice.sync().await.unwrap();
+    carol.sync().await.unwrap();
+    alice.send_text(&general, "desktop is gone").await.unwrap();
+    assert!(desktop.sync().await.is_err() || !bodies(&desktop, &general).iter().any(|b| b.contains("desktop is gone")));
+    carol.sync().await.unwrap();
+    assert_eq!(bodies(&carol, &general).last().unwrap(), "alice: desktop is gone");
+
     // Alice removes Bob: the host stops serving him and the groups drop his device.
     alice.host.call("DELETE", &format!("/v1/spaces/{space}/members/bob"), None).await.unwrap();
     alice.sync().await.unwrap();

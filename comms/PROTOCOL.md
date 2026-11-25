@@ -49,9 +49,21 @@ one host can't be replayed on another.
      allow registration without one. The setup code is printed once in the host's log on first start; the
      account that uses it becomes the host's admin.
    - Usernames: 2 to 32 characters, `a-z 0-9 _ . -`, case-insensitive, unique on the host.
-2. **Add a device** (`POST /v1/devices`, signed in): `{ device_key, signature }`, signature over
-   `lodestone-comms/v1 add-device <host url> <username> <device_key>` made by the **new** device. (Pairing
-   UI to come; the existing device approves it.)
+2. **Add a device by pairing**, approved on a device you already have:
+   - The existing device: `POST /v1/pairing` returns a one-time `code` (10 minutes; at most 3 waiting).
+   - The new device: `POST /v1/pairing/claim` `{ code, device_key, signature }`, signature over
+     `lodestone-comms/v1 pair <host url> <code> <device_key>`. Returns the username and the new device's
+     **fingerprint** (the first 8 bytes of SHA-256 of its key, like `8db0-cc19-ae79-87d1`). A code can only
+     be claimed by one device. It then polls `POST /v1/pairing/status` `{ code, device_key }`
+     (`waiting`, `approved`, `refused`).
+   - The existing device: `GET /v1/pairing` lists waiting devices with their fingerprints; the person
+     compares the fingerprint on both screens, then `POST /v1/pairing/approve` or `/refuse` `{ device_key }`.
+     Only an approved device is added, so a leaked code alone isn't enough.
+   - Members' apps then add the new device to every channel. It can read messages from then on, not
+     older ones.
+   - `POST /v1/devices/remove` `{ device_key }` removes one of your other devices; members' apps take it
+     out of every channel. (`POST /v1/devices` adds a device directly when signed in on the account; the
+     apps use pairing.)
 3. **Sign in** on a device:
    - `POST /v1/challenge` `{ device_key }` returns `{ nonce }` (valid for 2 minutes, single use).
    - `POST /v1/session` `{ device_key, nonce, signature }`, signature over
@@ -193,4 +205,4 @@ someone else's; clients show the real `@username` beside a display name.
 - Voice, video and screen share: the host forwards encrypted media between clients (an SFU) without
   decoding it. Media keys come from the channel's MLS group (the MLS exporter), SFrame-style.
 - Message edits and deletes (as encrypted application messages).
-- Device pairing UI and safety-number checks in the client.
+- Safety-number checks between members (comparing everyone's keys out of band).

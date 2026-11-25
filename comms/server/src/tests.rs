@@ -389,3 +389,56 @@ async fn presence_and_status() {
     assert_eq!(call(&app, "PUT", "/v1/me/status", Some(&tb), json!({ "status": "asleep" })).await.0, StatusCode::BAD_REQUEST);
     assert_eq!(call(&app, "PUT", "/v1/me/status", Some(&tb), json!({ "status": "away", "text": "x".repeat(81) })).await.0, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn pairing_needs_a_code_and_approval() {
+    let (app, code) = host();
+    let (laptop, desktop, stranger) = (Device::new(), Device::new(), Device::new());
+    laptop.register(&app, "alice", &code).await;
+    let ta = laptop.sign_in(&app).await;
+    let claim = |d: &Device, code: &str| json!({ "code": code, "device_key": d.public(), "signature": d.sign(&format!("lodestone-comms/v1 pair {HOST} {code} {}", d.public())) });
+
+    let (_, p) = call(&app, "POST", "/v1/pairing", Some(&ta), Value::Null).await;
+    let pcode = p["code"].as_str().unwrap().to_string();
+
+    // A signature for another code or host is refused; a wrong code finds nothing.
+    let mut forged = claim(&desktop, &pcode);
+    forged["signature"] = json!(desktop.sign(&format!("lodestone-comms/v1 pair https://other.test {pcode} {}", desktop.public())));
+    assert_eq!(call(&app, "POST", "/v1/pairing/claim", None, forged).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(call(&app, "POST", "/v1/pairing/claim", None, claim(&desktop, "nope")).await.0, StatusCode::NOT_FOUND);
+
+    // The desktop claims the code; a second device can't take the same code.
+    let (s, c) = call(&app, "POST", "/v1/pairing/claim", None, claim(&desktop, &pcode)).await;
+    assert_eq!(s, StatusCode::OK, "{c}");
+    assert_eq!(c["username"], "alice");
+    assert_eq!(call(&app, "POST", "/v1/pairing/claim", None, claim(&stranger, &pcode)).await.0, StatusCode::CONFLICT);
+
+    // Not a device yet: it can't sign in until the laptop approves.
+    assert_eq!(call(&app, "POST", "/v1/challenge", None, json!({ "device_key": desktop.public() })).await.0, StatusCode::UNAUTHORIZED);
+    let status = |d: &Device| json!({ "code": pcode, "device_key": d.public() });
+    assert_eq!(call(&app, "POST", "/v1/pairing/status", None, status(&desktop)).await.1["status"], "waiting");
+    let (_, w) = call(&app, "GET", "/v1/pairing", Some(&ta), Value::Null).await;
+    assert_eq!(w["waiting"][0]["device_key"], desktop.public());
+    assert_eq!(w["waiting"][0]["fingerprint"], c["fingerprint"], "both screens show the same fingerprint");
+    assert_eq!(call(&app, "POST", "/v1/pairing/approve", Some(&ta), json!({ "device_key": desktop.public() })).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "POST", "/v1/pairing/status", None, status(&desktop)).await.1["status"], "approved");
+    let td = desktop.sign_in(&app).await;
+    let (_, me) = call(&app, "GET", "/v1/me", Some(&td), Value::Null).await;
+    assert_eq!((me["username"].as_str(), me["devices"].as_array().unwrap().len()), (Some("alice"), 2));
+
+    // The code is used up.
+    assert_eq!(call(&app, "POST", "/v1/pairing/claim", None, claim(&stranger, &pcode)).await.0, StatusCode::NOT_FOUND);
+
+    // A refused device stays out.
+    let (_, p2) = call(&app, "POST", "/v1/pairing", Some(&ta), Value::Null).await;
+    let c2 = p2["code"].as_str().unwrap().to_string();
+    call(&app, "POST", "/v1/pairing/claim", None, claim(&stranger, &c2)).await;
+    call(&app, "POST", "/v1/pairing/refuse", Some(&ta), json!({ "device_key": stranger.public() })).await;
+    assert_eq!(call(&app, "POST", "/v1/pairing/status", None, json!({ "code": c2, "device_key": stranger.public() })).await.1["status"], "refused");
+    assert_eq!(call(&app, "POST", "/v1/pairing/approve", Some(&ta), json!({ "device_key": stranger.public() })).await.0, StatusCode::NOT_FOUND);
+
+    // Removing: not the device you're on; the other one loses its session.
+    assert_eq!(call(&app, "POST", "/v1/devices/remove", Some(&ta), json!({ "device_key": laptop.public() })).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(call(&app, "POST", "/v1/devices/remove", Some(&ta), json!({ "device_key": desktop.public() })).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "GET", "/v1/me", Some(&td), Value::Null).await.0, StatusCode::UNAUTHORIZED);
+}
