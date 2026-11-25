@@ -61,6 +61,9 @@ pub fn router(app: Shared) -> Router {
         .route("/api/voice/settings", post(voice_settings))
         .route("/api/voice/test", post(voice_test))
         .route("/api/voice/ptt", post(voice_ptt))
+        .route("/api/voice/share", post(voice_share))
+        .route("/api/voice/watch", post(voice_watch))
+        .route("/api/voice/picture", get(voice_picture))
         .route_layer(middleware::from_fn_with_state(app.clone(), guard));
     Router::new()
         .route("/", get(|| async { page(INDEX, "text/html; charset=utf-8") }))
@@ -753,4 +756,62 @@ async fn voice_test(State(app): State<Shared>, Json(r): Json<OnOff>) -> R {
 async fn voice_ptt(State(app): State<Shared>, Json(r): Json<OnOff>) -> R {
     crate::voice::ptt(&app, r.on);
     Ok(Json(json!({ "ok": true })))
+}
+
+async fn voice_share(State(app): State<Shared>, Json(r): Json<OnOff>) -> R {
+    if r.on { crate::voice::start_share(&app).await } else { crate::voice::stop_share(&app).await }.map_err(Fail)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct WatchReq {
+    slot: usize,
+    on: bool,
+}
+
+async fn voice_watch(State(app): State<Shared>, Json(r): Json<WatchReq>) -> R {
+    crate::voice::watch(&app, r.slot, r.on).await.map_err(Fail)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct SlotQuery {
+    slot: usize,
+}
+
+/// A share you're watching, as a stream of JPEG pictures, each preceded by its length (4 bytes, big
+/// endian). The page reads it with fetch (so the per-launch secret stays in a header) and shows each
+/// picture as it arrives. Ends when you stop watching.
+async fn voice_picture(State(app): State<Shared>, Query(q): Query<SlotQuery>) -> Response {
+    let Some(pic) = crate::voice::picture(&app, q.slot).await else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "You're not watching that share" }))).into_response();
+    };
+    let stream = futures_util::stream::unfold((pic, 0u64), |(pic, last)| async move {
+        loop {
+            let found = {
+                let notified = pic.changed.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                let newest = pic.jpeg.lock().unwrap().clone();
+                match newest.filter(|(n, _)| *n != last) {
+                    Some(x) => Some(x),
+                    // Nobody else holds the picture any more: you stopped watching.
+                    None if std::sync::Arc::strong_count(&pic) <= 1 => return None,
+                    None => {
+                        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), notified).await;
+                        None
+                    }
+                }
+            };
+            if let Some((n, jpeg)) = found {
+                let mut out = (jpeg.len() as u32).to_be_bytes().to_vec();
+                out.extend_from_slice(&jpeg);
+                return Some((Ok::<_, std::io::Error>(out), (pic, n)));
+            }
+        }
+    });
+    let mut r = Response::new(Body::from_stream(stream));
+    r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+    r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    r
 }

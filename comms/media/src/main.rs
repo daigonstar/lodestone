@@ -12,6 +12,9 @@
 //!   (voice gate, Opus, jitter buffer, mixing, echo cancellation) with your audio played straight back
 //!   to you, as one other person in a call would hear it. Shows the level and when the gate is open.
 //!   `--open` sends all the time instead of on voice activity; `--silent` plays into nothing.
+//! - `video [seconds] [720p]`: the screen share encoder (1080p30 VP8 by default) fed a moving test
+//!   pattern, end-to-end encrypted and decrypted, then decoded into pictures as a viewer would. Shows
+//!   frame rates and sizes. Nothing is captured from your screen.
 //! - `screen [seconds]`: share a screen or window through the desktop's portal (it asks you which),
 //!   then measure capture and VP8 encoding speed. Nothing is saved or sent anywhere.
 
@@ -202,6 +205,34 @@ fn voice(secs: u64, mic: Option<&String>, speakers: Option<&String>, open: bool,
     Ok(())
 }
 
+fn video(secs: u64, quality: &str) -> Result<(), String> {
+    use lodestone_comms_media::frames;
+    use lodestone_comms_media::video::{Quality, ScreenShare, Viewer};
+    let q = Quality::parse(quality).unwrap_or(Quality::Full);
+    let viewer = Arc::new(std::sync::Mutex::new(Viewer::new()?));
+    let (v, base) = (viewer.clone(), [3u8; 32]);
+    let bytes = Arc::new(AtomicU64::new(0));
+    let (b, counter) = (bytes.clone(), Arc::new(AtomicU64::new(0)));
+    let share = ScreenShare::test_pattern(q, move |frame| {
+        // Through the same encryption a call uses, and back.
+        let sealed = frames::seal_video(&base, 1, 0, counter.fetch_add(1, Ordering::Relaxed), &frame);
+        b.fetch_add(sealed.len() as u64, Ordering::Relaxed);
+        if let Some((_, f)) = frames::open_video(|_| Some(base), &sealed) {
+            v.lock().unwrap().push(f);
+        }
+    })?;
+    println!("Encoding a {}x{} test pattern for {secs} s...", share.size.0, share.size.1);
+    std::thread::sleep(Duration::from_secs(secs));
+    let pictures = viewer.lock().unwrap().picture.jpeg.lock().unwrap().as_ref().map(|(n, j)| (*n, j.len())).unwrap_or((0, 0));
+    let s = secs as f64;
+    println!("  encoded {:.1} frames/s, {:.1} Mbps (target {})", share.frames.load(Ordering::Relaxed) as f64 / s, bytes.load(Ordering::Relaxed) as f64 * 8.0 / s / 1e6, if q == Quality::Full { "5" } else { "2.5" });
+    println!("  decoded into {:.1} pictures/s for the page (last picture {} KB)", pictures.0 as f64 / s, pictures.1 / 1024);
+    if pictures.0 == 0 {
+        return Err("no pictures came out of the decoder".into());
+    }
+    Ok(())
+}
+
 async fn screen(secs: u64) -> Result<(), String> {
     use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
     use ashpd::desktop::PersistMode;
@@ -261,8 +292,9 @@ async fn main() {
         "devices" => devices(),
         "loopback" => loopback(secs(1, 15), flag("--mic"), flag("--speakers")),
         "voice" => voice(secs(1, 15), flag("--mic"), flag("--speakers"), args.iter().any(|a| a == "--open"), args.iter().any(|a| a == "--silent")),
+        "video" => video(secs(1, 5), args.get(2).map(String::as_str).unwrap_or("1080p")),
         "screen" => screen(secs(1, 10)).await,
-        other => Err(format!("unknown mode {other}: use check, devices, loopback, voice or screen")),
+        other => Err(format!("unknown mode {other}: use check, devices, loopback, voice, video or screen")),
     };
     if let Err(e) = res {
         eprintln!("FAILED: {e}");

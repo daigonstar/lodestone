@@ -308,6 +308,18 @@ impl Client {
         Ok(())
     }
 
+    /// Say you're sharing your screen in the call (or stopped).
+    pub async fn voice_share(&self, channel: &str, on: bool) -> Result<()> {
+        self.host.post(&format!("/v1/channels/{channel}/voice/share"), json!({ "on": on })).await?;
+        Ok(())
+    }
+
+    /// Start or stop receiving the share of the participant in `slot`.
+    pub async fn voice_watch(&self, channel: &str, slot: u64, on: bool) -> Result<()> {
+        self.host.post(&format!("/v1/channels/{channel}/voice/watch"), json!({ "slot": slot, "on": on })).await?;
+        Ok(())
+    }
+
     pub async fn voice_leave(&self, channel: &str) -> Result<()> {
         self.host.post(&format!("/v1/channels/{channel}/voice/leave"), json!({})).await?;
         Ok(())

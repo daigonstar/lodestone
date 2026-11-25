@@ -7,6 +7,11 @@
 //! audio into that slot's track on everyone else's connection, so joining and leaving never needs a
 //! renegotiation.
 //!
+//! Screen shares work the same way with video tracks (one sent, `SLOTS` received), except that video is
+//! only forwarded to people who chose to watch that share: a share costs upload per viewer, not per
+//! person in the call. When someone starts watching, or a viewer's decoder loses track, the relay asks
+//! the sharer for a keyframe. Video frames are end-to-end encrypted too (PROTOCOL.md).
+//!
 //! Settings: `COMMS_MEDIA_ADDR` (the addresses clients reach, `host:port`, names or IPs, separated by
 //! commas: usually the public address first and the LAN address second, for people on the host's own
 //! network when the router can't loop back to its public address; voice is off without it) and `COMMS_MEDIA_BIND` (where to listen, default `0.0.0.0:7881`).
@@ -26,7 +31,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use str0m::change::SdpOffer;
-use str0m::media::{Direction, MediaKind, Mid};
+use str0m::media::{Direction, KeyframeRequestKind, MediaKind, Mid};
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, Input, Output, Rtc};
 
@@ -40,6 +45,8 @@ pub struct Participant {
     pub slot: usize,
     pub muted: bool,
     pub deafened: bool,
+    /// Sharing their screen (others can choose to watch).
+    pub sharing: bool,
     #[serde(skip)]
     pub account: i64,
 }
@@ -48,6 +55,8 @@ enum Cmd {
     Add(Box<Peer>),
     Remove { channel: String, device: String },
     Deafen { channel: String, device: String, on: bool },
+    /// Start or stop sending `device` the video of the participant in `slot`.
+    Watch { channel: String, device: String, slot: usize, on: bool },
 }
 
 struct Peer {
@@ -61,6 +70,12 @@ struct Peer {
     from_client: Option<Mid>,
     /// The tracks this participant receives on, in the order they offered them (slot i = index i).
     to_client: Vec<Mid>,
+    /// The video track this participant sends a screen share on.
+    from_client_video: Option<Mid>,
+    /// The video tracks they receive on (slot i = index i).
+    to_client_video: Vec<Mid>,
+    /// Slots whose video this participant is watching.
+    watching: Vec<usize>,
     deafened: bool,
 }
 
@@ -154,6 +169,17 @@ fn resolve(addr: &str) -> Option<SocketAddr> {
     all.iter().find(|a| a.is_ipv4()).or(all.first()).copied()
 }
 
+/// Ask whoever sends video in `slot` of a call for a keyframe.
+fn request_keyframe(peers: &mut [Peer], channel: &str, slot: usize) {
+    if let Some(s) = peers.iter_mut().find(|p| p.channel == channel && p.slot == slot) {
+        if let Some(mid) = s.from_client_video {
+            if let Some(mut w) = s.rtc.writer(mid) {
+                let _ = w.request_keyframe(None, KeyframeRequestKind::Pli);
+            }
+        }
+    }
+}
+
 /// The relay loop: one socket, every connection, forwarding between participants of the same call.
 fn relay(socket: UdpSocket, rx: mpsc::Receiver<Cmd>, calls: Calls) {
     let mut peers: Vec<Peer> = Vec::new();
@@ -166,6 +192,17 @@ fn relay(socket: UdpSocket, rx: mpsc::Receiver<Cmd>, calls: Calls) {
                     peers.push(*p);
                 }
                 Cmd::Remove { channel, device } => peers.retain(|x| !(x.channel == channel && x.device == device)),
+                Cmd::Watch { channel, device, slot, on } => {
+                    if let Some(p) = peers.iter_mut().find(|x| x.channel == channel && x.device == device) {
+                        p.watching.retain(|s| *s != slot);
+                        if on {
+                            p.watching.push(slot);
+                        }
+                    }
+                    if on {
+                        request_keyframe(&mut peers, &channel, slot);
+                    }
+                }
                 Cmd::Deafen { channel, device, on } => {
                     if let Some(p) = peers.iter_mut().find(|x| x.channel == channel && x.device == device) {
                         p.deafened = on;
@@ -177,6 +214,7 @@ fn relay(socket: UdpSocket, rx: mpsc::Receiver<Cmd>, calls: Calls) {
         // Drive every connection until it only has a timeout left; collect audio to forward.
         let mut timeout = Instant::now() + Duration::from_millis(50);
         let mut forward = Vec::new();
+        let mut keyframes: Vec<(String, usize)> = Vec::new();
         for p in peers.iter_mut() {
             loop {
                 match p.rtc.poll_output() {
@@ -187,12 +225,21 @@ fn relay(socket: UdpSocket, rx: mpsc::Receiver<Cmd>, calls: Calls) {
                     Ok(Output::Transmit(t)) => {
                         let _ = socket.send_to(&t.contents, t.destination);
                     }
-                    Ok(Output::Event(Event::MediaAdded(m))) if m.kind == MediaKind::Audio => match m.direction {
-                        Direction::RecvOnly => p.from_client = Some(m.mid),
-                        Direction::SendOnly => p.to_client.push(m.mid),
+                    Ok(Output::Event(Event::MediaAdded(m))) => match (m.kind, m.direction) {
+                        (MediaKind::Audio, Direction::RecvOnly) => p.from_client = Some(m.mid),
+                        (MediaKind::Audio, Direction::SendOnly) => p.to_client.push(m.mid),
+                        (MediaKind::Video, Direction::RecvOnly) => p.from_client_video = Some(m.mid),
+                        (MediaKind::Video, Direction::SendOnly) => p.to_client_video.push(m.mid),
                         _ => {}
                     },
-                    Ok(Output::Event(Event::MediaData(d))) if Some(d.mid) == p.from_client => forward.push((p.channel.clone(), p.device.clone(), p.slot, d)),
+                    Ok(Output::Event(Event::MediaData(d))) if Some(d.mid) == p.from_client => forward.push((p.channel.clone(), p.device.clone(), p.slot, false, d)),
+                    Ok(Output::Event(Event::MediaData(d))) if Some(d.mid) == p.from_client_video => forward.push((p.channel.clone(), p.device.clone(), p.slot, true, d)),
+                    // A viewer lost a frame: ask the sharer of that slot for a keyframe.
+                    Ok(Output::Event(Event::KeyframeRequest(k))) => {
+                        if let Some(slot) = p.to_client_video.iter().position(|m| *m == k.mid) {
+                            keyframes.push((p.channel.clone(), slot));
+                        }
+                    }
                     Ok(Output::Event(_)) => {}
                     Err(_) => {
                         p.rtc.disconnect();
@@ -201,9 +248,17 @@ fn relay(socket: UdpSocket, rx: mpsc::Receiver<Cmd>, calls: Calls) {
                 }
             }
         }
-        for (channel, from, slot, d) in &forward {
-            for p in peers.iter_mut().filter(|p| &p.channel == channel && &p.device != from && !p.deafened) {
-                let Some(mid) = p.to_client.get(*slot).copied() else { continue };
+        keyframes.sort();
+        keyframes.dedup();
+        for (channel, slot) in keyframes {
+            request_keyframe(&mut peers, &channel, slot);
+        }
+        for (channel, from, slot, video, d) in &forward {
+            // Audio to everyone in the call who isn't deafened; video only to people watching this share.
+            let wants = |p: &Peer| if *video { p.watching.contains(slot) } else { !p.deafened };
+            for p in peers.iter_mut().filter(|p| &p.channel == channel && &p.device != from && wants(p)) {
+                let mids = if *video { &p.to_client_video } else { &p.to_client };
+                let Some(mid) = mids.get(*slot).copied() else { continue };
                 let Some(w) = p.rtc.writer(mid) else { continue };
                 let Some(pt) = w.match_params(d.params) else { continue };
                 let _ = w.write(pt, d.network_time, d.time, d.data.clone());
@@ -313,11 +368,11 @@ pub async fn join(State(app): State<Shared>, me: Auth, Path(channel): Path<Strin
         list.retain(|p| p.device != me.device);
         let used: Vec<usize> = list.iter().map(|p| p.slot).collect();
         let slot = (0..SLOTS).find(|s| !used.contains(s)).ok_or_else(|| ApiError::bad("This voice channel is full"))?;
-        list.push(Participant { username: me.username.clone(), device: me.device.clone(), slot, muted: r.muted, deafened: r.deafened, account: me.account });
+        list.push(Participant { username: me.username.clone(), device: me.device.clone(), slot, muted: r.muted, deafened: r.deafened, sharing: false, account: me.account });
         slot
     };
     let built = (|| {
-        let mut rtc = Rtc::builder().set_ice_lite(true).clear_codecs().enable_opus(true, false).build(Instant::now());
+        let mut rtc = Rtc::builder().set_ice_lite(true).clear_codecs().enable_opus(true, false).enable_vp8(true).build(Instant::now());
         rtc.add_local_candidate(Candidate::host(public, "udp").map_err(|e| e.to_string())?).ok_or("candidate refused")?;
         let answer = rtc.sdp_api().accept_offer(offer).map_err(|e| e.to_string())?;
         Ok::<_, String>((rtc, answer))
@@ -329,7 +384,7 @@ pub async fn join(State(app): State<Shared>, me: Auth, Path(channel): Path<Strin
             return Err(ApiError::bad(format!("Couldn't set up the call: {e}")));
         }
     };
-    app.voice.send(Cmd::Add(Box::new(Peer { addr: public, channel: channel.clone(), device: me.device.clone(), slot, rtc, from_client: None, to_client: Vec::new(), deafened: r.deafened })));
+    app.voice.send(Cmd::Add(Box::new(Peer { addr: public, channel: channel.clone(), device: me.device.clone(), slot, rtc, from_client: None, to_client: Vec::new(), from_client_video: None, to_client_video: Vec::new(), watching: Vec::new(), deafened: r.deafened })));
     Ok(Json(json!({ "answer": answer, "slot": slot, "participants": app.voice.participants(&channel) })))
 }
 
@@ -357,6 +412,43 @@ pub async fn set_state(State(app): State<Shared>, me: Auth, Path(channel): Path<
         return Err(ApiError::not_found("You aren't in this call"));
     }
     app.voice.send(Cmd::Deafen { channel, device: me.device, on: r.deafened });
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+pub struct ShareReq {
+    on: bool,
+}
+
+/// `POST /v1/channels/{channel}/voice/share` `{ on }`: say you're sharing your screen (or stopped).
+pub async fn share(State(app): State<Shared>, me: Auth, Path(channel): Path<String>, Json(r): Json<ShareReq>) -> ApiResult<Json<Value>> {
+    voice_channel(&app, &channel, &me)?;
+    let mut calls = app.voice.calls.lock().unwrap();
+    let p = calls.get_mut(&channel).and_then(|l| l.iter_mut().find(|p| p.device == me.device)).ok_or_else(|| ApiError::not_found("You aren't in this call"))?;
+    p.sharing = r.on;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+pub struct WatchReq {
+    slot: usize,
+    on: bool,
+}
+
+/// `POST /v1/channels/{channel}/voice/watch` `{ slot, on }`: start or stop receiving someone's share.
+pub async fn watch(State(app): State<Shared>, me: Auth, Path(channel): Path<String>, Json(r): Json<WatchReq>) -> ApiResult<Json<Value>> {
+    voice_channel(&app, &channel, &me)?;
+    {
+        let calls = app.voice.calls.lock().unwrap();
+        let list = calls.get(&channel).ok_or_else(|| ApiError::not_found("You aren't in this call"))?;
+        if !list.iter().any(|p| p.device == me.device) {
+            return Err(ApiError::not_found("You aren't in this call"));
+        }
+        if r.on && !list.iter().any(|p| p.slot == r.slot && p.sharing) {
+            return Err(ApiError::bad("Nobody is sharing in that slot"));
+        }
+    }
+    app.voice.send(Cmd::Watch { channel, device: me.device, slot: r.slot, on: r.on });
     Ok(Json(json!({ "ok": true })))
 }
 

@@ -8,6 +8,8 @@ use crate::Shared;
 use lodestone_comms_client::Client;
 use lodestone_comms_media::audio::{self, Gate, GstAudio, Levels, Options};
 use lodestone_comms_media::call::{self, Call, Controls};
+use lodestone_comms_media::video::{Picture, Quality, ScreenShare, Viewer};
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::net::SocketAddr;
@@ -28,6 +30,13 @@ pub struct Settings {
     /// Voice activity threshold in dB.
     #[serde(default = "threshold")]
     pub threshold: f64,
+    /// Screen share quality: "1080p" (the default) or "720p".
+    #[serde(default = "full")]
+    pub share_quality: String,
+}
+
+fn full() -> String {
+    "1080p".into()
 }
 
 fn voice() -> String {
@@ -39,7 +48,7 @@ fn threshold() -> f64 {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { mic: String::new(), speakers: String::new(), mode: voice(), threshold: threshold() }
+        Self { mic: String::new(), speakers: String::new(), mode: voice(), threshold: threshold(), share_quality: full() }
     }
 }
 
@@ -57,6 +66,14 @@ struct Session {
     /// Who's in the call (from the host), refreshed every few seconds.
     participants: Arc<Mutex<Value>>,
     slot: u64,
+    video: Arc<Video>,
+}
+
+/// Your screen share and the shares you're watching.
+#[derive(Default)]
+struct Video {
+    share: Mutex<Option<ScreenShare>>,
+    viewers: Mutex<HashMap<usize, Viewer>>,
 }
 
 struct MicTest {
@@ -87,6 +104,9 @@ impl Voice {
     pub fn set_settings(&self, s: Settings) -> Result<(), String> {
         if Gate::parse(&s.mode).is_none() {
             return Err("Unknown microphone mode".into());
+        }
+        if Quality::parse(&s.share_quality).is_none() {
+            return Err("Unknown screen share quality".into());
         }
         for d in [&s.mic, &s.speakers] {
             if !d.chars().all(|c| c.is_ascii_alphanumeric() || "._-:@".contains(c)) {
@@ -220,7 +240,15 @@ pub async fn join(app: &Shared, c: Arc<Client>, host: &str, channel: &str, muted
         return Err(last_err);
     };
     let participants = Arc::new(Mutex::new(joined["participants"].clone()));
+    let video = Arc::new(Video::default());
+    let v2 = video.clone();
+    *controls.video_in.lock().unwrap() = Some(Box::new(move |slot, frame| {
+        if let Some(view) = v2.viewers.lock().unwrap().get_mut(&slot) {
+            view.push(frame);
+        }
+    }));
     let session = Session {
+        video: video.clone(),
         host: host.to_string(),
         channel: channel.to_string(),
         client: c.clone(),
@@ -233,6 +261,33 @@ pub async fn join(app: &Shared, c: Arc<Client>, host: &str, channel: &str, muted
     // While in the call: follow the channel's key changes (people joining or leaving its group) and
     // who's in the call.
     let (ch, ctl) = (channel.to_string(), controls);
+    // Keyframes: the relay asks for one of your share; a viewer here asks for one of someone's.
+    let (ctl2, app2) = (ctl.clone(), app.clone());
+    tokio::spawn(async move {
+        let mut last_ask: HashMap<usize, std::time::Instant> = HashMap::new();
+        while !ctl2.stop.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let mut ended = false;
+            if let Some(sh) = video.share.lock().unwrap().as_ref() {
+                if ctl2.keyframe_wanted.swap(false, Ordering::Relaxed) {
+                    sh.keyframe();
+                }
+                ended = sh.ended.load(Ordering::Relaxed);
+            }
+            if ended {
+                let _ = stop_share(&app2).await;
+            }
+            let mut ask = Vec::new();
+            for (slot, view) in video.viewers.lock().unwrap().iter() {
+                let recent = last_ask.get(slot).is_some_and(|t| t.elapsed() < Duration::from_millis(500));
+                if !recent && view.wants_keyframe.swap(false, Ordering::Relaxed) {
+                    ask.push(*slot);
+                    last_ask.insert(*slot, std::time::Instant::now());
+                }
+            }
+            ctl2.keyframe_from.lock().unwrap().extend(ask);
+        }
+    });
     tokio::spawn(async move {
         let mut tick = 0u32;
         while !ctl.stop.load(Ordering::Relaxed) {
@@ -332,9 +387,87 @@ pub async fn status(app: &Shared) -> Value {
             "sent": ctl.sent.load(Ordering::Relaxed),
             "received": ctl.received.load(Ordering::Relaxed),
             "undecryptable": ctl.undecryptable.load(Ordering::Relaxed),
+            "sharing": sess.video.share.lock().unwrap().as_ref().map(|s| json!({ "width": s.size.0, "height": s.size.1, "frames": s.frames.load(Ordering::Relaxed) })),
+            "watching": sess.video.viewers.lock().unwrap().keys().collect::<Vec<_>>(),
+            "video_sent": ctl.video_sent.load(Ordering::Relaxed),
+            "video_received": ctl.video_received.load(Ordering::Relaxed),
         },
         "audio": base,
     })
+}
+
+/// Share your screen in the call. The desktop asks which screen or window first.
+pub async fn start_share(app: &Shared) -> Result<(), String> {
+    let (client, channel, controls, video) = {
+        let g = app.voice.session.lock().await;
+        let s = g.as_ref().ok_or("Join a voice channel first")?;
+        if s.video.share.lock().unwrap().is_some() {
+            return Ok(());
+        }
+        (s.client.clone(), s.channel.clone(), s.call.controls.clone(), s.video.clone())
+    };
+    let quality = Quality::parse(&app.voice.settings().share_quality).unwrap_or(Quality::Full);
+    let ctl = controls.clone();
+    let share = ScreenShare::start(quality, move |frame| {
+        let mut q = ctl.video_out.lock().unwrap();
+        // If sending falls behind, drop the oldest rather than build up delay.
+        while q.len() >= 4 {
+            q.pop_front();
+        }
+        q.push_back(frame);
+    })
+    .await?;
+    share.keyframe();
+    *video.share.lock().unwrap() = Some(share);
+    client.voice_share(&channel, true).await.map_err(|e| e.to_string())
+}
+
+/// Stop sharing your screen.
+pub async fn stop_share(app: &Shared) -> Result<(), String> {
+    let (client, channel, video) = {
+        let g = app.voice.session.lock().await;
+        let s = g.as_ref().ok_or("You're not in a call")?;
+        (s.client.clone(), s.channel.clone(), s.video.clone())
+    };
+    let old = video.share.lock().unwrap().take();
+    if old.is_none() {
+        return Ok(());
+    }
+    drop(old);
+    client.voice_share(&channel, false).await.map_err(|e| e.to_string())
+}
+
+/// Start or stop watching the share of the participant in `slot`.
+pub async fn watch(app: &Shared, slot: usize, on: bool) -> Result<(), String> {
+    let (client, channel, video) = {
+        let g = app.voice.session.lock().await;
+        let s = g.as_ref().ok_or("You're not in a call")?;
+        (s.client.clone(), s.channel.clone(), s.video.clone())
+    };
+    if slot >= call::SLOTS {
+        return Err("No such participant".into());
+    }
+    if on {
+        if !video.viewers.lock().unwrap().contains_key(&slot) {
+            let v = Viewer::new()?;
+            video.viewers.lock().unwrap().insert(slot, v);
+        }
+    } else {
+        video.viewers.lock().unwrap().remove(&slot);
+    }
+    let r = client.voice_watch(&channel, slot as u64, on).await.map_err(|e| e.to_string());
+    if r.is_err() && on {
+        video.viewers.lock().unwrap().remove(&slot);
+    }
+    r
+}
+
+/// The newest picture of a share you're watching.
+pub async fn picture(app: &Shared, slot: usize) -> Option<Arc<Picture>> {
+    let g = app.voice.session.lock().await;
+    let s = g.as_ref()?;
+    let v = s.video.viewers.lock().unwrap();
+    v.get(&slot).map(|v| v.picture.clone())
 }
 
 /// Hold or release push to talk (from the page while it has focus; a desktop-wide key comes later).

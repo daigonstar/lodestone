@@ -866,6 +866,8 @@ document.addEventListener("click", (e) => {
   if (c) { state.sel.channel = c.dataset.channel; return render(); }
   const v = e.target.closest("[data-voice]");
   if (v) return joinVoice(v.dataset.voice);
+  const w = e.target.closest("[data-watch]");
+  if (w) return watchShare(Number(w.dataset.watch), !voice.call?.watching.includes(Number(w.dataset.watch)));
   const cb = e.target.closest("[data-call]");
   if (cb) return callAction(cb.dataset.call);
   if (e.target.closest("#add-server")) return addDialog();
@@ -913,6 +915,7 @@ async function pollVoice() {
     voice.call = v.call; voice.audio = v.audio;
   } catch { voice.call = null; }
   renderVoice();
+  renderStage();
   soundMeter();
   clearTimeout(voice.timer);
   // Fast while in a call (speaking rings) or while the sound settings are open; otherwise not at all.
@@ -926,7 +929,10 @@ function renderVoice() {
     const ch = sp?.channels.find((c) => c.id === id);
     const mine = call && call.channel === id && call.host === state.sel.host;
     const people = mine ? call.participants : (ch?.in_call || []).map((u) => ({ username: u }));
-    el.innerHTML = people.map((p) => `<div class="vc-person ${p.speaking ? "speaking" : ""}">${avatarHTML(p.username)}<span class="grow">${esc(profileOf(p.username).name || p.username)}</span>${p.deafened ? '<span title="Deafened">🔇</span>' : p.muted ? '<span title="Muted" class="muted-mic">🎙</span>' : ""}</div>`).join("");
+    el.innerHTML = people.map((p) => {
+      const live = p.sharing ? (mine && !p.me ? `<button type="button" class="live ${call.watching.includes(p.slot) ? "on" : ""}" data-watch="${p.slot}" title="${call.watching.includes(p.slot) ? "Stop watching" : "Watch their screen"}">LIVE</button>` : '<span class="live" title="Sharing their screen">LIVE</span>') : "";
+      return `<div class="vc-person ${p.speaking ? "speaking" : ""}">${avatarHTML(p.username)}<span class="grow">${esc(profileOf(p.username).name || p.username)}</span>${live}${p.deafened ? '<span title="Deafened">🔇</span>' : p.muted ? '<span title="Muted" class="muted-mic">🎙</span>' : ""}</div>`;
+    }).join("");
     el.previousElementSibling?.classList.toggle("on", !!mine);
   }
   const bar = $("#callbar");
@@ -935,11 +941,12 @@ function renderVoice() {
   const ch = spaces().find((x) => x.host === call.host)?.channels.find((c) => c.id === call.channel);
   const trouble = voice.audio?.error;
   bar.innerHTML = `<div class="callbar">
-    <div class="call-info"><b class="${call.connected ? "ok" : "wait"}">${call.connected ? "Voice connected" : "Connecting…"}</b><small title="${esc(call.host)}">🔊 ${esc(ch?.name || "call")}${trouble ? ` · <span class="bad">${esc(trouble)}</span>` : ""}</small></div>
+    <div class="call-info"><b class="${call.connected ? "ok" : "wait"}">${call.connected ? "Voice connected" : "Connecting…"}</b><small title="${esc(call.host)}">🔊 ${esc(ch?.name || "call")}${call.sharing ? ` · sharing ${call.sharing.width}×${call.sharing.height}` : ""}${trouble ? ` · <span class="bad">${esc(trouble)}</span>` : ""}</small></div>
     <div class="call-btns">
       <button type="button" data-call="mute" class="${call.muted ? "active" : ""}" title="${call.muted ? "Unmute" : "Mute"}"><span class="${call.muted ? "muted-mic" : ""}">🎙</span></button>
       <button type="button" data-call="deafen" class="${call.deafened ? "active" : ""}" title="${call.deafened ? "Undeafen" : "Deafen (hear no one, and mute)"}">${call.deafened ? "🔇" : "🎧"}</button>
-      <button type="button" data-call="sound" title="Sound settings">⚙</button>
+      <button type="button" data-call="share" class="${call.sharing ? "active share-on" : ""}" title="${call.sharing ? "Stop sharing your screen" : "Share your screen"}">🖥</button>
+      <button type="button" data-call="sound" title="Sound and sharing settings">⚙</button>
       <button type="button" data-call="leave" class="leave" title="Leave the call">✕</button>
     </div></div>`;
 }
@@ -964,6 +971,11 @@ async function callAction(act) {
   if (act === "sound") return soundDialog();
   if (!c) return;
   try {
+    if (act === "share") {
+      if (!c.sharing) toast("Your desktop will ask which screen or window to share…");
+      await api("/api/voice/share", { on: !c.sharing });
+      if (!c.sharing) toast("You're sharing. People in the call can choose to watch.");
+    }
     if (act === "leave") { await api("/api/voice/leave", {}); voice.call = null; }
     else if (act === "mute") await api("/api/voice/state", { muted: c.deafened ? false : !c.muted, deafened: false });
     else if (act === "deafen") await api("/api/voice/state", { muted: !c.deafened, deafened: !c.deafened });
@@ -994,13 +1006,16 @@ async function soundDialog() {
   try { voice.audio = (await api("/api/voice")).audio; } catch {}
   const s = voice.audio?.settings || { mic: "", speakers: "", mode: "voice", threshold: -45 };
   const opts = (kind, cur) => `<option value="">System default</option>` + list.filter((d) => d.kind === kind).map((d) => `<option value="${esc(d.name)}" ${d.name === cur ? "selected" : ""}>${esc(d.label)}</option>`).join("");
-  ask("Sound", `<div id="sound-dlg">
+  ask("Sound and sharing", `<div id="sound-dlg">
     <label>Microphone<select name="mic">${opts("microphone", s.mic)}</select></label>
     <label>Speakers<select name="speakers">${opts("speakers", s.speakers)}</select></label>
     <label>Send my voice<select name="mode">
       <option value="voice" ${s.mode === "voice" ? "selected" : ""}>When I talk (voice activity)</option>
       <option value="ptt" ${s.mode === "ptt" ? "selected" : ""}>While I hold \` (push to talk, while Comms has focus)</option>
       <option value="open" ${s.mode === "open" ? "selected" : ""}>All the time</option></select></label>
+    <label>Screen share quality<select name="share_quality">
+      <option value="1080p" ${s.share_quality !== "720p" ? "selected" : ""}>1080p, 30 frames a second (about 5 Mbps per viewer)</option>
+      <option value="720p" ${s.share_quality === "720p" ? "selected" : ""}>720p, 30 frames a second (about 2.5 Mbps per viewer)</option></select></label>
     <label>Sensitivity: send when louder than <b id="thr-val">${Math.round(s.threshold)} dB</b><input type="range" name="threshold" min="-80" max="-10" step="1" value="${s.threshold}"></label>
     <div class="meter" title="Your microphone's level after noise suppression"><div class="meter-fill" id="meter-fill"></div><div class="meter-mark" id="meter-mark"></div></div>
     <div class="row"><button type="button" class="ghost" id="mic-test">Test microphone</button><small class="muted">Talk, and set the marker just below your voice.</small></div>
@@ -1009,7 +1024,7 @@ async function soundDialog() {
   const form = $("#dlg-form");
   const save = async () => {
     const f = new FormData(form);
-    const body = { mic: f.get("mic"), speakers: f.get("speakers"), mode: f.get("mode"), threshold: Number(f.get("threshold")) };
+    const body = { mic: f.get("mic"), speakers: f.get("speakers"), mode: f.get("mode"), threshold: Number(f.get("threshold")), share_quality: f.get("share_quality") };
     $("#thr-val").textContent = `${body.threshold} dB`;
     try { await api("/api/voice/settings", body); if (voice.audio) voice.audio.settings = body; } catch (e) { toast(e.message, true); }
     soundMeter();
@@ -1037,6 +1052,91 @@ function soundMeter() {
   const b = $("#mic-test");
   if (b) b.textContent = voice.audio?.testing ? "Stop test" : "Test microphone";
 }
+
+// ---------- screen shares you watch ----------
+// Each watched share is a stream of JPEG pictures from the Comms program (decoded there; this page
+// has no video decoder of its own), read with fetch so the per-launch secret stays in a header.
+const streams = new Map(); // slot -> { abort, url }
+const ending = new Set(); // shares that ended, being unwatched
+async function watchShare(slot, on) {
+  try { await api("/api/voice/watch", { slot, on }); } catch (e) { return toast(e.message, true); }
+  if (!on) stopStream(slot);
+  pollVoice();
+}
+function stopStream(slot) {
+  const s = streams.get(slot);
+  if (!s) return;
+  s.abort.abort();
+  if (s.url) URL.revokeObjectURL(s.url);
+  streams.delete(slot);
+}
+async function readStream(slot) {
+  const abort = new AbortController();
+  const entry = { abort, url: "" };
+  streams.set(slot, entry);
+  try {
+    const r = await fetch(`/api/voice/picture?slot=${slot}`, { headers: { "x-comms-token": TOKEN }, signal: abort.signal });
+    if (!r.ok) throw new Error();
+    const reader = r.body.getReader();
+    let buf = new Uint8Array(0);
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const next = new Uint8Array(buf.length + value.length);
+      next.set(buf); next.set(value, buf.length); buf = next;
+      let newest = null;
+      while (buf.length >= 4) {
+        const len = new DataView(buf.buffer, buf.byteOffset).getUint32(0);
+        if (buf.length < 4 + len) break;
+        newest = buf.slice(4, 4 + len);
+        buf = buf.slice(4 + len);
+      }
+      if (newest) {
+        const img = document.querySelector(`#stage img[data-slot="${slot}"]`);
+        if (!img) continue;
+        const url = URL.createObjectURL(new Blob([newest], { type: "image/jpeg" }));
+        const old = entry.url;
+        entry.url = url;
+        img.src = url;
+        if (old) setTimeout(() => URL.revokeObjectURL(old), 1000);
+      }
+    }
+  } catch {}
+  if (streams.get(slot) === entry) streams.delete(slot);
+}
+function renderStage() {
+  const stage = $("#stage");
+  const call = voice.call;
+  const watching = call ? call.watching : [];
+  for (const slot of [...streams.keys()]) if (!watching.includes(slot)) stopStream(slot);
+  if (!watching.length) { stage.classList.add("hidden"); stage.classList.remove("focus"); stage.innerHTML = ""; return; }
+  stage.classList.remove("hidden");
+  const name = (slot) => { const p = call.participants.find((x) => x.slot === slot); return p ? profileOf(p.username).name || p.username : "Someone"; };
+  const have = [...stage.querySelectorAll("figure")].map((f) => Number(f.dataset.slot));
+  if (have.join() !== watching.join()) {
+    stage.innerHTML = `<div class="stage-grid n${Math.min(watching.length, 4)}">${watching.map((slot) => `<figure data-slot="${slot}">
+      <img data-slot="${slot}" alt="Screen share">
+      <figcaption><span class="live">LIVE</span> <b>${esc(name(slot))}</b><span class="grow"></span>
+        <button type="button" class="ghost" data-stage="focus" title="Fill the Comms window (double-click the picture for full screen)">⤢</button>
+        <button type="button" class="ghost" data-watch="${slot}" title="Stop watching">✕</button></figcaption></figure>`).join("")}</div>`;
+  }
+  for (const slot of watching) if (!streams.has(slot)) readStream(slot);
+  // A share that ended: stop watching it.
+  for (const slot of watching) {
+    if (call.participants.some((p) => p.slot === slot && p.sharing) || ending.has(slot)) continue;
+    ending.add(slot);
+    watchShare(slot, false).finally(() => ending.delete(slot));
+  }
+}
+document.addEventListener("click", (e) => {
+  if (e.target.closest('[data-stage="focus"]')) $("#stage").classList.toggle("focus");
+});
+document.addEventListener("dblclick", (e) => {
+  const img = e.target.closest("#stage img");
+  if (!img) return;
+  if (document.fullscreenElement) document.exitFullscreen?.();
+  else img.requestFullscreen?.().catch(() => $("#stage").classList.add("focus"));
+});
 
 loadPrefs().then(loadState);
 pollVoice();

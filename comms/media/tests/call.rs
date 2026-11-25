@@ -111,3 +111,90 @@ async fn two_engines_talk_through_the_relay_encrypted() {
     bob.voice_leave(&voice).await.unwrap();
     assert_eq!(alice.voice_info(&voice).await.unwrap()["participants"].as_array().unwrap().len(), 0);
 }
+
+/// A stand-in VP8 frame: byte 0 has the keyframe bit (0 = keyframe), then a label.
+fn fake_vp8(n: u64, key: bool) -> Vec<u8> {
+    let mut f = vec![if key { 0x10 } else { 0x11 }];
+    f.extend_from_slice(format!("frame-{n}-").as_bytes());
+    f.resize(1200 + (n as usize % 7) * 300, 0xab); // more than one packet
+    f
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn screen_share_reaches_only_watchers_encrypted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let port = std::net::UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let db = Db::open(&tmp.path().join("host.db")).unwrap();
+    let setup = db.setup_code_if_new().unwrap().unwrap();
+    let media = format!("127.0.0.1:{port}");
+    let state = app(Config { public_url: url.clone(), admin_only_spaces: false, blob_dir: tmp.path().join("blobs"), max_file: 1 << 20, space_quota: 1 << 20, media_addr: Some(media.clone()), media_bind: media }, db);
+    tokio::spawn(serve(listener, state));
+
+    let alice = Client::open(&tmp.path().join("alice"), &url).unwrap();
+    alice.register("alice", &setup).await.unwrap();
+    let space = alice.create_space("Raid night").await.unwrap();
+    let voice = alice.create_voice_channel(&space, "Lounge").await.unwrap();
+    let invite = alice.create_invite(&space, 2, 3600).await.unwrap();
+    let bob = Client::open(&tmp.path().join("bob"), &url).unwrap();
+    bob.register("bob", invite["code"].as_str().unwrap()).await.unwrap();
+    let carol = Client::open(&tmp.path().join("carol"), &url).unwrap();
+    carol.register("carol", invite["code"].as_str().unwrap()).await.unwrap();
+    alice.sync().await.unwrap();
+    bob.sync().await.unwrap();
+    carol.sync().await.unwrap();
+
+    let (call_a, _, slot_a) = join(&alice, &voice, "alice").await;
+    let (call_b, _, _) = join(&bob, &voice, "bob").await;
+    let (call_c, _, _) = join(&carol, &voice, "carol").await;
+    let got_b: Arc<Mutex<Vec<(usize, Vec<u8>)>>> = Default::default();
+    let got_c: Arc<Mutex<Vec<(usize, Vec<u8>)>>> = Default::default();
+    for (call, got) in [(&call_b, got_b.clone()), (&call_c, got_c.clone())] {
+        *call.controls.video_in.lock().unwrap() = Some(Box::new(move |slot, f| got.lock().unwrap().push((slot, f))));
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Watching needs someone sharing in that slot.
+    assert!(bob.voice_watch(&voice, slot_a, true).await.is_err());
+    alice.voice_share(&voice, true).await.unwrap();
+    assert_eq!(alice.voice_info(&voice).await.unwrap()["participants"].as_array().unwrap().iter().filter(|p| p["sharing"] == true).count(), 1);
+    bob.voice_watch(&voice, slot_a, true).await.unwrap();
+
+    // Alice "shares" 30 frames a second; a keyframe when the relay asks for one (Bob started watching).
+    let sent: Arc<Mutex<Vec<Vec<u8>>>> = Default::default();
+    let mut keyframes = 0;
+    for n in 0..60u64 {
+        let key = n == 0 || call_a.controls.keyframe_wanted.swap(false, Ordering::Relaxed);
+        keyframes += key as u32;
+        let f = fake_vp8(n, key);
+        sent.lock().unwrap().push(f.clone());
+        call_a.controls.video_out.lock().unwrap().push_back(f);
+        tokio::time::sleep(Duration::from_millis(33)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let b = got_b.lock().unwrap().clone();
+    assert!(b.len() > 40, "Bob saw Alice's share: {} frames", b.len());
+    assert!(b.iter().all(|(slot, _)| *slot as u64 == slot_a), "in Alice's slot");
+    let sent = sent.lock().unwrap();
+    assert!(b.iter().all(|(_, f)| sent.contains(f)), "frames arrive exactly as sent (decrypted)");
+    assert!(keyframes >= 2, "the relay asked Alice for a keyframe when Bob started watching");
+    assert!(got_c.lock().unwrap().is_empty(), "Carol isn't watching, so she gets no video");
+    assert_eq!(call_b.controls.undecryptable.load(Ordering::Relaxed), 0);
+
+    // Bob stops watching: nothing more arrives.
+    bob.voice_watch(&voice, slot_a, false).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let before = got_b.lock().unwrap().len();
+    for n in 60..75u64 {
+        call_a.controls.video_out.lock().unwrap().push_back(fake_vp8(n, false));
+        tokio::time::sleep(Duration::from_millis(33)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(got_b.lock().unwrap().len(), before, "nothing after unwatching");
+
+    for c in [call_a, call_b, call_c] {
+        c.stop();
+    }
+}

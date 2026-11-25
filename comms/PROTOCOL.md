@@ -1,6 +1,6 @@
 # Lodestone Comms protocol (draft, version 1)
 
-Lodestone Comms is text chat (and later voice, video and screen share) on servers people host themselves.
+Lodestone Comms is text chat, voice calls and screen sharing (webcams later) on servers people host themselves.
 This document is the contract between the Comms host program and its clients. It's public so anyone can
 check exactly what a host sees and stores. Status: **draft**, it will change before the first release.
 
@@ -27,6 +27,7 @@ stores ciphertext it can't read.
 | the size of attached files and when they were sent | what's in attached files, their names or types |
 | your chosen status and status message, and when your app last checked in | |
 | who is in which call, mute and deafen state, and the size and timing of encrypted audio | what anyone says in a call |
+| who is sharing their screen and who is watching, the size and timing of encrypted video, and each frame's readable VP8 header (keyframe or not, and the picture's width and height) | what's on anyone's screen |
 
 The host's logs never contain session tokens or invite codes.
 
@@ -215,6 +216,18 @@ without decoding it. Clients encrypt every audio frame before sending, so the re
   The relay writes each participant's audio into the receive track matching their `slot` on everyone
   else's connection, so nobody needs to renegotiate when people join or leave. At most 16 people per call.
 - `POST /v1/channels/{channel}/voice/state` `{ muted, deafened }`: deafened participants aren't sent audio.
+- `POST /v1/channels/{channel}/voice/share` `{ on }`: you're sharing your screen (participants show `sharing`).
+- `POST /v1/channels/{channel}/voice/watch` `{ slot, on }`: start or stop receiving the share of the
+  participant in `slot`. Screen shares are only forwarded to people watching them, so a share costs the
+  host upload per viewer, not per person in the call.
+- Screen shares: the join offer also has one send-only video track and 16 receive-only ones (after the
+  audio tracks), VP8, slots matching the audio ones. When someone starts watching, or a viewer reports
+  a lost frame, the relay asks the sharer for a keyframe (RTCP PLI).
+- Video frames are encrypted with the same sender keys, but laid out differently so the transport can
+  still tell keyframes apart: the first bytes of the VP8 frame stay readable (10 on a keyframe, 3
+  otherwise: frame type, version and picture size, nothing of the picture), then AES-256-GCM of the
+  rest, then the 17-byte header (version 2) at the end. The readable bytes are authenticated with the
+  header. Audio and video from one device share one counter, so nonces never repeat.
 - `POST /v1/channels/{channel}/voice/leave`. Removing someone from a server also ends their calls in it.
 - The relay is ICE-lite, advertising the address each client chose (from `COMMS_MEDIA_ADDR`); transport is DTLS-SRTP. With
   direct UDP, people in a call see that address (a home IP when self-hosted at home).
@@ -236,6 +249,6 @@ without decoding it. Clients encrypt every audio frame before sending, so the re
 
 ## Later (not in version 1 yet)
 
-- Video and screen share through the same relay.
+- Webcams through the same relay (screen sharing is done).
 - Message edits and deletes (as encrypted application messages).
 - Safety-number checks between members (comparing everyone's keys out of band).

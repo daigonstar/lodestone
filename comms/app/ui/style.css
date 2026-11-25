@@ -192,3 +192,21 @@ select { font: inherit; color: var(--text); background: var(--bg-3); border: 1px
 input[type=range] { padding: 0; background: none; border: 0; accent-color: var(--accent); }
 input[type=range]:focus { outline: none; }
 #mic-test { white-space: nowrap; flex: none; }
+
+/* screen shares */
+.live { font-size: 10px; font-weight: 800; letter-spacing: .5px; color: #fff; background: var(--danger); border-radius: 4px; padding: 1px 5px; }
+button.live { cursor: pointer; }
+button.live.on { background: var(--accent); }
+.call-btns button.share-on { background: color-mix(in srgb, #3ddc97 35%, var(--bg-2)); }
+.chat { grid-column: 3; grid-row: 1; }
+.members { grid-column: 4; grid-row: 1; }
+.stage { grid-column: 3 / 5; grid-row: 1; z-index: 2; background: var(--bg); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.stage.focus { position: fixed; inset: 0; z-index: 20; }
+.stage-grid { flex: 1; display: grid; gap: 8px; padding: 8px; min-height: 0; }
+.stage-grid.n2 { grid-template-columns: 1fr 1fr; }
+.stage-grid.n3, .stage-grid.n4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.stage figure { margin: 0; display: flex; flex-direction: column; min-height: 0; background: #000; border-radius: var(--radius); overflow: hidden; }
+.stage img { flex: 1; min-height: 0; width: 100%; object-fit: contain; background: #000; cursor: zoom-in; }
+.stage figcaption { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--bg-2); font-size: 13px; }
+.stage figcaption .grow { flex: 1; }
+.stage figcaption button { padding: 3px 9px; }
