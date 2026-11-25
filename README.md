@@ -144,6 +144,8 @@ named, and are listed so nothing is a surprise:
   Flathub, installed for your user (`flatpak install --user`, adding the Flathub remote for your user if
   it's missing), and for RetroArch the chosen core from libretro's official build server into
   `~/.var/app/org.libretro.RetroArch/config/retroarch/cores/`, checked against libretro's published CRC32.
+  That catches a broken download, not a deliberately altered one (libretro publishes no stronger
+  checksum), so cores rely on HTTPS and libretro's server; the Flatpak RetroArch runs them in its sandbox.
   Your emulator choice per system is saved in `settings.json`. Lodestone never downloads games or BIOS files.
   Unless you tick *Add to my app menu* when installing, the emulator is hidden from your desktop's app menu:
   Lodestone copies Flatpak's menu entry into `~/.local/share/applications/` with `NoDisplay=true` added and

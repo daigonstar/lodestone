@@ -117,6 +117,13 @@ fn dir() -> PathBuf {
     state::data_dir().join("retroachievements")
 }
 
+/// Create the cache folder readable only by you: it holds your achievement progress.
+fn ensure_dir(d: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir_all(d)?;
+    fs::set_permissions(dir(), fs::Permissions::from_mode(0o700))
+}
+
 fn list_file(console: u32) -> PathBuf {
     dir().join(format!("console-{console}.json"))
 }
@@ -158,7 +165,7 @@ pub fn cached_list(console: u32) -> Vec<RaGame> {
 
 /// Download the game lists (with fingerprints) for these consoles, if older than a week.
 pub async fn refresh_lists(consoles: &[u32]) -> Result<usize, String> {
-    fs::create_dir_all(dir()).map_err(|e| e.to_string())?;
+    ensure_dir(&dir()).map_err(|e| e.to_string())?;
     let mut fetched = 0;
     for c in consoles {
         let f = list_file(*c);
@@ -309,7 +316,7 @@ pub fn fingerprint_all(roms: &[(String, PathBuf)]) -> usize {
 }
 
 fn save_hashes(c: &HashCache) {
-    let _ = fs::create_dir_all(dir());
+    let _ = ensure_dir(&dir());
     let _ = fs::write(hash_file(), serde_json::to_string(c).unwrap_or_default());
 }
 
@@ -459,7 +466,7 @@ pub async fn game_info(id: u64) -> Result<GameInfo, String> {
     let (user, _) = creds().ok_or("Add your RetroAchievements username and Web API key in Settings")?;
     let v = get("API_GetGameInfoAndUserProgress", &[("g", id.to_string()), ("u", user)]).await?;
     let info = parse_game(&v);
-    let _ = fs::create_dir_all(f.parent().unwrap());
+    let _ = ensure_dir(f.parent().unwrap());
     let _ = fs::write(&f, serde_json::to_string(&info).unwrap_or_default());
     Ok(info)
 }

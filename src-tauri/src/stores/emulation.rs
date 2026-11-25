@@ -491,7 +491,9 @@ fn exported_entries(app_id: &str) -> Vec<PathBuf> {
     for d in dirs {
         for e in fs::read_dir(&d).into_iter().flatten().flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
-            if name.starts_with(app_id) && name.ends_with(".desktop") && !out.iter().any(|p: &PathBuf| p.file_name() == Some(e.file_name().as_os_str())) {
+            // Flatpak names exported entries "<app id>.desktop" or "<app id>.<more>.desktop"; a bare
+            // prefix match would also catch another app whose ID starts the same way.
+            if (name == format!("{app_id}.desktop") || name.starts_with(&format!("{app_id}."))) && name.ends_with(".desktop") && !out.iter().any(|p: &PathBuf| p.file_name() == Some(e.file_name().as_os_str())) {
                 out.push(e.path());
             }
         }

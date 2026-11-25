@@ -50,6 +50,7 @@ pub fn lock_down_secrets() {
     private(d.join("gog"), 0o700);
     private(d.join("legendary/user.json"), 0o600);
     private(d.join("gog/auth.json"), 0o600);
+    private(d.join("retroachievements"), 0o700); // your achievement progress
     private(dirs::config_dir().unwrap_or_else(|| crate::model::home().join(".config")).join("lodestone"), 0o700);
 }
 

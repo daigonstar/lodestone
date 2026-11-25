@@ -24,4 +24,5 @@ Each security review is written up in [docs/security-reviews](docs/security-revi
 how serious it was, what was changed and how the fix was checked, including what was looked at and found
 fine, and what's known but not fixed.
 
+- [2026-11-25](docs/security-reviews/2026-11-25.md): the 0.2.0 changes (3 findings fixed, 2 documented)
 - [2026-11-22](docs/security-reviews/2026-11-22.md): first full review (8 findings, all fixed)
