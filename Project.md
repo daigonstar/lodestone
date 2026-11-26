@@ -64,8 +64,9 @@ look too, moving away from Discord's look. Plan and inventory: `beacon/NAMING-PL
 | Plan, inventory, vocabulary approved, name picked | Done |
 | Text rename: Comms to Beacon (folder `beacon/`, crates, Flatpak id `io.github.daigonstar.Lodestone.Beacon`, tag prefix `beacon-v`, `BEACON_*` settings, `lodestone-beacon/v1` protocol strings, Lodestone's installer and UI) | Done in code, builds and server/client tests pass on Linux; Windows and Flatpak builds not run |
 | Vocabulary change: host to server, server/space to community (UI, API routes, database, docs) | Done, same checks |
-| App icon for Beacon and matching icons for the other apps | Not started: direction needs Robb's approval |
-| Redo the internal icons (camera, streaming, etc.) in one style | Not started |
+| App icon for Beacon (`beacon/branding/beacon-icon.svg`) | Drawn and approved by Robb. Not yet installed anywhere (no window or Flatpak icon files made yet) |
+| Matching icons for Lodestone and Kiln | Not started |
+| Redo the internal icons (camera, streaming, etc.) in one style | Done for Beacon: mystic line icon set in the interface (`beacon/branding/icons.svg`, inlined in `index.html`). Checked in a headless browser on Linux only; call bar not seen live. Lodestone's own icons still emoji |
 | Move the layout and look away from Discord | Not started: direction needs Robb's approval |
 | PR #7 (plug-in installer) still uses `comms`, `comms-v` and the old Flatpak id | Needs merging with this rename before either lands |
 | Existing `comms-v*` draft releases on GitHub | Would be re-published as `beacon-v*` |
