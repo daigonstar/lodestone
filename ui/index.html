@@ -442,12 +442,12 @@
       <p class="hint">Without a key, Lodestone finds artwork from Steam's store. A free SteamGridDB key (<a href="#" data-href="https://www.steamgriddb.com/profile/preferences/api">steamgriddb.com → Preferences → API</a>) adds thousands of community covers and banners, including for games that aren't on Steam.</p>
       <h3>Emulation</h3>
       <label><span>ROMs folder <small>(optional)</small></span>
-        <div class="row-line emu-folder"><input name="emudir" autocomplete="off" spellcheck="false" placeholder="~/Emulation" />
+        <div class="row-line emu-folder"><input name="emudir" autocomplete="off" spellcheck="false" placeholder="~/Emulation" data-win-placeholder="C:\Emulation" />
           <button type="button" class="ghost" id="emu-browse">Browse…</button>
           <button type="button" class="ghost" id="emu-create">Create folders</button></div>
       </label>
       <p class="hint" id="emu-found"></p>
-      <p class="hint">Lodestone looks for EmuDeck's layout (<code>Emulation/roms/&lt;system&gt;</code>) in your home folder, RetroDECK's folder and on mounted drives. If your ROMs are somewhere else, choose the Emulation folder, its <code>roms</code> folder, or any folder with one folder per system (<code>snes</code>, <code>gba</code>, <code>psx</code>…). Starting from scratch? <b>Create folders</b> makes that layout in the folder above (or <code>~/Emulation</code>), with a folder for every system Lodestone knows; put each system's ROMs in its folder and Rescan. Nothing existing is changed.</p>
+      <p class="hint">Lodestone looks for EmuDeck's layout (<code>Emulation/roms/&lt;system&gt;</code>) in your home folder, RetroDECK's folder and <span class="linux-only">on mounted drives</span><span class="win-only">at the top of each drive</span>. If your ROMs are somewhere else, choose the Emulation folder, its <code>roms</code> folder, or any folder with one folder per system (<code>snes</code>, <code>gba</code>, <code>psx</code>…). Starting from scratch? <b>Create folders</b> makes that layout in the folder above (or <code>~/Emulation</code>), with a folder for every system Lodestone knows; put each system's ROMs in its folder and Rescan. Nothing existing is changed.</p>
       <h3>RetroAchievements</h3>
       <div class="row-line ra-row">
         <label><span>Username</span><input name="rauser" autocomplete="off" spellcheck="false" placeholder="your RA username" /></label>
@@ -470,7 +470,7 @@
       <label class="check"><input type="checkbox" id="kiln-play" /> Play modded games through Kiln (checks mods are deployed and loaders set up first)</label>
       <h3>Games</h3>
       <label>Install Epic and GOG games to
-        <input name="gamesdir" placeholder="~/Games" />
+        <input name="gamesdir" placeholder="~/Games" data-win-placeholder="C:\Games" />
       </label>
       <h3>Minecraft</h3>
       <label>CurseForge API key
@@ -478,7 +478,7 @@
       </label>
       <p class="hint">Modrinth works without a key. CurseForge requires a free personal key: sign in at
         <a href="#" data-href="https://console.curseforge.com/">console.curseforge.com</a> → API keys. It's stored only in
-        <code>~/.config/lodestone/settings.json</code> (readable only by you).</p>
+        <code class="linux-only">~/.config/lodestone/settings.json</code><code class="win-only">%APPDATA%\lodestone\settings.json</code> (readable only by you).</p>
       <div class="dlg-actions">
         <button type="button" class="ghost" id="btn-rerun-setup">Run setup guide again</button>
         <small class="muted settings-version" id="settings-version" style="margin-right:auto"></small>
@@ -553,7 +553,7 @@
         <div id="ob-store-order" class="store-order"></div>
         <h3>New installs</h3>
         <label>Install Epic and GOG games to
-          <input id="ob-gamesdir" placeholder="~/Games" />
+          <input id="ob-gamesdir" placeholder="~/Games" data-win-placeholder="C:\Games" />
         </label>
         <label class="check"><input type="checkbox" id="ob-minimize" /> Minimize Lodestone when a game starts</label>
       </section>

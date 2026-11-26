@@ -283,7 +283,7 @@ pub fn set_path(id: &str, path: &str) -> Result<(), String> {
 pub fn uninstall(id: &str) -> Result<(), String> {
     let mut list = installed();
     if let Some(i) = list.iter().find(|i| i.id == id) {
-        let ok = std::process::Command::new("gio").arg("trash").arg(&i.path).status().map(|s| s.success()).unwrap_or(false);
+        let ok = crate::os::trash(Path::new(&i.path));
         if !ok {
             fs::remove_dir_all(&i.path).map_err(|e| e.to_string())?;
         }

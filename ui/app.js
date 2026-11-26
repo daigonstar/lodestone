@@ -25,7 +25,10 @@ invoke("data_folder").then((d) => { state.dataDir = d; document.querySelectorAll
 // Problems in this page go to logs/ui.log on this PC (for bug reports; never sent anywhere).
 window.addEventListener("error", (e) => { try { window.__TAURI__.core.invoke("ui_error", { message: `${e.message} at ${e.filename}:${e.lineno}:${e.colno}` }); } catch {} });
 window.addEventListener("unhandledrejection", (e) => { try { window.__TAURI__.core.invoke("ui_error", { message: `unhandled: ${e.reason && (e.reason.stack || e.reason)}` }); } catch {} });
-if (WIN) document.body.classList.add("win");
+if (WIN) {
+  document.body.classList.add("win");
+  document.querySelectorAll("[data-win-placeholder]").forEach((el) => (el.placeholder = el.dataset.winPlaceholder));
+}
 
 
 const $ = (s) => document.querySelector(s);

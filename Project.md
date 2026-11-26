@@ -61,13 +61,19 @@ the Flatpak update check. Windows has its own versions of the same calls (winget
 snapshot). The Windows build is now compile-checked here with `cargo check --tests --target
 x86_64-pc-windows-gnu` (needs `gcc-mingw-w64-x86-64`), zero warnings. Linux: 62 tests pass.
 
-Still Linux code in the Windows build (next pass):
-- Emulators: Flatpak lookups, zenity/kdialog folder picker, `.desktop` menu entries (`stores/emulation.rs`).
-- Comms and plug-ins: Flatpak install and `flatpak` checks (`comms_install.rs`, `plugins.rs`).
-- Kiln: looks for a Linux `.desktop` file (`kiln.rs`); Minecraft hub folders (`mc/`) are Linux paths.
-- Settings and first-run text that still mention Proton, Flatpak or `~/` paths in places.
-- `tauri.conf.json` asset scope lists only `$HOME` and Linux mount points.
-- Not run on Windows: only compiled.
+Second pass done (same day): emulators (Flatpak lookups, app-menu entries and zenity are Linux-only;
+Windows has its own folder dialog and drive-top search), Beacon launch and Kiln lookup split by system,
+Recycle Bin for uninstalls (`os::trash`), Minecraft hub folders per system (Prism's `%APPDATA%` folder
+on Windows; ATLauncher has no fixed Windows folder, so it isn't found there), Windows wording and
+placeholders in Settings and first run.
+
+Left for Robb to decide or for later:
+- `tauri.conf.json` asset scope (artwork for games on other drives): the Linux list is `$HOME`, `/mnt`,
+  `/media`. Windows needs drive globs, which let the page read any file on those drives. Not changed.
+- Minecraft hub launch on Windows (Prism's program location), Kiln on Windows (plug-in in 0.3.0).
+- Emulators keep ES-DE's Linux launch strings (`.so` core names, `%EMULATOR_*%`) as the shared table;
+  Windows converts them to `.dll` when it runs them. That is data, not Linux code.
+- Never run on Windows: only compiled (`cargo check --tests --target x86_64-pc-windows-gnu`).
 
 ## Beacon rename and rebrand (feeds roadmap item 3)
 

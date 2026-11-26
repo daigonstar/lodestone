@@ -1532,6 +1532,7 @@ fn emu_open(id: String, inner: State<'_, Shared>) -> Result<(), String> {
 
 /// Show or hide a system's emulator in the desktop's app menu.
 #[tauri::command]
+#[cfg(not(windows))]
 async fn emu_menu_entry(system: String, index: usize, show: bool) -> Result<(), String> {
     blocking(move || stores::emulation::set_system_menu_entry(&system, index, show)).await?
 }
@@ -1670,6 +1671,7 @@ fn main() {
             ra_sync,
             thumbs_sync,
             store_achievements,
+            #[cfg(not(windows))]
             emu_menu_entry,
             emu_folders,
             beacon_status,

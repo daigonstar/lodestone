@@ -19,6 +19,7 @@ pub fn install_spec(id: &str) -> LaunchSpec {
 }
 
 /// The command that updates one package to its newest version.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn upgrade_spec(id: &str) -> LaunchSpec {
     LaunchSpec::new(
         "winget",
@@ -27,6 +28,7 @@ pub fn upgrade_spec(id: &str) -> LaunchSpec {
 }
 
 /// A winget package ID Lodestone passes on: "Publisher.Name" style only.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn valid_id(id: &str) -> bool {
     id.contains('.') && id.len() <= 100 && id.chars().all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c))
 }
