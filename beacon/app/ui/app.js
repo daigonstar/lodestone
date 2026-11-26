@@ -67,6 +67,153 @@ async function loadState() {
   render();
 }
 
+// ---------- channel list: categories, child channels, right-click menus ----------
+const collapsedCats = new Set();
+function channelRowHTML(sp, c, child) {
+  const kids = child ? [] : sp.channels.filter((k) => k.parent === c.id);
+  const lockNote = c.post_rule === "admins" ? `<span class="rule" title="Only admins can post here">${ic("lock")}</span>` : "";
+  const wait = c.ready ? "" : ' <span class="wait">(waiting for keys)</span>';
+  const row = c.kind === "voice"
+    ? `<button class="ch vc ${child ? "child" : ""}" data-voice="${esc(c.id)}" data-ctx-channel="${esc(c.id)}" title="${c.ready ? "Join the call" : "Waiting for this device's keys"}">${ic("volume")} ${esc(c.name)}${wait}</button><div class="vc-people ${child ? "child" : ""}" data-vc="${esc(c.id)}"></div>`
+    : `<button class="ch ${child ? "child" : ""} ${c.id === state.sel.channel ? "on" : ""}" data-channel="${esc(c.id)}" data-ctx-channel="${esc(c.id)}"># ${esc(c.name)}${lockNote}${wait}${mentionBadge(sp.server, c.id)}</button>`;
+  return row + kids.map((k) => channelRowHTML(sp, k, true)).join("");
+}
+function channelListHTML(sp) {
+  const catIds = new Set((sp.categories || []).map((c) => c.id));
+  const top = sp.channels.filter((c) => !c.parent || !sp.channels.some((p) => p.id === c.parent));
+  const loose = top.filter((c) => !c.category || !catIds.has(c.category));
+  let html = loose.filter((c) => c.kind !== "voice").map((c) => channelRowHTML(sp, c)).join("");
+  if (loose.some((c) => c.kind === "voice")) html += '<h4 class="chhead">Voice</h4>' + loose.filter((c) => c.kind === "voice").map((c) => channelRowHTML(sp, c)).join("");
+  for (const cat of sp.categories || []) {
+    const open = !collapsedCats.has(cat.id);
+    html += `<button type="button" class="cat-head ${open ? "open" : ""}" data-cat="${esc(cat.id)}" data-ctx-cat="${esc(cat.id)}"><span class="chev" aria-hidden="true"></span><span>${esc(cat.name)}</span></button>`;
+    if (open) html += top.filter((c) => c.category === cat.id).map((c) => channelRowHTML(sp, c)).join("");
+  }
+  return html;
+}
+document.addEventListener("click", (e) => {
+  const h = e.target.closest("[data-cat]");
+  if (!h) return;
+  collapsedCats.has(h.dataset.cat) ? collapsedCats.delete(h.dataset.cat) : collapsedCats.add(h.dataset.cat);
+  render();
+});
+
+const isAdmin = (sp) => sp.your_role === "owner" || sp.your_role === "admin";
+const catOptions = (sp, sel) => `<option value="">No category</option>` + (sp.categories || []).map((c) => `<option value="${esc(c.id)}" ${c.id === sel ? "selected" : ""}>${esc(c.name)}</option>`).join("");
+const parentOptions = (sp, self, sel) => `<option value="">None (top level)</option>` + sp.channels.filter((c) => c.kind !== "voice" && !c.parent && c.id !== self).map((c) => `<option value="${esc(c.id)}" ${c.id === sel ? "selected" : ""}># ${esc(c.name)}</option>`).join("");
+const refreshAfter = async (fn) => { try { await fn(); await loadState(); } catch (err) { toast(err.message, true); } };
+
+function editChannelDialog(id) {
+  const { sp } = current();
+  const c = sp.channels.find((x) => x.id === id);
+  if (!c) return;
+  const hasKids = sp.channels.some((k) => k.parent === id);
+  ask(`Edit ${c.kind === "voice" ? "voice channel" : "channel"}`, `<label>Name<input name="name" maxlength="64" required value="${esc(c.name)}"></label>
+    ${c.kind === "voice" ? "" : `<label>Topic<input name="topic" maxlength="300" placeholder="Optional" value="${esc(c.topic || "")}"></label>`}
+    <label>Category<select name="category">${catOptions(sp, c.category)}</select></label>
+    <label>Child of<select name="parent" ${hasKids ? "disabled" : ""}>${parentOptions(sp, id, c.parent)}</select></label>
+    ${hasKids ? '<p class="muted">This channel has children, so it can\'t become a child itself.</p>' : '<p class="muted">A child channel sits under its parent text channel in the list.</p>'}`, "Save", async (f) => {
+      const body = { name: f.get("name"), category: f.get("category") || null };
+      if (c.kind !== "voice") body.topic = f.get("topic");
+      if (!hasKids) body.parent = f.get("parent") || null;
+      await manage("PATCH", `/v1/channels/${id}`, body);
+      await loadState();
+    });
+}
+
+function permissionsDialog(id) {
+  const { sp } = current();
+  const c = sp.channels.find((x) => x.id === id);
+  if (!c) return;
+  ask(`Permissions: # ${c.name}`, `<label>Who can post
+      <select name="rule"><option value="everyone" ${c.post_rule !== "admins" ? "selected" : ""}>Everyone in the community</option><option value="admins" ${c.post_rule === "admins" ? "selected" : ""}>Only admins and the owner</option></select></label>
+    <p class="muted">Everyone can still read the channel. Reactions are messages too, so with "Only admins" members can't react either. Choosing who can read a channel (private channels) is not available yet.</p>`, "Save", async (f) => {
+      await manage("PATCH", `/v1/channels/${id}`, { post_rule: f.get("rule") });
+      await loadState();
+    });
+}
+
+function deleteChannelDialog(id) {
+  const { sp } = current();
+  const c = sp.channels.find((x) => x.id === id);
+  if (!c) return;
+  if (sp.channels.length <= 1) return toast("A community needs at least one channel.", true);
+  confirmBox(`Delete "${c.name}" and all its messages for everyone? Its child channels move up to the top level. This can't be undone.`, "Delete channel").then((yes) => {
+    if (!yes) return;
+    refreshAfter(async () => {
+      await manage("DELETE", `/v1/channels/${id}`);
+      if (state.sel.channel === id) state.sel.channel = "";
+    });
+  });
+}
+
+function categoryDialog(id) {
+  const { sp } = current();
+  const cat = id && (sp.categories || []).find((c) => c.id === id);
+  ask(cat ? "Rename category" : "New category", `<label>Name<input name="name" maxlength="64" required placeholder="Games" value="${esc(cat ? cat.name : "")}"></label>`, cat ? "Save" : "Create", async (f) => {
+    if (cat) await manage("PATCH", `/v1/categories/${id}`, { name: f.get("name") });
+    else await manage("POST", `/v1/communities/${sp.id}/categories`, { name: f.get("name") });
+    await loadState();
+  });
+}
+
+function deleteCategoryDialog(id) {
+  const { sp } = current();
+  const cat = (sp.categories || []).find((c) => c.id === id);
+  if (!cat) return;
+  confirmBox(`Delete the category "${cat.name}"? Its channels stay, without a category.`, "Delete category").then((yes) => yes && refreshAfter(() => manage("DELETE", `/v1/categories/${id}`)));
+}
+
+// Right-click: a channel, a category heading, or the empty part of the list. Admins only; everyone else gets the normal menu.
+document.addEventListener("contextmenu", (e) => {
+  const list = e.target.closest("[data-ctx-list]");
+  const menu = $("#srv-menu");
+  if (!list) return;
+  const { sp } = current();
+  if (!sp || !isAdmin(sp)) return;
+  e.preventDefault();
+  const chEl = e.target.closest("[data-ctx-channel]");
+  const catEl = e.target.closest("[data-ctx-cat]");
+  let items;
+  if (chEl) {
+    const c = sp.channels.find((x) => x.id === chEl.dataset.ctxChannel);
+    if (!c) return;
+    items = `<div class="menu-title">${c.kind === "voice" ? ic("volume") : "#"} ${esc(c.name)}</div>
+      <button type="button" data-m="edit">Edit channel…</button>
+      ${c.kind === "voice" ? "" : '<button type="button" data-m="perms">Manage permissions…</button>'}
+      ${c.kind === "voice" || c.parent ? "" : '<button type="button" data-m="child">New child channel…</button>'}
+      <hr><button type="button" class="danger-text" data-m="delete">Delete channel…</button>`;
+    menu.dataset.id = c.id;
+  } else if (catEl) {
+    const cat = (sp.categories || []).find((x) => x.id === catEl.dataset.ctxCat);
+    if (!cat) return;
+    items = `<div class="menu-title">${esc(cat.name)}</div>
+      <button type="button" data-m="cat-channel">New channel here…</button>
+      <button type="button" data-m="cat-rename">Rename category…</button>
+      <hr><button type="button" class="danger-text" data-m="cat-delete">Delete category…</button>`;
+    menu.dataset.id = cat.id;
+  } else {
+    items = `<button type="button" data-m="new-channel">New channel…</button><button type="button" data-m="new-cat">New category…</button>`;
+    menu.dataset.id = "";
+  }
+  menu.innerHTML = items;
+  menu.classList.remove("hidden");
+  menu.style.left = Math.min(e.clientX, innerWidth - menu.offsetWidth - 8) + "px";
+  menu.style.top = Math.min(e.clientY, innerHeight - menu.offsetHeight - 8) + "px";
+  menu.onclick = (ev) => {
+    const act = ev.target.closest("[data-m]")?.dataset.m;
+    if (!act) return;
+    menu.classList.add("hidden");
+    const id = menu.dataset.id;
+    ({
+      edit: () => editChannelDialog(id), perms: () => permissionsDialog(id), delete: () => deleteChannelDialog(id),
+      child: () => channelDialog({ parent: id }), "cat-channel": () => channelDialog({ category: id }),
+      "cat-rename": () => categoryDialog(id), "cat-delete": () => deleteCategoryDialog(id),
+      "new-channel": () => channelDialog(), "new-cat": () => categoryDialog(),
+    })[act]?.();
+  };
+});
+
 // ---------- rendering ----------
 function render() {
   const all = communities();
@@ -76,9 +223,7 @@ function render() {
   if (!sp || state.home) return renderHome();
   const admin = sp.your_role === "owner" || sp.your_role === "admin";
   $("#channels").innerHTML = `<h2><span>${esc(sp.name)}</span><button class="gear" data-act="settings" title="Community settings">${ic("settings")}</button></h2><div class="server" title="${esc(sp.server)}">${esc(sp.me)} · ${esc(sp.server.replace(/^https?:\/\//, ""))}</div>
-    <div class="chlist">${sp.channels.filter((c) => c.kind !== "voice").map((c) => `<button class="ch ${c.id === state.sel.channel ? "on" : ""}" data-channel="${esc(c.id)}"># ${esc(c.name)}${c.ready ? "" : ' <span class="wait">(waiting for keys)</span>'}${mentionBadge(sp.server, c.id)}</button>`).join("")}
-    ${sp.channels.some((c) => c.kind === "voice") ? '<h4 class="chhead">Voice</h4>' : ""}
-    ${sp.channels.filter((c) => c.kind === "voice").map((c) => `<button class="ch vc" data-voice="${esc(c.id)}" title="${c.ready ? "Join the call" : "Waiting for this device's keys"}">${ic("volume")} ${esc(c.name)}${c.ready ? "" : ' <span class="wait">(waiting for keys)</span>'}</button><div class="vc-people" data-vc="${esc(c.id)}"></div>`).join("")}</div>
+    <div class="chlist" data-ctx-list>${channelListHTML(sp)}</div>
     <div class="side-actions"><button data-act="invite">Invite people</button>${admin ? '<button class="ghost" data-act="channel">New channel</button>' : ""}</div>
     <div id="callbar"></div>
     ${meBar()}`;
@@ -88,12 +233,14 @@ function render() {
   // The chat area is only rebuilt when you switch channel or it changes (name, topic, keys arriving).
   // Refreshes (every few seconds, and on live events) used to rebuild it, which jumped the message list
   // and threw away anything you were typing.
-  const chatKey = JSON.stringify([state.sel.server, ch.id, ch.name, ch.topic || "", !!ch.ready]);
+  const chatKey = JSON.stringify([state.sel.server, ch.id, ch.name, ch.topic || "", !!ch.ready, ch.post_rule, admin]);
   if ($("#chat").dataset.key === chatKey && $("#msgs")) return;
   $("#chat").dataset.key = chatKey;
   $("#chat").innerHTML = `<header><h3># ${esc(ch.name)}${ch.topic ? `<span class="topic">${esc(ch.topic)}</span>` : ""}</h3><button class="gear" id="toggle-members" title="Show or hide members">${ic("users")}</button><span class="lock" title="Only members' devices can read this channel; the server stores ciphertext.">${ic("lock")} end-to-end encrypted</span></header>
     <div class="msgs" id="msgs"></div><button type="button" class="new-msgs hidden" id="new-msgs">New messages ↓</button>
-    <div class="composer">${ch.ready
+    <div class="composer">${ch.ready && ch.post_rule === "admins" && !admin
+      ? `<p class="muted read-only">${ic("lock")} Only admins can post in this channel.</p>`
+      : ch.ready
       ? `<div id="pending" class="pending hidden"></div><div class="compose-row"><button type="button" class="emoji-btn" id="attach-btn" title="Attach a file or image (or paste / drop one)">${ic("attach")}</button><textarea id="text" placeholder="Message (Enter to send, Shift+Enter for a new line)" maxlength="8000"></textarea><button type="button" class="emoji-btn" id="emoji-btn" title="Emoji">${ic("smile")}</button></div>`
       : '<p class="muted">You\'re a member, but no one in this channel has been online to give your device its keys yet. It happens automatically.</p>'}</div>`;
   // Stick to the newest message only while you're at the bottom; pictures that finish loading keep
@@ -859,7 +1006,7 @@ async function endServer(sp, method, path, done) {
 document.addEventListener("contextmenu", (e) => {
   const b = e.target.closest(".srv[data-community]");
   const menu = $("#srv-menu");
-  if (!b) { menu.classList.add("hidden"); return; }
+  if (!b) { if (!e.target.closest("[data-ctx-list]")) menu.classList.add("hidden"); return; }
   e.preventDefault();
   const sp = communities().find((s) => s.server === b.dataset.server && s.id === b.dataset.community);
   if (!sp) return;
@@ -1197,12 +1344,16 @@ async function inviteDialog() {
   };
 }
 
-function channelDialog() {
+function channelDialog(opts = {}) {
   const { sp } = current();
-  ask("New channel", `<label>Name<input name="name" maxlength="64" required placeholder="raids"></label>
-    <label>Kind<select name="kind"><option value="text">Text: messages, files, reactions</option><option value="voice">Voice: calls (end-to-end encrypted)</option></select></label>`, "Create", async (f) => {
+  const under = opts.parent && sp.channels.find((c) => c.id === opts.parent);
+  ask(under ? `New child channel of # ${under.name}` : "New channel", `<label>Name<input name="name" maxlength="64" required placeholder="raids"></label>
+    <label>Kind<select name="kind"><option value="text">Text: messages, files, reactions</option><option value="voice">Voice: calls (end-to-end encrypted)</option></select></label>
+    ${under ? "" : `<label>Category<select name="category">${catOptions(sp, opts.category)}</select></label>`}`, "Create", async (f) => {
     const kind = f.get("kind");
     const r = await api("/api/channels", { server: sp.server, community: sp.id, name: f.get("name"), kind });
+    const place = under ? { parent: under.id } : f.get("category") ? { category: f.get("category") } : null;
+    if (place) await manage("PATCH", `/v1/channels/${r.channel}`, place);
     if (kind !== "voice") state.sel.channel = r.channel;
     await loadState();
   });

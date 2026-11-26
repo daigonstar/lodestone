@@ -248,7 +248,37 @@ async fn server_settings_and_permissions() {
     assert_eq!(call(&app, "PUT", &format!("{sp_path}/channel-order"), Some(&ta), json!({ "channels": [raids, general] })).await.0, StatusCode::OK);
     let (_, got) = call(&app, "GET", &sp_path, Some(&tb), Value::Null).await;
     assert_eq!((got["channels"][0]["name"].as_str(), got["channels"][0]["topic"].as_str()), (Some("raid-plans"), Some("Who's in?")));
+    // Categories, child channels and posting rules.
+    assert_eq!(call(&app, "POST", &format!("{sp_path}/categories"), Some(&tb), json!({ "name": "Games" })).await.0, StatusCode::FORBIDDEN);
+    let (st, cat) = call(&app, "POST", &format!("{sp_path}/categories"), Some(&ta), json!({ "name": "Games" })).await;
+    assert_eq!(st, StatusCode::OK);
+    let cat = cat["id"].as_str().unwrap().to_string();
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{raids}"), Some(&ta), json!({ "category": "nope" })).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{raids}"), Some(&ta), json!({ "category": cat })).await.0, StatusCode::OK);
+    let (_, kid) = call(&app, "POST", &format!("{sp_path}/channels"), Some(&ta), json!({ "name": "raid-loot", "parent": raids })).await;
+    let kid = kid["id"].as_str().unwrap().to_string();
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{kid}"), Some(&ta), json!({ "parent": kid })).await.0, StatusCode::BAD_REQUEST, "not its own parent");
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{general}"), Some(&ta), json!({ "parent": kid })).await.0, StatusCode::BAD_REQUEST, "no grandchildren");
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{raids}"), Some(&ta), json!({ "parent": general })).await.0, StatusCode::BAD_REQUEST, "a channel with children can't become a child");
+    let (_, got) = call(&app, "GET", &sp_path, Some(&tb), Value::Null).await;
+    let find = |id: &str| got["channels"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap().clone();
+    assert_eq!((find(&raids)["category"].as_str(), find(&kid)["parent"].as_str(), got["categories"][0]["name"].as_str()), (Some(cat.as_str()), Some(raids.as_str()), Some("Games")));
+    // Posting rules: only admins can post once a channel is "admins"; commits still go through.
+    let msg = |kind: &str| json!({ "kind": kind, "epoch": 0, "body": b64(b"hi") });
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{kid}"), Some(&tb), json!({ "post_rule": "admins" })).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{kid}"), Some(&ta), json!({ "post_rule": "everybody" })).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{kid}"), Some(&ta), json!({ "post_rule": "admins" })).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "POST", &format!("/v1/channels/{kid}/messages"), Some(&tb), msg("application")).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(&app, "POST", &format!("/v1/channels/{kid}/messages"), Some(&ta), msg("application")).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "PUT", &format!("{sp_path}/category-order"), Some(&ta), json!({ "categories": [] })).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(call(&app, "PUT", &format!("{sp_path}/category-order"), Some(&ta), json!({ "categories": [cat] })).await.0, StatusCode::OK);
+    // Deleting a parent promotes its children; deleting a category keeps its channels.
+    assert_eq!(call(&app, "DELETE", &format!("/v1/categories/{cat}"), Some(&tb), Value::Null).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(&app, "DELETE", &format!("/v1/categories/{cat}"), Some(&ta), Value::Null).await.0, StatusCode::OK);
     assert_eq!(call(&app, "DELETE", &format!("/v1/channels/{raids}"), Some(&ta), Value::Null).await.0, StatusCode::OK);
+    let (_, got) = call(&app, "GET", &sp_path, Some(&tb), Value::Null).await;
+    assert!(got["channels"].as_array().unwrap().iter().any(|c| c["id"] == kid.as_str() && c["parent"].is_null()), "child promoted");
+    assert_eq!(call(&app, "DELETE", &format!("/v1/channels/{kid}"), Some(&ta), Value::Null).await.0, StatusCode::OK);
     assert_eq!(call(&app, "DELETE", &format!("/v1/channels/{general}"), Some(&ta), Value::Null).await.0, StatusCode::BAD_REQUEST, "last channel stays");
 
     // Roles: only the owner promotes; an admin can remove members but not other admins or the owner.

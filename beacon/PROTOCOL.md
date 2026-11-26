@@ -97,8 +97,11 @@ Roles: **owner** (one per community), **admin**, **member**. Names: 1 to 64 char
 | `GET /v1/communities/{community}/icon` | member | the icon, with `nosniff` and a CSP that runs nothing |
 | `PUT /v1/communities/{community}/banner` (image body) / `DELETE` | owner or admin | sets or removes the banner shown on the community's home-page card: same image rules as the icon, up to 512 KiB |
 | `GET /v1/communities/{community}/banner` | member | the banner, served like the icon |
+| `POST /v1/communities/{community}/categories` `{ name }` | owner or admin | adds a channel category (up to 50) |
+| `PATCH /v1/categories/{category}` `{ name }` / `DELETE` | owner or admin | renames a category; deleting one keeps its channels, uncategorised |
+| `PUT /v1/communities/{community}/category-order` `{ categories }` | owner or admin | sets the category order (every category once) |
 | `DELETE /v1/communities/{community}` | owner | deletes the community with its channels, messages and invites |
-| `PATCH /v1/channels/{channel}` `{ name?, topic? }` / `DELETE` | owner or admin | renames a channel, sets its topic (up to 300 characters), or deletes it (a community keeps at least one) |
+| `PATCH /v1/channels/{channel}` `{ name?, topic?, category?, parent?, post_rule? }` / `DELETE` | owner or admin | renames a channel, sets its topic (up to 300 characters), moves it into a category (`null` for none), makes it a child of a top-level text channel (`parent`, one level only; `null` for top level), or sets who can post (`post_rule`: `everyone` or `admins`; the server rejects `application` messages from other members, commits and proposals still pass). Deleting a channel (a community keeps at least one) moves its children to the top level |
 | `PUT /v1/communities/{community}/channel-order` `{ channels: [...] }` | owner or admin | the channel order; must list every channel once |
 | `PUT /v1/communities/{community}/members/{username}/role` `{ role }` | owner | `admin` or `member` |
 | `POST /v1/communities/{community}/transfer` `{ username }` | owner | makes another member the owner; the old owner becomes an admin |

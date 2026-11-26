@@ -486,3 +486,15 @@ button .i { width: 20px; height: 20px; }
 .wiz-note { margin-top: 12px; padding: 12px 14px; border-radius: 12px; background: var(--bg-2); border: 1px solid var(--line); color: var(--muted); font-size: 13px; line-height: 1.55; }
 .wiz-note b { color: var(--text); }
 .ok { color: #4bd68a; margin: 0; }
+
+/* channel list: categories and child channels */
+.cat-head { display: flex; align-items: center; gap: 6px; width: 100%; margin: 12px 0 2px; padding: 4px 10px; background: transparent; color: var(--muted); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; font-weight: 600; text-align: left; }
+.cat-head:hover { color: var(--text); background: transparent; filter: none; }
+.cat-head .chev { width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform .15s; margin: 0 4px 0 2px; }
+.cat-head.open .chev { transform: rotate(45deg); }
+.ch.child { margin-left: 14px; width: calc(100% - 14px); border-left: 1px solid var(--line); border-radius: 0 10px 10px 0; padding-left: 12px; }
+.vc-people.child { margin-left: 14px; }
+.ch .rule { display: inline-flex; margin-left: 6px; vertical-align: -2px; opacity: .7; }
+.ch .rule .i { width: 12px; height: 12px; }
+.read-only { display: flex; align-items: center; gap: 8px; justify-content: center; margin: 4px 0; }
+.read-only .i { width: 14px; height: 14px; }
