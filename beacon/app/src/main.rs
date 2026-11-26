@@ -31,6 +31,11 @@ pub struct App {
     /// Unread mentions of you, by "server|channel" (worked out here after decrypting; the server never
     /// knows who was mentioned).
     pub mentions: std::sync::Mutex<std::collections::HashMap<String, u32>>,
+    /// Who you are: your identity key and the username you use on servers (see identity.rs). `None` until the
+    /// first-run screen has made or restored one.
+    pub identity: std::sync::Mutex<Option<(lodestone_beacon_client::identity::Identity, String)>>,
+    /// The key for a pairing in progress, by server: it travels in the QR code, never through a server.
+    pub pair_keys: std::sync::Mutex<std::collections::HashMap<String, [u8; 32]>>,
 }
 
 pub type Shared = Arc<App>;
@@ -106,6 +111,8 @@ async fn run(ready: Option<std::sync::mpsc::Sender<String>>) {
         voice,
         wake: tokio::sync::Notify::new(),
         mentions: Default::default(),
+        identity: std::sync::Mutex::new(lodestone_beacon_client::identity::Identity::load(&data_dir().join("identity.json"))),
+        pair_keys: Default::default(),
         bridge: bridge::Bridge::default(),
         token: token.clone(),
         authority: format!("127.0.0.1:{port}"),

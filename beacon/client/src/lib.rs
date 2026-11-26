@@ -9,6 +9,7 @@
 //!   is fine: the server accepts one commit per epoch, the other client catches up and finds nothing to do.
 
 pub mod discover;
+pub mod identity;
 pub mod server;
 pub mod store;
 
@@ -247,14 +248,38 @@ impl Client {
     // ---------- account ----------
 
     /// Make an account on the server with this device, using an invite or the server's setup code.
-    pub async fn register(&self, username: &str, invite: &str) -> Result<Value> {
+    pub async fn register(&self, username: &str, invite: &str, identity: Option<&identity::Identity>) -> Result<Value> {
         let username = username.trim().to_ascii_lowercase();
         let sig = self.sign(&format!("lodestone-beacon/v1 register {} {username} {}", self.server.url, self.device));
-        let r = self.server.post("/v1/register", json!({ "username": username, "device_key": self.device, "signature": sig, "invite": invite.trim() })).await?;
+        let mut body = json!({ "username": username, "device_key": self.device, "signature": sig, "invite": invite.trim() });
+        if let Some(id) = identity {
+            body["identity_key"] = json!(id.public());
+            body["identity_signature"] = json!(id.sign(&format!("lodestone-beacon/v1 identity {} {username} {}", self.server.url, self.device)));
+        }
+        let r = self.server.post("/v1/register", body).await?;
         self.store.set("username", &username)?;
         self.sign_in().await?;
         self.top_up_key_packages().await?;
         Ok(r)
+    }
+
+    /// Get this (new) device into the account that belongs to your identity on this server, without approval from
+    /// another device: the identity key and this device's key both sign a fresh challenge.
+    pub async fn recover(&self, identity: &identity::Identity) -> Result<String> {
+        let c = self.server.post("/v1/recover/challenge", json!({ "identity_key": identity.public() })).await?;
+        let nonce = c["nonce"].as_str().unwrap_or_default().to_string();
+        let url = &self.server.url;
+        let body = json!({
+            "identity_key": identity.public(), "device_key": self.device, "nonce": nonce,
+            "identity_signature": identity.sign(&format!("lodestone-beacon/v1 recover {url} {} {} {nonce}", identity.public(), self.device)),
+            "device_signature": self.sign(&format!("lodestone-beacon/v1 recover-device {url} {} {nonce}", self.device)),
+        });
+        let r = self.server.post("/v1/recover", body).await?;
+        let username = r["username"].as_str().unwrap_or_default().to_string();
+        self.store.set("username", &username)?;
+        self.sign_in().await?;
+        self.top_up_key_packages().await?;
+        Ok(username)
     }
 
     /// Sign this device in (challenge and signature).
@@ -370,8 +395,13 @@ impl Client {
         Ok(r["waiting"].as_array().into_iter().flatten().map(|w| (w["device_key"].as_str().unwrap_or_default().to_string(), w["fingerprint"].as_str().unwrap_or_default().to_string())).collect())
     }
 
-    pub async fn pair_decide(&self, device_key: &str, approve: bool) -> Result<()> {
-        self.server.post(if approve { "/v1/pairing/approve" } else { "/v1/pairing/refuse" }, json!({ "device_key": device_key })).await?;
+    /// Approve or refuse a waiting device. `handover` is encrypted data for it (see `identity::Identity::seal`).
+    pub async fn pair_decide(&self, device_key: &str, approve: bool, handover: Option<String>) -> Result<()> {
+        let mut body = json!({ "device_key": device_key });
+        if let (true, Some(blob)) = (approve, handover) {
+            body["blob"] = json!(blob);
+        }
+        self.server.post(if approve { "/v1/pairing/approve" } else { "/v1/pairing/refuse" }, body).await?;
         Ok(())
     }
 
@@ -387,7 +417,7 @@ impl Client {
     }
 
     /// On the new device: "waiting", "approved" (now signed in and ready) or "refused".
-    pub async fn pair_check(&self) -> Result<String> {
+    pub async fn pair_check(&self) -> Result<(String, Option<String>)> {
         let p: Value = self.store.get("pairing").and_then(|t| serde_json::from_str(&t).ok()).ok_or_else(|| Error::Local("Not pairing".into()))?;
         let r = self.server.post("/v1/pairing/status", json!({ "code": p["code"], "device_key": self.device })).await?;
         let status = r["status"].as_str().unwrap_or("waiting").to_string();
@@ -399,7 +429,7 @@ impl Client {
         } else if status == "refused" {
             self.store.with(|c| c.execute("DELETE FROM settings WHERE k = 'pairing'", []).map(|_| ()))?;
         }
-        Ok(status)
+        Ok((status, r["blob"].as_str().map(String::from)))
     }
 
     /// Whether this device is waiting for approval (and for which username).

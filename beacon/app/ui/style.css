@@ -498,3 +498,22 @@ button .i { width: 20px; height: 20px; }
 .ch .rule .i { width: 12px; height: 12px; }
 .read-only { display: flex; align-items: center; gap: 8px; justify-content: center; margin: 4px 0; }
 .read-only .i { width: 14px; height: 14px; }
+
+/* identity: first run */
+.gate { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; overflow-y: auto; padding: 24px; background: radial-gradient(ellipse 70% 60% at 50% 0%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%), var(--bg); }
+.gate-card { width: min(560px, 100%); display: grid; gap: 14px; }
+.gate-card h1 { margin: 0; font-size: 26px; }
+.gate-mark { display: grid; place-items: center; width: 64px; height: 64px; border-radius: 18px; background: linear-gradient(145deg, var(--bg-3), var(--bg-2)); border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--line)); box-shadow: 0 0 28px color-mix(in srgb, var(--accent) 40%, transparent); }
+.gate-mark .i { width: 36px; height: 36px; }
+.gate-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.gate-tabs button { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: 5px 14px; }
+.gate-tabs button.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.gate-ok { gap: 8px; align-items: center; }
+.phrase { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; counter-reset: w; }
+.phrase li { counter-increment: w; padding: 7px 10px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line); font-size: 13px; }
+.phrase li::before { content: counter(w) "."; color: var(--muted); margin-right: 6px; font-size: 11px; }
+@media (max-width: 560px) { .phrase { grid-template-columns: repeat(2, 1fr); } }
+.pair-qr { display: grid; place-items: center; margin-bottom: 8px; }
+.pair-qr img { background: #fff; padding: 8px; border-radius: 10px; }
+.gate .gate-ok { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 10px; }
+.gate .gate-ok input { margin: 0; }

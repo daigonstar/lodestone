@@ -73,6 +73,38 @@ one server can't be replayed on another.
    - The token is 32 random bytes (base64url). The server stores only its SHA-256. Send it as
      `Authorization: Bearer <token>`. Sessions last 30 days.
 
+## Identity: one key that belongs to the person
+
+Devices sign in with their own keys (above). On top of that, a person has an **identity**: one more Ed25519
+key made by their app on first run. It is never sent anywhere; servers only ever see its public half. It is
+backed up as a 24-word recovery phrase (the key's 32 bytes as BIP-39 words); whoever has the phrase is that
+person. The point: the same person is recognisable across servers, and can get back into their accounts on a
+new device. Nobody holds an account database: each server stores only public keys.
+
+- **Registering with an identity.** `POST /v1/register` also takes `identity_key` (base64 public key) and
+  `identity_signature` over `lodestone-beacon/v1 identity <server url> <username> <device_key>`. The server
+  stores the key on the account (`GET /v1/me` and community member lists show it as `identity`). One account
+  per identity per server (a second one gets 409); usernames stay unique per server, and a person may use a
+  different one on each server. Clients show the identity's fingerprint (SHA-256 of the base64 key, first 8
+  bytes, as `3f9a-02c1-77de-b410`).
+- **Recovering on a new device** (no approval from another device, because the identity key proves who you are):
+  - `POST /v1/recover/challenge` `{ identity_key }` returns `{ nonce }` (2 minutes, single use). The answer is
+    the same whether or not the identity has an account here.
+  - `POST /v1/recover` `{ identity_key, device_key, nonce, identity_signature, device_signature }`.
+    `identity_signature` is over `lodestone-beacon/v1 recover <server url> <identity_key> <device_key> <nonce>`
+    and `device_signature` over `lodestone-beacon/v1 recover-device <server url> <device_key> <nonce>`, so the
+    identity vouches for this exact device and this device holds its own key. The device is added to the
+    identity's account (at most 10 devices), and members' apps add it to the channels as for any new device. It
+    reads messages from then on, not older ones.
+- **Pairing can hand over the identity.** `POST /v1/pairing/approve` takes an optional `blob` (up to 1 KiB):
+  the identity, AES-256-GCM encrypted by the approving app with a key that only travels in the pairing QR code
+  (`beacon-pair:1|<server url>|<code>|<key>`). `POST /v1/pairing/status` returns it once with `approved`. The
+  server never sees the key, so it can't read the blob; the status call has no sign-in, so anyone who knows the
+  new device's key could take the (still encrypted) blob first, which would make that device fall back to
+  asking for a recovery phrase.
+- **Not done yet:** clients don't pin or warn when a username shows up with a different identity, and old
+  messages don't travel to a new device (see Project.md).
+
 ## Communities, channels and invites
 
 | Request | Who | Does |

@@ -103,6 +103,15 @@ CREATE TABLE IF NOT EXISTS pairings (
     expires INTEGER NOT NULL,
     device_key TEXT
 );
+CREATE TABLE IF NOT EXISTS pairing_blobs (
+    device_key TEXT PRIMARY KEY REFERENCES devices(key) ON DELETE CASCADE,
+    blob TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS recover_challenges (
+    nonce TEXT PRIMARY KEY,
+    identity_key TEXT NOT NULL,
+    expires INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS welcomes (
     id INTEGER PRIMARY KEY,
     device_key TEXT NOT NULL REFERENCES devices(key) ON DELETE CASCADE,
@@ -124,6 +133,7 @@ const ADDED: &[(&str, &str, &str)] = &[
     ("accounts", "status", "TEXT NOT NULL DEFAULT 'online'"),
     ("accounts", "status_text", "TEXT NOT NULL DEFAULT ''"),
     ("channels", "kind", "TEXT NOT NULL DEFAULT 'text'"),
+    ("accounts", "identity_key", "TEXT"),
     ("channels", "category", "TEXT"),
     ("channels", "parent", "TEXT"),
     ("channels", "post_rule", "TEXT NOT NULL DEFAULT 'everyone'"),
@@ -136,6 +146,8 @@ fn migrate(c: &Connection) -> rusqlite::Result<()> {
             c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"))?;
         }
     }
+    // One account per identity on a server (an identity can still use a different username on each server).
+    c.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS accounts_identity ON accounts(identity_key) WHERE identity_key IS NOT NULL")?;
     Ok(())
 }
 
