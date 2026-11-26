@@ -59,6 +59,18 @@ CREATE TABLE IF NOT EXISTS channels (
     next_seq INTEGER NOT NULL DEFAULT 1,
     created INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS categories (
+    id TEXT PRIMARY KEY,
+    community TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    created INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS channel_access (
+    channel TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    account INTEGER NOT NULL,
+    PRIMARY KEY (channel, account)
+);
 CREATE TABLE IF NOT EXISTS invites (
     code_hash TEXT PRIMARY KEY,
     community TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
@@ -96,6 +108,21 @@ CREATE TABLE IF NOT EXISTS pairings (
     expires INTEGER NOT NULL,
     device_key TEXT
 );
+CREATE TABLE IF NOT EXISTS pairing_blobs (
+    device_key TEXT PRIMARY KEY REFERENCES devices(key) ON DELETE CASCADE,
+    blob TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pairing_history (
+    device_key TEXT PRIMARY KEY,
+    account INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    data BLOB NOT NULL,
+    expires INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS recover_challenges (
+    nonce TEXT PRIMARY KEY,
+    identity_key TEXT NOT NULL,
+    expires INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS welcomes (
     id INTEGER PRIMARY KEY,
     device_key TEXT NOT NULL REFERENCES devices(key) ON DELETE CASCADE,
@@ -117,6 +144,11 @@ const ADDED: &[(&str, &str, &str)] = &[
     ("accounts", "status", "TEXT NOT NULL DEFAULT 'online'"),
     ("accounts", "status_text", "TEXT NOT NULL DEFAULT ''"),
     ("channels", "kind", "TEXT NOT NULL DEFAULT 'text'"),
+    ("accounts", "identity_key", "TEXT"),
+    ("channels", "category", "TEXT"),
+    ("channels", "parent", "TEXT"),
+    ("channels", "post_rule", "TEXT NOT NULL DEFAULT 'everyone'"),
+    ("channels", "private", "INTEGER NOT NULL DEFAULT 0"),
 ];
 
 fn migrate(c: &Connection) -> rusqlite::Result<()> {
@@ -126,6 +158,8 @@ fn migrate(c: &Connection) -> rusqlite::Result<()> {
             c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"))?;
         }
     }
+    // One account per identity on a server (an identity can still use a different username on each server).
+    c.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS accounts_identity ON accounts(identity_key) WHERE identity_key IS NOT NULL")?;
     Ok(())
 }
 

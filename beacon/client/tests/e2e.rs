@@ -28,7 +28,7 @@ async fn encrypted_chat_end_to_end() {
 
     // Alice sets up the server and a community.
     let alice = Client::open(&tmp.path().join("alice"), &url).unwrap();
-    alice.register("alice", &setup).await.unwrap();
+    alice.register("alice", &setup, None).await.unwrap();
     let community = alice.create_community("Raid night").await.unwrap();
     let general = alice.channels().unwrap()[0].0.clone();
     let invite = alice.create_invite(&community, 5, 3600).await.unwrap();
@@ -36,7 +36,7 @@ async fn encrypted_chat_end_to_end() {
 
     // Bob joins with the invite; Alice's client adds him to the channel's encrypted group.
     let bob = Client::open(&tmp.path().join("bob"), &url).unwrap();
-    bob.register("bob", &code).await.unwrap();
+    bob.register("bob", &code, None).await.unwrap();
     alice.sync().await.unwrap();
     bob.sync().await.unwrap();
     assert_eq!(bob.channels().unwrap().len(), 1, "Bob joined the channel's group from the welcome");
@@ -120,7 +120,7 @@ async fn encrypted_chat_end_to_end() {
 
     // Carol joins later: she can read what's sent after she's added, not before.
     let carol = Client::open(&tmp.path().join("carol"), &url).unwrap();
-    carol.register("carol", &code).await.unwrap();
+    carol.register("carol", &code, None).await.unwrap();
     bob.sync().await.unwrap(); // any member can add her
     alice.sync().await.unwrap();
     carol.sync().await.unwrap();
@@ -141,12 +141,21 @@ async fn encrypted_chat_end_to_end() {
     let (pcode, _) = alice.pair_start().await.unwrap();
     let (user, fp) = desktop.pair_claim(&pcode).await.unwrap();
     assert_eq!(user, "alice");
-    assert_eq!(desktop.pair_check().await.unwrap(), "waiting");
+    assert_eq!(desktop.pair_check().await.unwrap().0, "waiting");
     let waiting = alice.pair_waiting().await.unwrap();
     assert_eq!(waiting, vec![(desktop.device_key().to_string(), fp.clone())]);
-    alice.pair_decide(desktop.device_key(), true).await.unwrap();
-    assert_eq!(desktop.pair_check().await.unwrap(), "approved");
+    // The QR code's key lets Alice's laptop leave the desktop her message history (the server only sees ciphertext).
+    let key = [7u8; 32];
+    let sent = alice.pair_send_history(desktop.device_key(), &key).await.unwrap();
+    assert!(sent >= 3, "Alice's history was sent");
+    alice.pair_decide(desktop.device_key(), true, None).await.unwrap();
+    assert_eq!(desktop.pair_check().await.unwrap().0, "approved");
     assert_eq!(desktop.username().as_deref(), Some("alice"));
+    // The desktop collects it once, with the right key, and sees Alice's older messages straight away.
+    let got = desktop.pair_fetch_history(&key).await.unwrap();
+    assert_eq!(got, sent);
+    assert!(bodies(&desktop, &general).contains(&"alice: welcome carol".to_string()));
+    assert_eq!(desktop.pair_fetch_history(&key).await.unwrap(), 0, "the server hands the history over once");
     // Alice's laptop (or any member) adds the new device to the channels.
     alice.sync().await.unwrap();
     desktop.sync().await.unwrap();
@@ -199,11 +208,11 @@ async fn what_youre_playing_reaches_your_server_encrypted() {
     let tmp = tempfile::tempdir().unwrap();
     let (url, setup) = start_server(tmp.path()).await;
     let alice = Client::open(&tmp.path().join("alice"), &url).unwrap();
-    alice.register("alice", &setup).await.unwrap();
+    alice.register("alice", &setup, None).await.unwrap();
     let community = alice.create_community("Raid night").await.unwrap();
     let invite = alice.create_invite(&community, 1, 3600).await.unwrap();
     let bob = Client::open(&tmp.path().join("bob"), &url).unwrap();
-    bob.register("bob", invite["code"].as_str().unwrap()).await.unwrap();
+    bob.register("bob", invite["code"].as_str().unwrap(), None).await.unwrap();
     alice.sync().await.unwrap();
     bob.sync().await.unwrap();
 
@@ -217,4 +226,161 @@ async fn what_youre_playing_reaches_your_server_encrypted() {
     alice.set_playing(None).await.unwrap();
     bob.sync().await.unwrap();
     assert_eq!(bob.activities().get("alice"), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_identity_across_servers_and_recovery_on_a_new_pc() {
+    use lodestone_beacon_client::identity::Identity;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("a")).unwrap();
+    std::fs::create_dir_all(tmp.path().join("b")).unwrap();
+    let (url_a, setup_a) = start_server(&tmp.path().join("a")).await;
+    let (url_b, setup_b) = start_server(&tmp.path().join("b")).await;
+    let me = Identity::generate();
+
+    // The same identity (and username) on two servers.
+    let pc_a = Client::open(&tmp.path().join("pc-a"), &url_a).unwrap();
+    pc_a.register("robb", &setup_a, Some(&me)).await.unwrap();
+    let pc_b = Client::open(&tmp.path().join("pc-b"), &url_b).unwrap();
+    pc_b.register("robb", &setup_b, Some(&me)).await.unwrap();
+    let me_a = pc_a.server.get("/v1/me").await.unwrap();
+    let me_b = pc_b.server.get("/v1/me").await.unwrap();
+    assert_eq!((me_a["identity"].as_str(), me_b["identity"].as_str()), (Some(me.public().as_str()), Some(me.public().as_str())));
+
+    // A new PC restores the identity from the 24 words and gets back into both accounts.
+    let restored = Identity::from_phrase(&me.phrase()).unwrap();
+    let new_a = Client::open(&tmp.path().join("new-a"), &url_a).unwrap();
+    assert_eq!(new_a.recover(&restored).await.unwrap(), "robb");
+    let new_b = Client::open(&tmp.path().join("new-b"), &url_b).unwrap();
+    assert_eq!(new_b.recover(&restored).await.unwrap(), "robb");
+    assert_eq!(new_a.devices().await.unwrap().len(), 2);
+
+    // Someone else's identity can't recover into the account.
+    let thief = Client::open(&tmp.path().join("thief"), &url_a).unwrap();
+    assert!(thief.recover(&Identity::generate()).await.is_err());
+    assert_eq!(new_a.devices().await.unwrap().len(), 2);
+
+    // Pairing a phone can hand the identity over, sealed with a key that only the QR code carries.
+    let phone = Client::open(&tmp.path().join("phone"), &url_a).unwrap();
+    let (pcode, _) = pc_a.pair_start().await.unwrap();
+    phone.pair_claim(&pcode).await.unwrap();
+    let key = [9u8; 32];
+    pc_a.pair_decide(phone.device_key(), true, Some(me.seal(&key))).await.unwrap();
+    let (status, blob) = phone.pair_check().await.unwrap();
+    assert_eq!(status, "approved");
+    assert_eq!(Identity::open(&blob.unwrap(), &key).unwrap().public(), me.public());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn private_channels_only_reach_the_people_on_their_list() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (url, setup) = start_server(tmp.path()).await;
+    let alice = Client::open(&tmp.path().join("alice"), &url).unwrap();
+    alice.register("alice", &setup, None).await.unwrap();
+    let community = alice.create_community("Guild").await.unwrap();
+    let invite = alice.create_invite(&community, 5, 3600).await.unwrap();
+    let code = invite["code"].as_str().unwrap().to_string();
+    let bob = Client::open(&tmp.path().join("bob"), &url).unwrap();
+    bob.register("bob", &code, None).await.unwrap();
+    let carol = Client::open(&tmp.path().join("carol"), &url).unwrap();
+    carol.register("carol", &code, None).await.unwrap();
+    for c in [&alice, &bob, &carol, &alice] {
+        c.sync().await.unwrap();
+    }
+
+    // Alice makes a private channel for herself and Bob.
+    let secret = alice.create_private_channel(&community, "officers", "text", &["bob".to_string()]).await.unwrap();
+    alice.sync().await.unwrap();
+    bob.sync().await.unwrap();
+    carol.sync().await.unwrap();
+    alice.send_text(&secret, "plans for friday").await.unwrap();
+    bob.sync().await.unwrap();
+    assert_eq!(bodies(&bob, &secret), vec!["alice: plans for friday"]);
+
+    // Carol doesn't see it at all: not in her community listing, no group, and the server refuses her.
+    let listing = carol.server.get(&format!("/v1/communities/{community}")).await.unwrap();
+    assert!(listing["channels"].as_array().unwrap().iter().all(|c| c["id"] != secret.as_str()));
+    carol.sync().await.unwrap();
+    assert!(carol.channels().unwrap().iter().all(|c| c.0 != secret));
+    assert!(carol.server.get(&format!("/v1/channels/{secret}/messages")).await.is_err());
+
+    // Alice adds Carol to the list: she's added to the group and reads from then on, not before.
+    alice.server.call("PATCH", &format!("/v1/channels/{secret}"), Some(serde_json::json!({ "access": ["alice", "bob", "carol"] }))).await.unwrap();
+    alice.sync().await.unwrap();
+    carol.sync().await.unwrap();
+    assert!(carol.channels().unwrap().iter().any(|c| c.0 == secret), "Carol was welcomed");
+    alice.send_text(&secret, "welcome carol").await.unwrap();
+    carol.sync().await.unwrap();
+    assert_eq!(bodies(&carol, &secret), vec!["alice: welcome carol"]);
+
+    // Alice takes Bob off the list: he loses the channel and can't read what's said next.
+    alice.server.call("PATCH", &format!("/v1/channels/{secret}"), Some(serde_json::json!({ "access": ["alice", "carol"] }))).await.unwrap();
+    alice.sync().await.unwrap();
+    carol.sync().await.unwrap();
+    alice.send_text(&secret, "bob is out").await.unwrap();
+    carol.sync().await.unwrap();
+    assert_eq!(bodies(&carol, &secret).last().unwrap(), "alice: bob is out");
+    bob.sync().await.unwrap();
+    assert!(!bodies(&bob, &secret).iter().any(|b| b.contains("bob is out")));
+    assert!(bob.server.get(&format!("/v1/channels/{secret}/messages")).await.is_err());
+
+    // Making it public again brings Bob back in.
+    alice.server.call("PATCH", &format!("/v1/channels/{secret}"), Some(serde_json::json!({ "private": false }))).await.unwrap();
+    alice.sync().await.unwrap();
+    bob.sync().await.unwrap();
+    alice.send_text(&secret, "everyone now").await.unwrap();
+    bob.sync().await.unwrap();
+    assert_eq!(bodies(&bob, &secret).last().unwrap(), "alice: everyone now");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn forum_announcement_and_media_channels() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (url, setup) = start_server(tmp.path()).await;
+    let alice = Client::open(&tmp.path().join("alice"), &url).unwrap();
+    alice.register("alice", &setup, None).await.unwrap();
+    let community = alice.create_community("Guild").await.unwrap();
+    let invite = alice.create_invite(&community, 5, 3600).await.unwrap();
+    let bob = Client::open(&tmp.path().join("bob"), &url).unwrap();
+    bob.register("bob", invite["code"].as_str().unwrap(), None).await.unwrap();
+    let forum = alice.create_channel_kind(&community, "ideas", "forum").await.unwrap();
+    let news = alice.create_channel_kind(&community, "news", "announcement").await.unwrap();
+    let media = alice.create_channel_kind(&community, "screenshots", "media").await.unwrap();
+    assert!(alice.create_channel_kind(&community, "nope", "wiki").await.is_err());
+    for c in [&alice, &bob, &alice, &bob] {
+        c.sync().await.unwrap();
+    }
+    let kinds = alice.server.get(&format!("/v1/communities/{community}")).await.unwrap();
+    let kind_of = |id: &str| kinds["channels"].as_array().unwrap().iter().find(|c| c["id"] == id).map(|c| (c["kind"].as_str().unwrap().to_string(), c["post_rule"].as_str().unwrap().to_string())).unwrap();
+    assert_eq!(kind_of(&forum), ("forum".into(), "everyone".into()));
+    assert_eq!(kind_of(&news), ("announcement".into(), "admins".into()), "announcements start read-only for members");
+    assert_eq!(kind_of(&media).0, "media");
+
+    // Forum: a post has a title, a reply names its post; a reply can't be a titled post and a title is needed.
+    assert!(alice.send_post(&forum, "  ", "no title").await.is_err());
+    assert!(alice.send_reply(&forum, 0, "orphan").await.is_err());
+    let post = alice.send_post(&forum, "Raid times", "When shall we raid?").await.unwrap();
+    bob.sync().await.unwrap();
+    let reply = bob.send_reply(&forum, post.seq, "Fridays at 8").await.unwrap();
+    alice.sync().await.unwrap();
+    let seen = alice.messages(&forum, 50).unwrap();
+    assert_eq!((seen[0].title.as_deref(), seen[0].thread), (Some("Raid times"), None));
+    assert_eq!((seen[1].title.as_deref(), seen[1].thread, seen[1].seq), (None, Some(post.seq), reply.seq));
+    assert_eq!(seen[1].sender, "bob");
+    // It survives copying history to a new device.
+    let exported = alice.pair_history_for_test();
+    assert!(exported.contains("Raid times") && exported.contains("\"th\":"));
+
+    // Announcement: members read, only admins post.
+    alice.send_text(&news, "Server night is Friday").await.unwrap();
+    assert!(bob.send_text(&news, "me too?").await.is_err());
+    bob.sync().await.unwrap();
+    assert_eq!(bodies(&bob, &news), vec!["alice: Server night is Friday"]);
+
+    // Media: a file with a caption arrives for the other member.
+    let png = [&b"\x89PNG\r\n\x1a\n"[..], &[0u8; 32]].concat();
+    alice.send_file(&media, "boss.png", &png, "first clear").await.unwrap();
+    bob.sync().await.unwrap();
+    let m = &bob.messages(&media, 10).unwrap()[0];
+    assert_eq!((m.body.as_str(), m.attachment.as_ref().unwrap()["mime"].as_str()), ("first clear", Some("image/png")));
 }

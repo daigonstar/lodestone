@@ -68,6 +68,12 @@ pub struct Register {
     device_key: String,
     signature: String,
     invite: String,
+    /// The person's identity key (base64 Ed25519), with its signature over
+    /// `lodestone-beacon/v1 identity <server url> <username> <device_key>`. Optional: older clients register without one.
+    #[serde(default)]
+    identity_key: Option<String>,
+    #[serde(default)]
+    identity_signature: Option<String>,
 }
 
 /// Make an account with its first device. Needs an invite code or the server's setup code.
@@ -80,6 +86,10 @@ pub async fn register(State(app): State<Shared>, Json(r): Json<Register>) -> Api
         return Err(ApiError(axum::http::StatusCode::TOO_MANY_REQUESTS, "Too many attempts; try again later".into()));
     }
     verify(&r.device_key, &format!("{PREFIX} register {} {username} {}", app.cfg.public_url, r.device_key), &r.signature)?;
+    if let Some(identity) = &r.identity_key {
+        let sig = r.identity_signature.as_deref().ok_or_else(|| ApiError::bad("identity_signature is required with identity_key"))?;
+        verify(identity, &format!("{PREFIX} identity {} {username} {}", app.cfg.public_url, r.device_key), sig)?;
+    }
     let code = r.invite.trim().to_string();
     let joined = app.db.with(|c| {
         let tx = c.transaction()?;
@@ -94,7 +104,12 @@ pub async fn register(State(app): State<Shared>, Json(r): Json<Register>) -> Api
         if tx.query_row("SELECT 1 FROM devices WHERE key = ?1", [&r.device_key], |_| Ok(())).optional()?.is_some() {
             return Ok(Err(ApiError::conflict("This device is already registered")));
         }
-        tx.execute("INSERT INTO accounts (username, server_admin, created) VALUES (?1, ?2, ?3)", params![username, setup as i64, now()])?;
+        if let Some(identity) = &r.identity_key {
+            if let Some(existing) = tx.query_row("SELECT username FROM accounts WHERE identity_key = ?1", [identity], |r| r.get::<_, String>(0)).optional()? {
+                return Ok(Err(ApiError::conflict(format!("Your identity already has an account on this server (@{existing}); sign in to it instead"))));
+            }
+        }
+        tx.execute("INSERT INTO accounts (username, server_admin, created, identity_key) VALUES (?1, ?2, ?3, ?4)", params![username, setup as i64, now(), r.identity_key])?;
         let account = tx.last_insert_rowid();
         tx.execute("INSERT INTO devices (key, account, created) VALUES (?1, ?2, ?3)", params![r.device_key, account, now()])?;
         if setup {
@@ -192,4 +207,70 @@ pub async fn add_device(State(app): State<Shared>, me: Auth, Json(r): Json<AddDe
 pub async fn sign_out(State(app): State<Shared>, me: Auth) -> ApiResult<Json<Value>> {
     app.db.with(|c| c.execute("DELETE FROM sessions WHERE device_key = ?1", [&me.device]))?;
     Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+pub struct RecoverChallengeReq {
+    identity_key: String,
+}
+
+/// Step 1 of recovering an account with the person's identity key on a new device: a single-use nonce. The same
+/// answer whether or not the identity has an account here, so this can't be used to look identities up.
+pub async fn recover_challenge(State(app): State<Shared>, Json(r): Json<RecoverChallengeReq>) -> ApiResult<Json<Value>> {
+    if b64_decode(&r.identity_key).is_none_or(|k| k.len() != 32) {
+        return Err(ApiError::bad("identity_key must be a base64 Ed25519 public key"));
+    }
+    if !app.limits.allow("recover-challenges", 60, Duration::from_secs(60)) {
+        return Err(ApiError(axum::http::StatusCode::TOO_MANY_REQUESTS, "Too many attempts; try again in a minute".into()));
+    }
+    let nonce = new_code() + &new_code();
+    app.db.with(|c| {
+        c.execute("DELETE FROM recover_challenges WHERE expires < ?1", [now()])?;
+        let waiting: i64 = c.query_row("SELECT COUNT(*) FROM recover_challenges WHERE identity_key = ?1", [&r.identity_key], |r| r.get(0))?;
+        if waiting >= 5 {
+            c.execute("DELETE FROM recover_challenges WHERE identity_key = ?1", [&r.identity_key])?;
+        }
+        c.execute("INSERT INTO recover_challenges (nonce, identity_key, expires) VALUES (?1, ?2, ?3)", params![nonce, r.identity_key, now() + CHALLENGE_SECS])
+    })?;
+    Ok(Json(json!({ "nonce": nonce })))
+}
+
+#[derive(Deserialize)]
+pub struct RecoverReq {
+    identity_key: String,
+    device_key: String,
+    nonce: String,
+    /// Over `lodestone-beacon/v1 recover <server url> <identity_key> <device_key> <nonce>`.
+    identity_signature: String,
+    /// Over `lodestone-beacon/v1 recover-device <server url> <device_key> <nonce>`: the new device holds its key.
+    device_signature: String,
+}
+
+/// Step 2: add this (new) device to the account that belongs to the person's identity key.
+pub async fn recover(State(app): State<Shared>, Json(r): Json<RecoverReq>) -> ApiResult<Json<Value>> {
+    if !app.limits.allow(&format!("recover:{}", r.identity_key), 10, Duration::from_secs(600)) {
+        return Err(ApiError(axum::http::StatusCode::TOO_MANY_REQUESTS, "Too many attempts; try again later".into()));
+    }
+    verify(&r.identity_key, &format!("{PREFIX} recover {} {} {} {}", app.cfg.public_url, r.identity_key, r.device_key, r.nonce), &r.identity_signature)?;
+    verify(&r.device_key, &format!("{PREFIX} recover-device {} {} {}", app.cfg.public_url, r.device_key, r.nonce), &r.device_signature)?;
+    let username = app.db.with(|c| {
+        let tx = c.transaction()?;
+        let used = tx.execute("DELETE FROM recover_challenges WHERE nonce = ?1 AND identity_key = ?2 AND expires >= ?3", params![r.nonce, r.identity_key, now()])?;
+        if used != 1 {
+            return Ok(Err(ApiError::unauthorized("That challenge expired; start again")));
+        }
+        let account: Option<(i64, String)> = tx.query_row("SELECT id, username FROM accounts WHERE identity_key = ?1", [&r.identity_key], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        let Some((account, username)) = account else { return Ok(Err(ApiError::not_found("Your identity has no account on this server"))) };
+        if tx.query_row("SELECT 1 FROM devices WHERE key = ?1", [&r.device_key], |_| Ok(())).optional()?.is_some() {
+            return Ok(Err(ApiError::conflict("This device is already registered")));
+        }
+        let count: i64 = tx.query_row("SELECT COUNT(*) FROM devices WHERE account = ?1", [account], |r| r.get(0))?;
+        if count >= 10 {
+            return Ok(Err(ApiError::bad("An account can have at most 10 devices; remove one first")));
+        }
+        tx.execute("INSERT INTO devices (key, account, created) VALUES (?1, ?2, ?3)", params![r.device_key, account, now()])?;
+        tx.commit()?;
+        Ok(Ok(username))
+    })??;
+    Ok(Json(json!({ "username": username })))
 }

@@ -59,6 +59,12 @@ pub fn router(app: Shared) -> Router {
         .route("/api/banner", get(banner).post(set_banner).layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)))
         .route("/api/probe", post(probe))
         .route("/api/local-server", post(local_server))
+        .route("/api/identity", get(identity_info))
+        .route("/api/identity/create", post(identity_create))
+        .route("/api/identity/restore", post(identity_restore))
+        .route("/api/identity/phrase", get(identity_phrase))
+        .route("/api/recover", post(recover))
+        .route("/api/qr", get(qr))
         .route("/api/voice", get(voice_status))
         .route("/api/voice/join", post(voice_join))
         .route("/api/voice/leave", post(voice_leave))
@@ -179,7 +185,7 @@ async fn state(State(app): State<Shared>) -> R {
         }
         servers.push(entry);
     }
-    Ok(Json(json!({ "servers": servers, "pairing": pairing, "bridge": app.bridge.connected(), "theme": app.bridge.theme.lock().unwrap().clone() })))
+    Ok(Json(json!({ "identity": identity_json(&app), "servers": servers, "pairing": pairing, "bridge": app.bridge.connected(), "theme": app.bridge.theme.lock().unwrap().clone() })))
 }
 
 /// "https://server/join/CODE" -> (server URL, code).
@@ -205,8 +211,9 @@ async fn join(State(app): State<Shared>, Json(r): Json<JoinReq>) -> R {
         ensure_signed_in(&c).await?;
         c.accept_invite(&code).await?
     } else {
-        let user = r.username.filter(|u| !u.trim().is_empty()).ok_or_else(|| Fail("Choose a username for this server".into()))?;
-        let reg = c.register(&user, &code).await?;
+        let (id_name, identity) = my_identity(&app)?;
+        let user = r.username.filter(|u| !u.trim().is_empty()).unwrap_or(id_name);
+        let reg = c.register(&user, &code, Some(&identity)).await?;
         reg["joined_community"].as_str().unwrap_or_default().to_string()
     };
     let _ = c.sync().await;
@@ -218,6 +225,7 @@ async fn join(State(app): State<Shared>, Json(r): Json<JoinReq>) -> R {
 struct SetupReq {
     server: String,
     code: String,
+    #[serde(default)]
     username: String,
 }
 
@@ -228,7 +236,9 @@ async fn setup(State(app): State<Shared>, Json(r): Json<SetupReq>) -> R {
     if c.username().is_some() {
         return Err(Fail("You already have an account on that server".into()));
     }
-    c.register(&r.username, &r.code).await?;
+    let (id_name, identity) = my_identity(&app)?;
+    let user = if r.username.trim().is_empty() { id_name } else { r.username.clone() };
+    c.register(&user, &r.code, Some(&identity)).await?;
     Ok(Json(json!({ "server": c.server.url })))
 }
 
@@ -253,12 +263,21 @@ struct ChannelReq {
     name: String,
     #[serde(default)]
     kind: String,
+    /// Only the people in `access` (and you) can read it.
+    #[serde(default)]
+    private: bool,
+    #[serde(default)]
+    access: Vec<String>,
 }
 
 async fn create_channel(State(app): State<Shared>, Json(r): Json<ChannelReq>) -> R {
     let c = client(&app, &r.server)?;
     ensure_signed_in(&c).await?;
-    let id = if r.kind == "voice" { c.create_voice_channel(&r.community, &r.name).await? } else { c.create_channel(&r.community, &r.name).await? };
+    let kind = match r.kind.as_str() {
+        "voice" | "forum" | "announcement" | "media" => r.kind.as_str(),
+        _ => "text",
+    };
+    let id = if r.private { c.create_private_channel(&r.community, &r.name, kind, &r.access).await? } else { c.create_channel_kind(&r.community, &r.name, kind).await? };
     let _ = app.events.send(json!({ "type": "state" }).to_string());
     Ok(Json(json!({ "channel": id })))
 }
@@ -298,6 +317,12 @@ struct SendReq {
     server: String,
     channel: String,
     text: String,
+    /// A forum reply: the post's sequence number.
+    #[serde(default)]
+    thread: Option<i64>,
+    /// A new forum post's title.
+    #[serde(default)]
+    title: Option<String>,
 }
 
 async fn send(State(app): State<Shared>, Json(r): Json<SendReq>) -> R {
@@ -307,7 +332,12 @@ async fn send(State(app): State<Shared>, Json(r): Json<SendReq>) -> R {
     }
     let c = client(&app, &r.server)?;
     ensure_signed_in(&c).await?;
-    let m = c.send_text(&r.channel, text).await?;
+    let m = match (&r.title, r.thread) {
+        (Some(title), None) => c.send_post(&r.channel, title, text).await?,
+        (None, Some(thread)) => c.send_reply(&r.channel, thread, text).await?,
+        (None, None) => c.send_text(&r.channel, text).await?,
+        _ => return Err(Fail("A message is a post (with a title) or a reply, not both".into())),
+    };
     let _ = app.events.send(json!({ "type": "messages", "server": r.server, "channels": [r.channel] }).to_string());
     Ok(Json(json!(m)))
 }
@@ -552,25 +582,61 @@ async fn pair_start(State(app): State<Shared>, Json(r): Json<ServerQuery>) -> R 
     let c = client(&app, &r.server)?;
     ensure_signed_in(&c).await?;
     let (code, expires) = c.pair_start().await?;
-    Ok(Json(json!({ "code": code, "expires": expires, "server": c.server.url.trim_start_matches("https://") })))
+    // The QR code carries the server, the code and a key for handing over your identity; the key stays off the server.
+    let mut key = [0u8; 32];
+    getrandom::getrandom(&mut key).map_err(|e| Fail(e.to_string()))?;
+    app.pair_keys.lock().unwrap().insert(c.server.url.clone(), key);
+    let link = format!("beacon-pair:1|{}|{code}|{}", c.server.url, lodestone_beacon_client::server::b64(&key));
+    Ok(Json(json!({ "code": code, "expires": expires, "server": c.server.url.trim_start_matches("https://"), "link": link })))
 }
 
 async fn pair_decide(State(app): State<Shared>, Json(r): Json<DeviceReq>) -> R {
     let c = client(&app, &r.server)?;
     ensure_signed_in(&c).await?;
-    c.pair_decide(&r.device_key, r.approve).await?;
-    Ok(Json(json!({ "ok": true })))
+    // Approving also hands over your identity, sealed with the key from the QR code (if this pairing had one).
+    let key = if r.approve { app.pair_keys.lock().unwrap().remove(&c.server.url) } else { None };
+    let handover = key.and_then(|k| app.identity.lock().unwrap().as_ref().map(|(id, _)| id.seal(&k)));
+    // ...and your recent messages, so the new device isn't empty. Failing to send them never blocks the approval.
+    let mut history = 0;
+    let mut history_failed = false;
+    if let Some(k) = key {
+        match c.pair_send_history(&r.device_key, &k).await {
+            Ok(n) => history = n,
+            Err(_) => history_failed = true,
+        }
+    }
+    c.pair_decide(&r.device_key, r.approve, handover).await?;
+    Ok(Json(json!({ "ok": true, "history_messages": history, "history_failed": history_failed })))
 }
 
 #[derive(Deserialize)]
 struct PairClaim {
+    #[serde(default)]
     server: String,
+    #[serde(default)]
     code: String,
+    /// The text of a pairing QR code (`beacon-pair:1|server|code|key`), instead of server and code.
+    #[serde(default)]
+    link: String,
 }
 
 /// On a new device: offer this device to an account, using a code from one of its devices.
 async fn pair_claim(State(app): State<Shared>, Json(r): Json<PairClaim>) -> R {
+    let (server_in, code, key) = if r.link.trim().is_empty() {
+        (r.server.clone(), r.code.clone(), None)
+    } else {
+        let parts: Vec<&str> = r.link.trim().split('|').collect();
+        let key = parts.get(3).and_then(|k| lodestone_beacon_client::server::unb64(k)).and_then(|k| <[u8; 32]>::try_from(k).ok());
+        match (parts.as_slice(), key) {
+            (["beacon-pair:1", server, code, _], Some(key)) => (server.to_string(), code.to_string(), Some(key)),
+            _ => return Err(Fail("That isn't a Beacon pairing code. Scan or paste the whole text from the other device.".into())),
+        }
+    };
+    let r = PairClaim { server: server_in, code, link: String::new() };
     let server = lodestone_beacon_client::discover::discover(&r.server).await.map_err(Fail)?;
+    if let Some(key) = key {
+        app.pair_keys.lock().unwrap().insert(server.clone(), key);
+    }
     let c = app.servers.open(&server).map_err(Fail)?;
     if c.username().is_some() {
         return Err(Fail("This device already has an account on that server".into()));
@@ -582,11 +648,144 @@ async fn pair_claim(State(app): State<Shared>, Json(r): Json<PairClaim>) -> R {
 
 async fn pair_check(State(app): State<Shared>, Json(r): Json<ServerQuery>) -> R {
     let c = app.servers.get(&r.server).ok_or_else(|| Fail("Unknown server".into()))?;
-    let status = c.pair_check().await?;
+    let (status, blob) = c.pair_check().await?;
+    // Approved with your identity from the other device: keep it, unless this device already has one.
+    let mut imported = false;
+    let mut history = 0;
+    if status == "approved" {
+        let key = app.pair_keys.lock().unwrap().remove(&c.server.url);
+        if let Some(key) = key {
+            history = c.pair_fetch_history(&key).await.unwrap_or(0);
+        }
+        if let (Some(blob), Some(key)) = (blob, key) {
+            let mut mine = app.identity.lock().unwrap();
+            if mine.is_none() {
+                if let Some(id) = lodestone_beacon_client::identity::Identity::open(&blob, &key) {
+                    let name = c.username().unwrap_or_default();
+                    if id.save(&crate::data_dir().join("identity.json"), &name).is_ok() {
+                        *mine = Some((id, name));
+                        imported = true;
+                    }
+                }
+            }
+        }
+    }
     if status != "waiting" {
         let _ = app.events.send(json!({ "type": "state" }).to_string());
     }
-    Ok(Json(json!({ "status": status })))
+    Ok(Json(json!({ "status": status, "identity_imported": imported, "history_messages": history })))
+}
+
+// ---------- identity ----------
+
+fn identity_json(app: &Shared) -> Value {
+    match app.identity.lock().unwrap().as_ref() {
+        Some((id, name)) => json!({ "exists": true, "username": name, "fingerprint": id.fingerprint() }),
+        None => json!({ "exists": false }),
+    }
+}
+
+/// The identity and the username to use on a server, or an error telling the person to set it up first.
+fn my_identity(app: &Shared) -> Result<(String, lodestone_beacon_client::identity::Identity), Fail> {
+    let guard = app.identity.lock().unwrap();
+    let (id, name) = guard.as_ref().ok_or_else(|| Fail("Set up your identity first".into()))?;
+    Ok((name.clone(), lodestone_beacon_client::identity::Identity::from_seed(id.seed())))
+}
+
+fn valid_username(u: &str) -> bool {
+    (2..=32).contains(&u.len()) && u.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'.' | b'-'))
+}
+
+async fn identity_info(State(app): State<Shared>) -> R {
+    Ok(Json(identity_json(&app)))
+}
+
+#[derive(Deserialize)]
+struct IdentityReq {
+    #[serde(default)]
+    phrase: String,
+    username: String,
+}
+
+fn install_identity(app: &Shared, id: lodestone_beacon_client::identity::Identity, username: String) -> Result<(), Fail> {
+    id.save(&crate::data_dir().join("identity.json"), &username).map_err(|e| Fail(format!("Can't save your identity: {e}")))?;
+    *app.identity.lock().unwrap() = Some((id, username));
+    let _ = app.events.send(json!({ "type": "state" }).to_string());
+    Ok(())
+}
+
+/// First run: make your identity. The recovery phrase is returned once for the page to show; it can be shown
+/// again later from the settings.
+async fn identity_create(State(app): State<Shared>, Json(r): Json<IdentityReq>) -> R {
+    let username = r.username.trim().to_ascii_lowercase();
+    if !valid_username(&username) {
+        return Err(Fail("Usernames need 2 to 32 characters: a-z, 0-9, _ . -".into()));
+    }
+    if app.identity.lock().unwrap().is_some() {
+        return Err(Fail("You already have an identity on this PC".into()));
+    }
+    let id = lodestone_beacon_client::identity::Identity::generate();
+    let (phrase, fingerprint) = (id.phrase(), id.fingerprint());
+    install_identity(&app, id, username.clone())?;
+    Ok(Json(json!({ "phrase": phrase, "fingerprint": fingerprint, "username": username })))
+}
+
+/// First run on a new PC: bring your identity back from its 24 words.
+async fn identity_restore(State(app): State<Shared>, Json(r): Json<IdentityReq>) -> R {
+    let username = r.username.trim().to_ascii_lowercase();
+    if !valid_username(&username) {
+        return Err(Fail("Usernames need 2 to 32 characters: a-z, 0-9, _ . -".into()));
+    }
+    if app.identity.lock().unwrap().is_some() {
+        return Err(Fail("You already have an identity on this PC".into()));
+    }
+    let id = lodestone_beacon_client::identity::Identity::from_phrase(&r.phrase).map_err(Fail)?;
+    let fingerprint = id.fingerprint();
+    install_identity(&app, id, username.clone())?;
+    Ok(Json(json!({ "fingerprint": fingerprint, "username": username })))
+}
+
+async fn identity_phrase(State(app): State<Shared>) -> R {
+    let guard = app.identity.lock().unwrap();
+    let (id, _) = guard.as_ref().ok_or_else(|| Fail("No identity yet".into()))?;
+    Ok(Json(json!({ "phrase": id.phrase() })))
+}
+
+#[derive(Deserialize)]
+struct RecoverReq {
+    server: String,
+}
+
+/// On a PC with your restored identity: get into your existing account on a server you were on, no approval needed.
+async fn recover(State(app): State<Shared>, Json(r): Json<RecoverReq>) -> R {
+    let (_, identity) = my_identity(&app)?;
+    let server = lodestone_beacon_client::discover::discover(&r.server).await.map_err(Fail)?;
+    let c = app.servers.open(&server).map_err(Fail)?;
+    if c.username().is_some() {
+        return Err(Fail("This PC already has an account on that server".into()));
+    }
+    let username = c.recover(&identity).await?;
+    let _ = c.sync().await;
+    let _ = app.events.send(json!({ "type": "state" }).to_string());
+    Ok(Json(json!({ "server": server, "username": username })))
+}
+
+#[derive(Deserialize)]
+struct QrQuery {
+    text: String,
+}
+
+/// A QR code (SVG) for some text, drawn here so nothing is sent anywhere.
+async fn qr(Query(q): Query<QrQuery>) -> Response {
+    if q.text.len() > 400 {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let Ok(code) = qrcode::QrCode::new(q.text.as_bytes()) else { return StatusCode::BAD_REQUEST.into_response() };
+    let svg = code.render::<qrcode::render::svg::Color>().min_dimensions(220, 220).quiet_zone(true).dark_color(qrcode::render::svg::Color("#000000")).light_color(qrcode::render::svg::Color("#ffffff")).build();
+    let mut r = Response::new(Body::from(svg));
+    r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("image/svg+xml"));
+    r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    r
 }
 
 /// Your Steam and Epic friends, through the bridge (needs the friends:read permission in Lodestone).

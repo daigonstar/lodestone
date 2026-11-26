@@ -12,7 +12,7 @@ use axum::http::{header, HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use rusqlite::{params, OptionalExtension};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
 
 const MAX_ICON: usize = 256 * 1024;
@@ -158,27 +158,137 @@ fn channel_admin(app: &Shared, channel: &str, me: &Auth) -> ApiResult<String> {
     Ok(community)
 }
 
+/// A field that can be left out (no change), `null` (clear it) or a value (set it).
+fn set_or_clear<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
+    Ok(Some(Option::deserialize(d)?))
+}
+
 #[derive(Deserialize)]
 pub struct ChannelPatch {
     name: Option<String>,
     topic: Option<String>,
+    /// The category it sits in (`null` for none).
+    #[serde(default, deserialize_with = "set_or_clear")]
+    category: Option<Option<String>>,
+    /// The text channel it is a child of (`null` for a top-level channel).
+    #[serde(default, deserialize_with = "set_or_clear")]
+    parent: Option<Option<String>>,
+    /// "everyone" or "admins": who can post.
+    post_rule: Option<String>,
+    /// Make the channel private (only `access` can read it) or public again.
+    private: Option<bool>,
+    /// Usernames who can read a private channel.
+    access: Option<Vec<String>>,
+}
+
+/// Turn usernames into account ids; they must all be members of the community. `always` is added.
+pub(crate) fn resolve_access(app: &Shared, community: &str, names: &[String], always: Option<i64>) -> ApiResult<Vec<i64>> {
+    if names.len() > 500 {
+        return Err(ApiError::bad("At most 500 people can be on a private channel"));
+    }
+    let mut out: Vec<i64> = always.into_iter().collect();
+    for n in names {
+        let id: Option<i64> = app.db.with(|c| {
+            c.query_row("SELECT a.id FROM accounts a JOIN members m ON m.account = a.id WHERE m.community = ?1 AND a.username = ?2", params![community, n.trim().to_ascii_lowercase()], |r| r.get(0)).optional()
+        })?;
+        let id = id.ok_or_else(|| ApiError::bad(format!("{} isn't in this community", n.trim())))?;
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    Ok(out)
 }
 
 pub async fn update_channel(State(app): State<Shared>, me: Auth, Path(channel): Path<String>, Json(r): Json<ChannelPatch>) -> ApiResult<Json<Value>> {
     let community = channel_admin(&app, &channel, &me)?;
     let name = r.name.as_deref().map(clean_name).transpose()?;
     let topic = r.topic.as_deref().map(|t| clean_text(t, 300, "A topic")).transpose()?;
+    if let Some(rule) = &r.post_rule {
+        if rule != "everyone" && rule != "admins" {
+            return Err(ApiError::bad("post_rule must be everyone or admins"));
+        }
+    }
+    check_placement(&app, &community, &channel, r.category.as_ref(), r.parent.as_ref())?;
+    let was_private: bool = app.db.with(|c| c.query_row("SELECT private FROM channels WHERE id = ?1", [&channel], |r| r.get(0)))?;
+    let private = r.private.unwrap_or(was_private);
+    // Turning a channel private needs a list of the people who can read it (never empty). Owners and admins
+    // can change the list, including adding themselves, without being on it.
+    let access = match (&r.access, private) {
+        (Some(names), true) => {
+            let list = resolve_access(&app, &community, names, None)?;
+            if list.is_empty() {
+                return Err(ApiError::bad("A private channel needs at least one person"));
+            }
+            Some(list)
+        }
+        (None, true) if !was_private => return Err(ApiError::bad("Choose who can read a private channel")),
+        _ => None,
+    };
     app.db.with(|c| {
+        if r.private.is_some() {
+            c.execute("UPDATE channels SET private = ?2 WHERE id = ?1", params![channel, private])?;
+            if !private {
+                c.execute("DELETE FROM channel_access WHERE channel = ?1", [&channel])?;
+            }
+        }
+        if let Some(list) = &access {
+            c.execute("DELETE FROM channel_access WHERE channel = ?1", [&channel])?;
+            for a in list {
+                c.execute("INSERT OR IGNORE INTO channel_access (channel, account) VALUES (?1, ?2)", params![channel, a])?;
+            }
+        }
         if let Some(n) = &name {
             c.execute("UPDATE channels SET name = ?2 WHERE id = ?1", params![channel, n])?;
         }
         if let Some(t) = &topic {
             c.execute("UPDATE channels SET topic = ?2 WHERE id = ?1", params![channel, t])?;
         }
+        if let Some(rule) = &r.post_rule {
+            c.execute("UPDATE channels SET post_rule = ?2 WHERE id = ?1", params![channel, rule])?;
+        }
+        if let Some(cat) = &r.category {
+            c.execute("UPDATE channels SET category = ?2 WHERE id = ?1", params![channel, cat])?;
+        }
+        if let Some(parent) = &r.parent {
+            // A child sits under its parent whatever the category.
+            c.execute("UPDATE channels SET parent = ?2, category = CASE WHEN ?2 IS NULL THEN category ELSE NULL END WHERE id = ?1", params![channel, parent])?;
+        }
         Ok(())
     })?;
     updated(&app, &community);
     Ok(Json(json!({ "ok": true })))
+}
+
+/// A category or parent must be in the same community; a parent must be a top-level text channel, and a channel
+/// that already has children can't become a child itself (one level only).
+pub(crate) fn check_placement(app: &Shared, community: &str, channel: &str, category: Option<&Option<String>>, parent: Option<&Option<String>>) -> ApiResult<()> {
+    app.db.with(|c| {
+        if let Some(Some(cat)) = category {
+            let ok: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM categories WHERE id = ?1 AND community = ?2)", params![cat, community], |r| r.get(0))?;
+            if !ok {
+                return Ok(Err(ApiError::bad("No such category")));
+            }
+        }
+        if let Some(Some(par)) = parent {
+            if par == channel {
+                return Ok(Err(ApiError::bad("A channel can't be its own parent")));
+            }
+            let row: Option<(String, Option<String>)> = c
+                .query_row("SELECT kind, parent FROM channels WHERE id = ?1 AND community = ?2", params![par, community], |r| Ok((r.get(0)?, r.get(1)?)))
+                .optional()?;
+            match row {
+                None => return Ok(Err(ApiError::bad("No such parent channel"))),
+                Some((kind, _)) if kind != "text" => return Ok(Err(ApiError::bad("Only text channels can have child channels"))),
+                Some((_, Some(_))) => return Ok(Err(ApiError::bad("That channel is already a child; child channels can't have children"))),
+                _ => {}
+            }
+            let has_children: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM channels WHERE parent = ?1)", [channel], |r| r.get(0))?;
+            if has_children {
+                return Ok(Err(ApiError::bad("This channel has children, so it can't become a child")));
+            }
+        }
+        Ok(Ok(()))
+    })?
 }
 
 /// Delete a channel and its stored (encrypted) messages. A community keeps at least one channel.
@@ -188,7 +298,12 @@ pub async fn delete_channel(State(app): State<Shared>, me: Auth, Path(channel): 
     if count <= 1 {
         return Err(ApiError::bad("A community needs at least one channel"));
     }
-    app.db.with(|c| c.execute("DELETE FROM channels WHERE id = ?1", [&channel]))?;
+    app.db.with(|c| {
+        // Its children move up to the top level rather than disappearing.
+        c.execute("UPDATE channels SET parent = NULL WHERE parent = ?1", [&channel])?;
+        c.execute("DELETE FROM channel_access WHERE channel = ?1", [&channel])?;
+        c.execute("DELETE FROM channels WHERE id = ?1", [&channel])
+    })?;
     crate::blobs::sweep(&app);
     app.live.to_community(&app, &community, json!({ "type": "channel_deleted", "community": community, "channel": channel }));
     Ok(Json(json!({ "ok": true })))
@@ -340,5 +455,86 @@ pub async fn revoke_invite(State(app): State<Shared>, me: Auth, Path((community,
     if n == 0 {
         return Err(ApiError::not_found("No such invite"));
     }
+    Ok(Json(json!({ "ok": true })))
+}
+
+// ---------- categories ----------
+
+#[derive(Deserialize)]
+pub struct CategoryReq {
+    name: String,
+}
+
+const MAX_CATEGORIES: i64 = 50;
+
+pub async fn create_category(State(app): State<Shared>, me: Auth, Path(community): Path<String>, Json(r): Json<CategoryReq>) -> ApiResult<Json<Value>> {
+    require_admin(&app, &community, &me)?;
+    let name = clean_name(&r.name)?;
+    let count: i64 = app.db.with(|c| c.query_row("SELECT COUNT(*) FROM categories WHERE community = ?1", [&community], |r| r.get(0)))?;
+    if count >= MAX_CATEGORIES {
+        return Err(ApiError::bad("A community can have at most 50 categories"));
+    }
+    let id = crate::util::new_id();
+    app.db.with(|c| {
+        c.execute(
+            "INSERT INTO categories (id, community, name, position, created) VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(position), -1) + 1 FROM categories WHERE community = ?2), ?4)",
+            params![id, community, name, now()],
+        )
+    })?;
+    updated(&app, &community);
+    Ok(Json(json!({ "id": id, "name": name })))
+}
+
+fn category_admin(app: &Shared, category: &str, me: &Auth) -> ApiResult<String> {
+    let community: Option<String> = app.db.with(|c| c.query_row("SELECT community FROM categories WHERE id = ?1", [category], |r| r.get(0)).optional())?;
+    let community = community.ok_or_else(|| ApiError::not_found("No such category"))?;
+    require_member(app, &community, me).map_err(|_| ApiError::not_found("No such category"))?;
+    require_admin(app, &community, me)?;
+    Ok(community)
+}
+
+pub async fn rename_category(State(app): State<Shared>, me: Auth, Path(category): Path<String>, Json(r): Json<CategoryReq>) -> ApiResult<Json<Value>> {
+    let community = category_admin(&app, &category, &me)?;
+    let name = clean_name(&r.name)?;
+    app.db.with(|c| c.execute("UPDATE categories SET name = ?2 WHERE id = ?1", params![category, name]))?;
+    updated(&app, &community);
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Delete a category; its channels stay, uncategorised.
+pub async fn delete_category(State(app): State<Shared>, me: Auth, Path(category): Path<String>) -> ApiResult<Json<Value>> {
+    let community = category_admin(&app, &category, &me)?;
+    app.db.with(|c| {
+        c.execute("UPDATE channels SET category = NULL WHERE category = ?1", [&category])?;
+        c.execute("DELETE FROM categories WHERE id = ?1", [&category])
+    })?;
+    updated(&app, &community);
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+pub struct CategoryOrder {
+    categories: Vec<String>,
+}
+
+/// Set the category order: the list must name every category of the community exactly once.
+pub async fn reorder_categories(State(app): State<Shared>, me: Auth, Path(community): Path<String>, Json(r): Json<CategoryOrder>) -> ApiResult<Json<Value>> {
+    require_admin(&app, &community, &me)?;
+    app.db.with(|c| {
+        let mut current: Vec<String> = c.prepare("SELECT id FROM categories WHERE community = ?1")?.query_map([&community], |r| r.get(0))?.collect::<Result<_, _>>()?;
+        let mut wanted = r.categories.clone();
+        current.sort();
+        wanted.sort();
+        if current != wanted {
+            return Ok(Err(ApiError::bad("The order must list every category of this community once")));
+        }
+        let tx = c.transaction()?;
+        for (i, id) in r.categories.iter().enumerate() {
+            tx.execute("UPDATE categories SET position = ?2 WHERE id = ?1", params![id, i as i64])?;
+        }
+        tx.commit()?;
+        Ok(Ok(()))
+    })??;
+    updated(&app, &community);
     Ok(Json(json!({ "ok": true })))
 }

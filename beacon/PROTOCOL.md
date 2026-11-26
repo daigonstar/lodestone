@@ -73,6 +73,57 @@ one server can't be replayed on another.
    - The token is 32 random bytes (base64url). The server stores only its SHA-256. Send it as
      `Authorization: Bearer <token>`. Sessions last 30 days.
 
+## Identity: one key that belongs to the person
+
+Devices sign in with their own keys (above). On top of that, a person has an **identity**: one more Ed25519
+key made by their app on first run. It is never sent anywhere; servers only ever see its public half. It is
+backed up as a 24-word recovery phrase (the key's 32 bytes as BIP-39 words); whoever has the phrase is that
+person. The point: the same person is recognisable across servers, and can get back into their accounts on a
+new device. Nobody holds an account database: each server stores only public keys.
+
+- **Registering with an identity.** `POST /v1/register` also takes `identity_key` (base64 public key) and
+  `identity_signature` over `lodestone-beacon/v1 identity <server url> <username> <device_key>`. The server
+  stores the key on the account (`GET /v1/me` and community member lists show it as `identity`). One account
+  per identity per server (a second one gets 409); usernames stay unique per server, and a person may use a
+  different one on each server. Clients show the identity's fingerprint (SHA-256 of the base64 key, first 8
+  bytes, as `3f9a-02c1-77de-b410`).
+- **Recovering on a new device** (no approval from another device, because the identity key proves who you are):
+  - `POST /v1/recover/challenge` `{ identity_key }` returns `{ nonce }` (2 minutes, single use). The answer is
+    the same whether or not the identity has an account here.
+  - `POST /v1/recover` `{ identity_key, device_key, nonce, identity_signature, device_signature }`.
+    `identity_signature` is over `lodestone-beacon/v1 recover <server url> <identity_key> <device_key> <nonce>`
+    and `device_signature` over `lodestone-beacon/v1 recover-device <server url> <device_key> <nonce>`, so the
+    identity vouches for this exact device and this device holds its own key. The device is added to the
+    identity's account (at most 10 devices), and members' apps add it to the channels as for any new device. It
+    reads messages from then on, not older ones.
+- **Pairing can hand over the identity.** `POST /v1/pairing/approve` takes an optional `blob` (up to 1 KiB):
+  the identity, AES-256-GCM encrypted by the approving app with a key that only travels in the pairing QR code
+  (`beacon-pair:1|<server url>|<code>|<key>`). `POST /v1/pairing/status` returns it once with `approved`. The
+  server never sees the key, so it can't read the blob; the status call has no sign-in, so anyone who knows the
+  new device's key could take the (still encrypted) blob first, which would make that device fall back to
+  asking for a recovery phrase.
+- **Pairing can copy message history.** Before approving, the approving app (when the pairing has a QR key)
+  uploads its recent messages with `PUT /v1/pairing/history?device_key=<new device, URL-encoded>` (signed in;
+  body at most 6 MiB, already AES-256-GCM encrypted with the QR key: a nonce, then the ciphertext). It is only
+  accepted for a device that is waiting under the caller's account, and kept at most 10 minutes. Once approved,
+  the new device signs in and collects it with `GET /v1/pairing/history` (`application/octet-stream`, handed
+  over once, then deleted; refusing the device deletes it too). The plaintext is JSON: the last 300 messages of
+  each channel (with attachment keys) and the reactions on them. The new device adds them to its own store
+  without overwriting anything. Profiles are not copied; they arrive as usual. A pairing typed in by hand has
+  no QR key, so it copies nothing. Copying is best effort: if it fails the device is still approved.
+- **Not done yet:** clients don't pin or warn when a username shows up with a different identity, and history
+  older than the last 300 messages per channel, or sent after pairing, only reaches a new device through the
+  channels as usual (an encrypted server backup is a later step; see Project.md).
+
+## Private channels
+
+A channel can be private: only the people on its access list (`channel_access`) can see or read it. `POST /v1/communities/{id}/channels` takes `private` and `access` (usernames of community members; the creator is always added), and `PATCH` can change them later. Owners and admins can change the list, including adding themselves, but are not on it by default.
+
+- **Hidden.** `GET /v1/communities/{id}` leaves a private channel out for members not on its list. Owners and admins still see it (with `can_read: false`, and its `access` list) so they can manage it. Everyone who can see it gets `private` and, if private, `access`.
+- **Refused.** Messages (list and send), file uploads and downloads, welcomes, voice and live events for a private channel are only for people on the list; anyone else gets 404. A welcome is only delivered to devices of people on the list. Removing someone from the community removes them from every list.
+- **Encrypted for the list only.** Apps put only the listed people's devices into the channel's MLS group (the same reconcile as for any channel, but with the list instead of every member), so the server's refusal is backed by the keys. Removing someone from the list removes their devices from the group at the next sync: they can't read anything sent afterwards. What they already read stays on their devices. Adding someone (or making the channel public again) adds them the same way; they read from then on, not older messages. A device that was removed and is added back replaces its dead group with the new welcome.
+- **What the server still sees.** The channel's name and who is on the list, like any channel's name and members.
+
 ## Communities, channels and invites
 
 | Request | Who | Does |
@@ -97,8 +148,11 @@ Roles: **owner** (one per community), **admin**, **member**. Names: 1 to 64 char
 | `GET /v1/communities/{community}/icon` | member | the icon, with `nosniff` and a CSP that runs nothing |
 | `PUT /v1/communities/{community}/banner` (image body) / `DELETE` | owner or admin | sets or removes the banner shown on the community's home-page card: same image rules as the icon, up to 512 KiB |
 | `GET /v1/communities/{community}/banner` | member | the banner, served like the icon |
+| `POST /v1/communities/{community}/categories` `{ name }` | owner or admin | adds a channel category (up to 50) |
+| `PATCH /v1/categories/{category}` `{ name }` / `DELETE` | owner or admin | renames a category; deleting one keeps its channels, uncategorised |
+| `PUT /v1/communities/{community}/category-order` `{ categories }` | owner or admin | sets the category order (every category once) |
 | `DELETE /v1/communities/{community}` | owner | deletes the community with its channels, messages and invites |
-| `PATCH /v1/channels/{channel}` `{ name?, topic? }` / `DELETE` | owner or admin | renames a channel, sets its topic (up to 300 characters), or deletes it (a community keeps at least one) |
+| `PATCH /v1/channels/{channel}` `{ name?, topic?, category?, parent?, post_rule?, private?, access? }` / `DELETE` | owner or admin | renames a channel, sets its topic (up to 300 characters), moves it into a category (`null` for none), makes it a child of a top-level text channel (`parent`, one level only; `null` for top level), or sets who can post (`post_rule`: `everyone` or `admins`; the server rejects `application` messages from other members, commits and proposals still pass). `private: true` with `access: [usernames]` makes it a private channel (see "Private channels" below; the list can't be empty, `private: false` clears it). Deleting a channel (a community keeps at least one) moves its children to the top level |
 | `PUT /v1/communities/{community}/channel-order` `{ channels: [...] }` | owner or admin | the channel order; must list every channel once |
 | `PUT /v1/communities/{community}/members/{username}/role` `{ role }` | owner | `admin` or `member` |
 | `POST /v1/communities/{community}/transfer` `{ username }` | owner | makes another member the owner; the old owner becomes an admin |
@@ -197,6 +251,15 @@ who was mentioned.
   `status_text`. Someone whose app hasn't checked in for 45 seconds, or who is invisible, shows as
   `offline`, with no message.
 - The server keeps "last checked in" in memory only. Statuses and messages are visible to the server.
+
+## Channel types
+
+`POST /v1/communities/{community}/channels` takes `kind`: `text` (default), `voice`, `forum`, `announcement` or `media`. Every kind except `voice` is an ordinary encrypted message channel (one MLS group, same posting rules, private channels and reactions); the kind only changes how apps show it. The server only checks the kind is one of these.
+
+- **announcement**: starts with `post_rule: admins` (members read, owners and admins post). Because the server can't tell a reaction from a message, members can't react either. An owner or admin can change the rule.
+- **forum**: apps list posts. A post is a normal encrypted `text` message with a `title` (1 to 120 characters); a reply is a `text` message with `thread` set to the post's sequence number. Both fields are inside the encrypted payload, so the server never sees titles. Older apps show posts and replies as plain messages. Apps keep and copy them with message history (`th`, `ti` in the history copy). A forum shows the last 300 messages per channel.
+- **media**: apps show only messages that carry a file, as a gallery with captions and reactions. Text-only messages are not shown there.
+- Only `text` channels can have child channels.
 
 ## Calls (voice channels)
 

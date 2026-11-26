@@ -9,7 +9,10 @@
 use crate::auth::{verify, Auth, PREFIX};
 use crate::util::{hash, new_code, now, ApiError, ApiResult};
 use crate::Shared;
-use axum::extract::State;
+use axum::body::Bytes;
+use axum::extract::{Query, State};
+use axum::http::{header, HeaderMap, HeaderValue};
+use axum::response::{IntoResponse, Response};
 use axum::http::StatusCode;
 use axum::Json;
 use rusqlite::{params, OptionalExtension};
@@ -102,7 +105,17 @@ pub async fn status(State(app): State<Shared>, Json(r): Json<StatusReq>) -> ApiR
         Ok((registered, waiting))
     })?;
     let status = if registered { "approved" } else if waiting { "waiting" } else { "refused" };
-    Ok(Json(json!({ "status": status })))
+    // The hand-over data (if any) is given once, to the device it was meant for.
+    let blob: Option<String> = if registered {
+        app.db.with(|c| {
+            let blob = c.query_row("SELECT blob FROM pairing_blobs WHERE device_key = ?1", [&r.device_key], |r| r.get(0)).optional()?;
+            c.execute("DELETE FROM pairing_blobs WHERE device_key = ?1", [&r.device_key])?;
+            Ok(blob)
+        })?
+    } else {
+        None
+    };
+    Ok(Json(json!({ "status": status, "blob": blob })))
 }
 
 /// `GET /v1/pairing`: devices waiting for your approval, with their fingerprints.
@@ -117,6 +130,10 @@ pub async fn waiting(State(app): State<Shared>, me: Auth) -> ApiResult<Json<Valu
 #[derive(Deserialize)]
 pub struct Decide {
     device_key: String,
+    /// On approve: something for the new device, encrypted on the approving device with a key the server never
+    /// sees (it travels in the QR code), such as the person's identity. Up to 1 KiB; handed over once.
+    #[serde(default)]
+    blob: Option<String>,
 }
 
 /// `POST /v1/pairing/approve`: add the waiting device to your account.
@@ -132,6 +149,12 @@ pub async fn approve(State(app): State<Shared>, me: Auth, Json(r): Json<Decide>)
             return Ok(Err(ApiError::bad("An account can have at most 10 devices; remove one first")));
         }
         tx.execute("INSERT INTO devices (key, account, created) VALUES (?1, ?2, ?3)", params![r.device_key, me.account, now()])?;
+        if let Some(blob) = &r.blob {
+            if blob.len() > 1024 {
+                return Ok(Err(ApiError::bad("The hand-over data can be at most 1 KiB")));
+            }
+            tx.execute("INSERT OR REPLACE INTO pairing_blobs (device_key, blob) VALUES (?1, ?2)", params![r.device_key, blob])?;
+        }
         tx.commit()?;
         Ok(Ok(()))
     })??;
@@ -140,7 +163,10 @@ pub async fn approve(State(app): State<Shared>, me: Auth, Json(r): Json<Decide>)
 
 /// `POST /v1/pairing/refuse`: turn the waiting device away (its code stops working).
 pub async fn refuse(State(app): State<Shared>, me: Auth, Json(r): Json<Decide>) -> ApiResult<Json<Value>> {
-    app.db.with(|c| c.execute("DELETE FROM pairings WHERE account = ?1 AND device_key = ?2", params![me.account, r.device_key]))?;
+    app.db.with(|c| {
+        c.execute("DELETE FROM pairing_history WHERE account = ?1 AND device_key = ?2", params![me.account, r.device_key])?;
+        c.execute("DELETE FROM pairings WHERE account = ?1 AND device_key = ?2", params![me.account, r.device_key])
+    })?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -155,4 +181,47 @@ pub async fn remove_device(State(app): State<Shared>, me: Auth, Json(r): Json<De
         return Err(ApiError::not_found("No such device on your account"));
     }
     Ok(Json(json!({ "ok": true })))
+}
+
+/// The most history one pairing can carry (already encrypted by the sender; the server can't read it).
+pub const MAX_HISTORY: usize = 6 * 1024 * 1024;
+
+#[derive(Deserialize)]
+pub struct HistoryQuery {
+    device_key: String,
+}
+
+/// `PUT /v1/pairing/history?device_key=...` (signed in; body is the encrypted history): the approving device leaves
+/// the sender's message history, sealed with a key the server never sees, for a device that is waiting to be
+/// approved. Kept until the new device collects it or its code expires (10 minutes).
+pub async fn put_history(State(app): State<Shared>, me: Auth, Query(q): Query<HistoryQuery>, body: Bytes) -> ApiResult<Json<Value>> {
+    if body.is_empty() || body.len() > MAX_HISTORY {
+        return Err(ApiError::bad("The history can be at most 6 MiB"));
+    }
+    app.db.with(|c| {
+        c.execute("DELETE FROM pairing_history WHERE expires < ?1", [now()])?;
+        let waiting = c
+            .query_row("SELECT 1 FROM pairings WHERE account = ?1 AND device_key = ?2 AND expires >= ?3", params![me.account, q.device_key, now()], |_| Ok(()))
+            .optional()?
+            .is_some();
+        if !waiting {
+            return Ok(Err(ApiError::not_found("No such device waiting (the code may have expired)")));
+        }
+        c.execute("INSERT OR REPLACE INTO pairing_history (device_key, account, data, expires) VALUES (?1, ?2, ?3, ?4)", params![q.device_key, me.account, body.to_vec(), now() + VALID_FOR])?;
+        Ok(Ok(()))
+    })??;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `GET /v1/pairing/history` (signed in as the new device): the encrypted history left for this device, once.
+pub async fn get_history(State(app): State<Shared>, me: Auth) -> ApiResult<Response> {
+    let data: Option<Vec<u8>> = app.db.with(|c| {
+        let d = c.query_row("SELECT data FROM pairing_history WHERE device_key = ?1 AND account = ?2 AND expires >= ?3", params![me.device, me.account, now()], |r| r.get(0)).optional()?;
+        c.execute("DELETE FROM pairing_history WHERE device_key = ?1", [&me.device])?;
+        Ok(d)
+    })?;
+    let data = data.ok_or_else(|| ApiError::not_found("No history waiting"))?;
+    let mut h = HeaderMap::new();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+    Ok((h, data).into_response())
 }

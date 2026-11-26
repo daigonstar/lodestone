@@ -50,6 +50,7 @@ async function loadState() {
   try {
     const s = await api("/api/state");
     state.servers = s.servers;
+    state.identity = s.identity;
     state.mentions = await api("/api/mentions").catch(() => ({}));
     state.pairing = s.pairing || [];
     state.bridge = s.bridge;
@@ -63,12 +64,258 @@ async function loadState() {
     state.sel = first ? { server: first.server, community: first.id, channel: "" } : { server: "", community: "", channel: "" };
   }
   const { sp } = current();
-  if (sp && !sp.channels.some((c) => c.id === state.sel.channel && c.kind !== "voice")) { const text = sp.channels.filter((c) => c.kind !== "voice"); state.sel.channel = (text.find((c) => c.ready) || text[0] || {}).id || ""; }
+  if (sp && !sp.channels.some((c) => c.id === state.sel.channel && c.kind !== "voice" && c.can_read !== false)) { const text = sp.channels.filter((c) => c.kind !== "voice" && c.can_read !== false); state.sel.channel = (text.find((c) => c.ready) || text[0] || {}).id || ""; }
   render();
+}
+
+// ---------- channel list: categories, child channels, right-click menus ----------
+const collapsedCats = new Set();
+const KIND_NAMES = { text: "Text", voice: "Voice", forum: "Forum", announcement: "Announcement", media: "Media" };
+const kindMark = (c) => ({ forum: ic("forum"), announcement: ic("megaphone"), media: ic("image"), voice: ic("volume") })[c.kind] || "#";
+function channelRowHTML(sp, c, child) {
+  const kids = child ? [] : sp.channels.filter((k) => k.parent === c.id);
+  const lockNote = (c.private ? `<span class="rule" title="Private: only chosen people can read it">${ic("lock")}</span>` : "") + (c.post_rule === "admins" ? `<span class="rule" title="Only admins can post here">${ic("lock")}</span>` : "");
+  // A private channel you manage but aren't on the list for: shown dimmed, can't be opened.
+  if (c.can_read === false) return `<div class="ch locked ${child ? "child" : ""}" data-ctx-channel="${esc(c.id)}" title="Private, and you're not on its list. You can still manage it (right-click).">${kindMark(c)} ${esc(c.name)}<span class="rule">${ic("lock")}</span></div>`;
+  const wait = c.ready ? "" : ' <span class="wait">(waiting for keys)</span>';
+  const row = c.kind === "voice"
+    ? `<button class="ch vc ${child ? "child" : ""}" data-voice="${esc(c.id)}" data-ctx-channel="${esc(c.id)}" title="${c.ready ? "Join the call" : "Waiting for this device's keys"}">${ic("volume")} ${esc(c.name)}${wait}</button><div class="vc-people ${child ? "child" : ""}" data-vc="${esc(c.id)}"></div>`
+    : `<button class="ch ${child ? "child" : ""} ${c.id === state.sel.channel ? "on" : ""}" data-channel="${esc(c.id)}" data-ctx-channel="${esc(c.id)}">${kindMark(c)} ${esc(c.name)}${lockNote}${wait}${mentionBadge(sp.server, c.id)}</button>`;
+  return row + kids.map((k) => channelRowHTML(sp, k, true)).join("");
+}
+function channelListHTML(sp) {
+  const catIds = new Set((sp.categories || []).map((c) => c.id));
+  const top = sp.channels.filter((c) => !c.parent || !sp.channels.some((p) => p.id === c.parent));
+  const loose = top.filter((c) => !c.category || !catIds.has(c.category));
+  let html = loose.filter((c) => c.kind !== "voice").map((c) => channelRowHTML(sp, c)).join("");
+  if (loose.some((c) => c.kind === "voice")) html += '<h4 class="chhead">Voice</h4>' + loose.filter((c) => c.kind === "voice").map((c) => channelRowHTML(sp, c)).join("");
+  for (const cat of sp.categories || []) {
+    const open = !collapsedCats.has(cat.id);
+    html += `<button type="button" class="cat-head ${open ? "open" : ""}" data-cat="${esc(cat.id)}" data-ctx-cat="${esc(cat.id)}"><span class="chev" aria-hidden="true"></span><span>${esc(cat.name)}</span></button>`;
+    if (open) html += top.filter((c) => c.category === cat.id).map((c) => channelRowHTML(sp, c)).join("");
+  }
+  return html;
+}
+document.addEventListener("click", (e) => {
+  const h = e.target.closest("[data-cat]");
+  if (!h) return;
+  collapsedCats.has(h.dataset.cat) ? collapsedCats.delete(h.dataset.cat) : collapsedCats.add(h.dataset.cat);
+  render();
+});
+
+const isAdmin = (sp) => sp.your_role === "owner" || sp.your_role === "admin";
+const catOptions = (sp, sel) => `<option value="">No category</option>` + (sp.categories || []).map((c) => `<option value="${esc(c.id)}" ${c.id === sel ? "selected" : ""}>${esc(c.name)}</option>`).join("");
+const parentOptions = (sp, self, sel) => `<option value="">None (top level)</option>` + sp.channels.filter((c) => c.kind === "text" && !c.parent && c.id !== self).map((c) => `<option value="${esc(c.id)}" ${c.id === sel ? "selected" : ""}># ${esc(c.name)}</option>`).join("");
+const refreshAfter = async (fn) => { try { await fn(); await loadState(); } catch (err) { toast(err.message, true); } };
+
+function editChannelDialog(id) {
+  const { sp } = current();
+  const c = sp.channels.find((x) => x.id === id);
+  if (!c) return;
+  const hasKids = sp.channels.some((k) => k.parent === id);
+  ask(`Edit ${c.kind === "voice" ? "voice channel" : "channel"}`, `<label>Name<input name="name" maxlength="64" required value="${esc(c.name)}"></label>
+    ${c.kind === "voice" ? "" : `<label>Topic<input name="topic" maxlength="300" placeholder="Optional" value="${esc(c.topic || "")}"></label>`}
+    <label>Category<select name="category">${catOptions(sp, c.category)}</select></label>
+    <label>Child of<select name="parent" ${hasKids ? "disabled" : ""}>${parentOptions(sp, id, c.parent)}</select></label>
+    ${hasKids ? '<p class="muted">This channel has children, so it can\'t become a child itself.</p>' : '<p class="muted">A child channel sits under its parent text channel in the list.</p>'}`, "Save", async (f) => {
+      const body = { name: f.get("name"), category: f.get("category") || null };
+      if (c.kind !== "voice") body.topic = f.get("topic");
+      if (!hasKids) body.parent = f.get("parent") || null;
+      await manage("PATCH", `/v1/channels/${id}`, body);
+      await loadState();
+    });
+}
+
+// "Who can read" controls shared by the new-channel and permissions dialogs.
+function readFields(sp, c) {
+  const priv = !!(c && c.private);
+  const chosen = new Set(c ? c.access || [] : []);
+  const boxes = [...sp.members].sort((a, b) => a.username.localeCompare(b.username)).map((m) => {
+    const you = !c && m.username === sp.me; // the creator is always on a new channel's list
+    return `<label class="check"><input type="checkbox" name="who" value="${esc(m.username)}" ${chosen.has(m.username) || you ? "checked" : ""} ${you ? "disabled" : ""}> ${esc(m.username)}${you ? " (you)" : ""}</label>`;
+  }).join("");
+  return `<label>Who can read
+      <select name="read" data-read><option value="all" ${priv ? "" : "selected"}>Everyone in the community</option><option value="some" ${priv ? "selected" : ""}>Only chosen people (private)</option></select></label>
+    <fieldset class="access" data-access ${priv ? "" : "hidden"}><legend>Chosen people</legend>${boxes}</fieldset>
+    <p class="muted">A private channel is hidden from everyone else, and its messages and files are encrypted for the chosen people's devices only. Owners and admins can change the list, but can't read it unless they're on it. People taken off the list keep what they already read.</p>`;
+}
+document.addEventListener("change", (e) => {
+  const sel = e.target.closest("[data-read]");
+  const fs = sel && sel.closest("form")?.querySelector("[data-access]");
+  if (fs) fs.hidden = sel.value !== "some";
+});
+const readBody = (f) => f.get("read") === "some" ? { private: true, access: f.getAll("who") } : { private: false };
+
+function permissionsDialog(id) {
+  const { sp } = current();
+  const c = sp.channels.find((x) => x.id === id);
+  if (!c) return;
+  ask(`Permissions: # ${c.name}`, `<label>Who can post
+      <select name="rule"><option value="everyone" ${c.post_rule !== "admins" ? "selected" : ""}>Everyone in the community</option><option value="admins" ${c.post_rule === "admins" ? "selected" : ""}>Only admins and the owner</option></select></label>
+    <p class="muted">Reactions are messages too, so with "Only admins" members can't react either.</p>
+    ${readFields(sp, c)}`, "Save", async (f) => {
+      await manage("PATCH", `/v1/channels/${id}`, { post_rule: f.get("rule"), ...readBody(f) });
+      await loadState();
+    });
+}
+
+function deleteChannelDialog(id) {
+  const { sp } = current();
+  const c = sp.channels.find((x) => x.id === id);
+  if (!c) return;
+  if (sp.channels.length <= 1) return toast("A community needs at least one channel.", true);
+  confirmBox(`Delete "${c.name}" and all its messages for everyone? Its child channels move up to the top level. This can't be undone.`, "Delete channel").then((yes) => {
+    if (!yes) return;
+    refreshAfter(async () => {
+      await manage("DELETE", `/v1/channels/${id}`);
+      if (state.sel.channel === id) state.sel.channel = "";
+    });
+  });
+}
+
+function categoryDialog(id) {
+  const { sp } = current();
+  const cat = id && (sp.categories || []).find((c) => c.id === id);
+  ask(cat ? "Rename category" : "New category", `<label>Name<input name="name" maxlength="64" required placeholder="Games" value="${esc(cat ? cat.name : "")}"></label>`, cat ? "Save" : "Create", async (f) => {
+    if (cat) await manage("PATCH", `/v1/categories/${id}`, { name: f.get("name") });
+    else await manage("POST", `/v1/communities/${sp.id}/categories`, { name: f.get("name") });
+    await loadState();
+  });
+}
+
+function deleteCategoryDialog(id) {
+  const { sp } = current();
+  const cat = (sp.categories || []).find((c) => c.id === id);
+  if (!cat) return;
+  confirmBox(`Delete the category "${cat.name}"? Its channels stay, without a category.`, "Delete category").then((yes) => yes && refreshAfter(() => manage("DELETE", `/v1/categories/${id}`)));
+}
+
+// Right-click: a channel, a category heading, or the empty part of the list. Admins only; everyone else gets the normal menu.
+document.addEventListener("contextmenu", (e) => {
+  const list = e.target.closest("[data-ctx-list]");
+  const menu = $("#srv-menu");
+  if (!list) return;
+  const { sp } = current();
+  if (!sp || !isAdmin(sp)) return;
+  e.preventDefault();
+  const chEl = e.target.closest("[data-ctx-channel]");
+  const catEl = e.target.closest("[data-ctx-cat]");
+  let items;
+  if (chEl) {
+    const c = sp.channels.find((x) => x.id === chEl.dataset.ctxChannel);
+    if (!c) return;
+    items = `<div class="menu-title">${kindMark(c)} ${esc(c.name)}</div>
+      <button type="button" data-m="edit">Edit channel…</button>
+      ${c.kind === "voice" ? "" : '<button type="button" data-m="perms">Manage permissions…</button>'}
+      ${c.kind !== "text" || c.parent ? "" : '<button type="button" data-m="child">New child channel…</button>'}
+      <hr><button type="button" class="danger-text" data-m="delete">Delete channel…</button>`;
+    menu.dataset.id = c.id;
+  } else if (catEl) {
+    const cat = (sp.categories || []).find((x) => x.id === catEl.dataset.ctxCat);
+    if (!cat) return;
+    items = `<div class="menu-title">${esc(cat.name)}</div>
+      <button type="button" data-m="cat-channel">New channel here…</button>
+      <button type="button" data-m="cat-rename">Rename category…</button>
+      <hr><button type="button" class="danger-text" data-m="cat-delete">Delete category…</button>`;
+    menu.dataset.id = cat.id;
+  } else {
+    items = `<button type="button" data-m="new-channel">New channel…</button><button type="button" data-m="new-cat">New category…</button>`;
+    menu.dataset.id = "";
+  }
+  menu.innerHTML = items;
+  menu.classList.remove("hidden");
+  menu.style.left = Math.min(e.clientX, innerWidth - menu.offsetWidth - 8) + "px";
+  menu.style.top = Math.min(e.clientY, innerHeight - menu.offsetHeight - 8) + "px";
+  menu.onclick = (ev) => {
+    const act = ev.target.closest("[data-m]")?.dataset.m;
+    if (!act) return;
+    menu.classList.add("hidden");
+    const id = menu.dataset.id;
+    ({
+      edit: () => editChannelDialog(id), perms: () => permissionsDialog(id), delete: () => deleteChannelDialog(id),
+      child: () => channelDialog({ parent: id }), "cat-channel": () => channelDialog({ category: id }),
+      "cat-rename": () => categoryDialog(id), "cat-delete": () => deleteCategoryDialog(id),
+      "new-channel": () => channelDialog(), "new-cat": () => categoryDialog(),
+    })[act]?.();
+  };
+});
+
+// ---------- identity: first run ----------
+// Before anything else the person makes (or brings back) their identity: a key that lives on this PC, the same
+// name on every server, and the way back in on a new PC or phone. The recovery phrase is shown once, with a
+// confirmation, and again from the profile dialog.
+const gate = { step: "choose", phrase: "", fingerprint: "", username: "", link: null };
+function syncGate() {
+  const need = (state.identity && !state.identity.exists) || gate.step === "phrase";
+  let el = $("#gate");
+  if (!need) { el?.remove(); return false; }
+  if (!el) { el = document.createElement("div"); el.id = "gate"; el.className = "gate"; document.body.append(el); }
+  renderGate(el);
+  return true;
+}
+function renderGate(el) {
+  const logo = `<div class="gate-mark">${ic("beacon")}</div>`;
+  if (gate.step === "phrase") {
+    el.innerHTML = `<div class="gate-card">${logo}<h1>Save your recovery phrase</h1>
+      <p class="muted">These 24 words are the only way to get your identity back on a new PC or phone. Write them down and keep them somewhere safe. Anyone who has them is you, so never share them. Nobody else keeps a copy, so we can't recover them for you.</p>
+      <ol class="phrase">${gate.phrase.split(" ").map((w) => `<li><span>${esc(w)}</span></li>`).join("")}</ol>
+      <div class="row"><button type="button" class="ghost" id="g-copy">Copy words</button><span class="muted">Identity fingerprint <code>${esc(gate.fingerprint)}</code></span></div>
+      <label class="row gate-ok"><input type="checkbox" id="g-saved" style="width:auto"> I've saved my recovery phrase</label>
+      <div class="row end"><button type="button" class="primary" id="g-done" disabled>Continue</button></div></div>`;
+    $("#g-copy").onclick = () => navigator.clipboard?.writeText(gate.phrase).then(() => toast("Copied. Paste it somewhere safe, then clear your clipboard."), () => toast("Select the words and copy them", true));
+    $("#g-saved").onchange = (e) => { $("#g-done").disabled = !e.target.checked; };
+    $("#g-done").onclick = () => { gate.step = "choose"; gate.phrase = ""; render(); };
+    return;
+  }
+  const tab = gate.step === "restore" ? "restore" : gate.step === "link" ? "link" : "new";
+  el.innerHTML = `<div class="gate-card">${logo}<h1>Set up your identity</h1>
+    <p class="muted">Your identity is a key that stays on this PC. It's your name on every Beacon server, and how you get back in on a new PC or phone. No company holds it, and you can keep your own name on each server you join (if it isn't taken).</p>
+    <div class="gate-tabs"><button type="button" data-g="new" class="${tab === "new" ? "on" : ""}">New identity</button><button type="button" data-g="restore" class="${tab === "restore" ? "on" : ""}">Restore from phrase</button><button type="button" data-g="link" class="${tab === "link" ? "on" : ""}">Link to my other device</button></div>
+    ${tab === "new" ? `<form id="g-form" class="stack"><label>Choose your username<input name="username" maxlength="32" autocomplete="off" spellcheck="false" required placeholder="2 to 32: a-z 0-9 _ . -"></label><p class="err" id="g-err"></p><button class="primary">Create my identity</button></form>` : ""}
+    ${tab === "restore" ? `<form id="g-form" class="stack"><label>Your 24 recovery words<textarea name="phrase" rows="3" required autocomplete="off" spellcheck="false"></textarea></label><label>Your username<input name="username" maxlength="32" autocomplete="off" spellcheck="false" required placeholder="The name you use on your servers"></label><p class="err" id="g-err"></p><button class="primary">Restore</button></form>` : ""}
+    ${tab === "link" ? (gate.link ? `<div class="stack"><p>Waiting for approval. On your other device, approve the request only if it shows:</p><p><code class="big">${esc(gate.link.fingerprint)}</code></p><p class="muted" id="g-status">Waiting…</p></div>`
+      : `<form id="g-form" class="stack"><p class="muted">On your other device open your name → <b>Devices…</b> → <b>Add a device</b>, and copy the pairing text it shows (or scan its QR code with the phone app, once there is one). Paste it here.</p><label>Pairing text<input name="link" autocomplete="off" spellcheck="false" required placeholder="beacon-pair:1|…"></label><p class="err" id="g-err"></p><button class="primary">Link this PC</button></form>`) : ""}
+  </div>`;
+  el.onclick = (e) => { const b = e.target.closest("[data-g]"); if (b) { gate.step = b.dataset.g; gate.link = null; clearInterval(pairPoll); renderGate(el); } };
+  const form = $("#g-form");
+  if (!form) return;
+  const show = (msg) => { $("#g-err").textContent = msg; };
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(form);
+    try {
+      if (tab === "new") {
+        const r = await api("/api/identity/create", { username: f.get("username") });
+        Object.assign(gate, { step: "phrase", phrase: r.phrase, fingerprint: r.fingerprint, username: r.username });
+        await loadState();
+        render();
+      } else if (tab === "restore") {
+        await api("/api/identity/restore", { phrase: f.get("phrase"), username: f.get("username") });
+        gate.step = "choose";
+        await loadState();
+        render();
+        toast("Identity restored. Use “Reconnect to a server” on the home page for servers you were on.");
+      } else {
+        const r = await api("/api/pair/claim", { link: String(f.get("link")) });
+        gate.link = { fingerprint: r.fingerprint, server: r.server };
+        await loadState();
+        renderGate(el);
+        clearInterval(pairPoll);
+        pairPoll = setInterval(async () => {
+          try {
+            const s = await api("/api/pair/check", { server: r.server });
+            if (s.status === "approved") { clearInterval(pairPoll); gate.link = null; gate.step = "choose"; await loadState(); render(); toast((s.identity_imported ? "Linked. This PC now has your identity." : "Linked.") + (s.history_messages ? ` Copied ${s.history_messages} earlier messages.` : "")); }
+            if (s.status === "refused") { clearInterval(pairPoll); const m = $("#g-status"); if (m) m.textContent = "The request was refused or the code expired."; }
+          } catch (err) { const m = $("#g-status"); if (m) m.textContent = err.message; }
+        }, 3000);
+      }
+    } catch (err) { show(err.message); }
+  };
 }
 
 // ---------- rendering ----------
 function render() {
+  if (syncGate()) return;
   const all = communities();
   $("#communities").innerHTML = `<span class="logo">${ic("beacon")} Beacon</span><button class="srv home ${state.home || !all.length ? "on" : ""}" id="home-btn" title="Home: join or create communities">${ic("home")}</button><div class="srv-sep"></div>` + all.map((s) => `<button class="srv ${!state.home && s.server === state.sel.server && s.id === state.sel.community ? "on" : ""}" data-community="${esc(s.id)}" data-server="${esc(s.server)}" title="${esc(s.name)}"><span class="srv-ic">${iconHTML(s)}</span><span class="srv-name">${esc(s.name)}</span></button>`).join("")
     + `<button class="srv add" id="add-community" title="Join or create a community">${ic("plus")}</button>`;
@@ -76,9 +323,7 @@ function render() {
   if (!sp || state.home) return renderHome();
   const admin = sp.your_role === "owner" || sp.your_role === "admin";
   $("#channels").innerHTML = `<h2><span>${esc(sp.name)}</span><button class="gear" data-act="settings" title="Community settings">${ic("settings")}</button></h2><div class="server" title="${esc(sp.server)}">${esc(sp.me)} · ${esc(sp.server.replace(/^https?:\/\//, ""))}</div>
-    <div class="chlist">${sp.channels.filter((c) => c.kind !== "voice").map((c) => `<button class="ch ${c.id === state.sel.channel ? "on" : ""}" data-channel="${esc(c.id)}"># ${esc(c.name)}${c.ready ? "" : ' <span class="wait">(waiting for keys)</span>'}${mentionBadge(sp.server, c.id)}</button>`).join("")}
-    ${sp.channels.some((c) => c.kind === "voice") ? '<h4 class="chhead">Voice</h4>' : ""}
-    ${sp.channels.filter((c) => c.kind === "voice").map((c) => `<button class="ch vc" data-voice="${esc(c.id)}" title="${c.ready ? "Join the call" : "Waiting for this device's keys"}">${ic("volume")} ${esc(c.name)}${c.ready ? "" : ' <span class="wait">(waiting for keys)</span>'}</button><div class="vc-people" data-vc="${esc(c.id)}"></div>`).join("")}</div>
+    <div class="chlist" data-ctx-list>${channelListHTML(sp)}</div>
     <div class="side-actions"><button data-act="invite">Invite people</button>${admin ? '<button class="ghost" data-act="channel">New channel</button>' : ""}</div>
     <div id="callbar"></div>
     ${meBar()}`;
@@ -88,13 +333,17 @@ function render() {
   // The chat area is only rebuilt when you switch channel or it changes (name, topic, keys arriving).
   // Refreshes (every few seconds, and on live events) used to rebuild it, which jumped the message list
   // and threw away anything you were typing.
-  const chatKey = JSON.stringify([state.sel.server, ch.id, ch.name, ch.topic || "", !!ch.ready]);
+  const chatKey = JSON.stringify([state.sel.server, ch.id, ch.name, ch.topic || "", !!ch.ready, ch.post_rule, admin, ch.kind]);
   if ($("#chat").dataset.key === chatKey && $("#msgs")) return;
   $("#chat").dataset.key = chatKey;
-  $("#chat").innerHTML = `<header><h3># ${esc(ch.name)}${ch.topic ? `<span class="topic">${esc(ch.topic)}</span>` : ""}</h3><button class="gear" id="toggle-members" title="Show or hide members">${ic("users")}</button><span class="lock" title="Only members' devices can read this channel; the server stores ciphertext.">${ic("lock")} end-to-end encrypted</span></header>
-    <div class="msgs" id="msgs"></div><button type="button" class="new-msgs hidden" id="new-msgs">New messages ↓</button>
-    <div class="composer">${ch.ready
-      ? `<div id="pending" class="pending hidden"></div><div class="compose-row"><button type="button" class="emoji-btn" id="attach-btn" title="Attach a file or image (or paste / drop one)">${ic("attach")}</button><textarea id="text" placeholder="Message (Enter to send, Shift+Enter for a new line)" maxlength="8000"></textarea><button type="button" class="emoji-btn" id="emoji-btn" title="Emoji">${ic("smile")}</button></div>`
+  $("#chat").innerHTML = `<header><h3>${kindMark(ch)} ${esc(ch.name)}${ch.topic ? `<span class="topic">${esc(ch.topic)}</span>` : ""}</h3><button class="gear" id="toggle-members" title="Show or hide members">${ic("users")}</button><span class="lock" title="Only members' devices can read this channel; the server stores ciphertext.">${ic("lock")} end-to-end encrypted</span></header>
+    <div class="msgs ${ch.kind === "media" ? "gallery" : ""}" id="msgs"></div><button type="button" class="new-msgs hidden" id="new-msgs">New messages ↓</button>
+    <div class="composer">${ch.ready && ch.post_rule === "admins" && !admin
+      ? `<p class="muted read-only">${ic("lock")} Only admins can post in this channel.</p>`
+      : ch.ready && ch.kind === "forum"
+      ? `<div id="forum-bar" class="forum-bar"></div>`
+      : ch.ready
+      ? `<div id="pending" class="pending hidden"></div><div class="compose-row"><button type="button" class="emoji-btn" id="attach-btn" title="Attach a file or image (or paste / drop one)">${ic("attach")}</button><textarea id="text" placeholder="${ch.kind === "media" ? "Attach a picture or file, add a caption if you like, then press Enter" : "Message (Enter to send, Shift+Enter for a new line)"}" maxlength="8000"></textarea><button type="button" class="emoji-btn" id="emoji-btn" title="Emoji">${ic("smile")}</button></div>`
       : '<p class="muted">You\'re a member, but no one in this channel has been online to give your device its keys yet. It happens automatically.</p>'}</div>`;
   // Stick to the newest message only while you're at the bottom; pictures that finish loading keep
   // you there. Scrolled up, you stay where you are.
@@ -125,6 +374,7 @@ function render() {
       e.preventDefault();
       const text = t.value.trim();
       if (!text && !state.pending) return;
+      if (current().ch?.kind === "media" && !state.pending) return toast("This is a media channel: attach a picture or file to add it", true);
       t.disabled = true;
       try {
         if (state.pending) {
@@ -150,6 +400,7 @@ function renderHome() {
   $("#members").classList.add("hidden");
   const all = communities();
   const servers = state.servers.filter((h) => h.username);
+  const idName = state.identity?.username || "";
   $("#channels").innerHTML = `<h2><span>Home</span></h2><div class="server">Lodestone Beacon</div>
     <div class="chlist">${all.length ? '<h4 class="chhead">Your communities</h4>' : ""}${all.map((s) => `<button class="ch" data-community="${esc(s.id)}" data-server="${esc(s.server)}">${esc(s.name)}</button>`).join("")}</div>
     <div id="callbar"></div>${servers.length ? meBar() : ""}`;
@@ -169,7 +420,7 @@ function renderHome() {
         <div class="card-head"><span class="card-ic">${ic("link")}</span><div><h3>Join a community</h3><p class="muted">Paste a friend's invite link.</p></div></div>
         <form id="home-join" class="stack">
           <input name="link" placeholder="beacon.example.com/join/…" autocomplete="off" spellcheck="false" required>
-          <input name="username" placeholder="Your username (first time on that server)" autocomplete="off" spellcheck="false">
+          <input name="username" placeholder="${esc(idName ? `Username there (blank = @${idName})` : "Your username (first time on that server)")}" autocomplete="off" spellcheck="false">
           <button class="primary">Join</button>
         </form>
       </section>
@@ -185,6 +436,7 @@ function renderHome() {
     </div>
     <div class="home-more">
       <button type="button" class="ghost" data-act="pair">${ic("users")} Sign in with another device</button>
+      <button type="button" class="ghost" data-act="reconnect">${ic("link")} Reconnect to a server</button>
       <button type="button" class="ghost" data-act="setup">${ic("settings")} Set up your own server</button>
     </div>
     ${(state.pairing || []).map((p) => `<p class="muted">Waiting for approval as <b>${esc(p.username)}</b> on ${esc(p.url.replace(/^https?:\/\//, ""))}… Your other device should show <code>${esc(p.fingerprint)}</code>.</p>`).join("")}
@@ -284,12 +536,15 @@ async function loadMessages() {
       }
       return row;
     };
+    if (ch.kind === "forum") return renderForum(box, ch, r, makeRow, reacts);
     // Rows are kept and updated in place: only new messages are added, and a row is redrawn only when its
     // reactions change. Rebuilding everything made pictures reload (and the list jump while you read).
     box.querySelector(":scope > p.muted")?.remove();
+    // A media channel is a gallery: only messages with a picture or file.
+    const shown = ch.kind === "media" ? r.messages.filter((m) => m.attachment) : r.messages;
     const existing = new Map([...box.querySelectorAll(":scope > .msg")].map((x) => [x.dataset.seq, x]));
     let prev = null, added = 0;
-    for (const m of r.messages) {
+    for (const m of shown) {
       const key = JSON.stringify(reacts.get(m.seq) || []);
       let row = existing.get(String(m.seq));
       if (!row) added++;
@@ -305,12 +560,103 @@ async function loadMessages() {
       prev = row;
     }
     for (const gone of existing.values()) gone.remove();
-    if (!r.messages.length) box.innerHTML = '<p class="muted">No messages yet. Messages sent before you joined can\'t be read on this device, by design.</p>';
+    if (!shown.length) box.innerHTML = ch.kind === "media" ? '<p class="muted">Nothing here yet. Attach a picture or file below to add the first one.</p>' : ch.kind === "announcement" ? '<p class="muted">No announcements yet. Announcements sent before you joined can\'t be read on this device, by design.</p>' : '<p class="muted">No messages yet. Messages sent before you joined can\'t be read on this device, by design.</p>';
     const first = !box.dataset.seen;
     if (atBottom || first) { box.scrollTop = box.scrollHeight; box.dataset.stick = "1"; }
     else if (added) $("#new-msgs")?.classList.remove("hidden");
     box.dataset.seen = "1";
   } catch (e) { toast(e.message, true); }
+}
+
+// ---------- forum channels: posts with titles, each with its own replies ----------
+const forumView = {}; // channel id -> the open post's sequence number (none = the list of posts)
+function renderForum(box, ch, r, makeRow, reacts) {
+  box.classList.remove("gallery");
+  const posts = r.messages.filter((m) => m.title && !m.thread);
+  const replies = new Map();
+  for (const m of r.messages) if (m.thread) { if (!replies.has(m.thread)) replies.set(m.thread, []); replies.get(m.thread).push(m); }
+  const open = posts.find((p) => p.seq === forumView[ch.id]);
+  if (!open) delete forumView[ch.id];
+  const key = JSON.stringify([open ? open.seq : 0, r.messages.map((m) => [m.seq, reacts.get(m.seq) || null])]);
+  const bar = $("#forum-bar");
+  const barKey = open ? `post:${open.seq}` : "list";
+  if (bar && bar.dataset.view !== barKey) {
+    bar.dataset.view = barKey;
+    const { sp } = current();
+    const canPost = !(ch.post_rule === "admins" && !isAdmin(sp));
+    if (open) {
+      bar.innerHTML = canPost ? `<div class="compose-row"><textarea id="forum-reply" placeholder="Reply (Enter to send, Shift+Enter for a new line)" maxlength="8000"></textarea></div>` : `<p class="muted read-only">${ic("lock")} Only admins can reply in this channel.</p>`;
+      const t = $("#forum-reply");
+      if (t) {
+        t.focus();
+        t.addEventListener("keydown", async (e) => {
+          if (e.key !== "Enter" || e.shiftKey || e.defaultPrevented) return;
+          e.preventDefault();
+          const text = t.value.trim();
+          if (!text) return;
+          t.disabled = true;
+          try { await api("/api/send", { server: state.sel.server, channel: ch.id, text, thread: open.seq }); t.value = ""; }
+          catch (err) { toast(err.message, true); }
+          t.disabled = false;
+          t.focus();
+        });
+      }
+    } else {
+      bar.innerHTML = canPost ? `<button type="button" class="primary" id="new-post">New post</button>` : `<p class="muted read-only">${ic("lock")} Only admins can start posts in this channel.</p>`;
+      const b = $("#new-post");
+      if (b) b.onclick = () => newPostDialog(ch);
+    }
+  }
+  if (box.dataset.fkey === key && box.dataset.fview === barKey) return;
+  box.dataset.fkey = key;
+  box.dataset.fview = barKey;
+  box.replaceChildren();
+  box.dataset.stick = "";
+  if (open) {
+    const head = document.createElement("div");
+    head.className = "forum-head";
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "ghost";
+    back.textContent = "← All posts";
+    back.onclick = () => { delete forumView[ch.id]; loadMessages(); };
+    const h = document.createElement("h2");
+    h.className = "forum-title";
+    h.textContent = open.title;
+    head.append(back, h);
+    box.append(head, makeRow(open));
+    for (const m of replies.get(open.seq) || []) box.append(makeRow(m));
+    box.scrollTop = box.scrollHeight;
+    return;
+  }
+  if (!posts.length) { box.innerHTML = '<p class="muted">No posts yet. Start one with "New post". Posts made before you joined can\'t be read on this device, by design.</p>'; return; }
+  const last = (p) => Math.max(p.sent_at, ...(replies.get(p.seq) || []).map((m) => m.sent_at));
+  for (const p of [...posts].sort((a, b) => last(b) - last(a))) {
+    const rs = replies.get(p.seq) || [];
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "post-card";
+    const prof = profileOf(p.sender);
+    const t = document.createElement("b");
+    t.className = "post-title";
+    t.textContent = p.title;
+    const snip = document.createElement("span");
+    snip.className = "post-snip";
+    snip.textContent = p.body.slice(0, 160);
+    const meta = document.createElement("small");
+    meta.className = "post-meta";
+    meta.textContent = `${prof.name || p.sender} · ${rs.length === 1 ? "1 reply" : `${rs.length} replies`} · last activity ${new Date(last(p) * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`;
+    card.append(t, snip, meta);
+    card.onclick = () => { forumView[ch.id] = p.seq; loadMessages(); };
+    box.append(card);
+  }
+}
+function newPostDialog(ch) {
+  ask("New post", `<label>Title<input name="title" maxlength="120" required placeholder="What's this about?"></label>
+    <label>Post<textarea name="text" maxlength="8000" required rows="6" placeholder="Write the first message"></textarea></label>`, "Post", async (f) => {
+      await api("/api/send", { server: state.sel.server, channel: ch.id, title: f.get("title"), text: f.get("text") });
+      await loadMessages();
+    });
 }
 
 // ---------- members and status ----------
@@ -433,7 +779,9 @@ function profileDialog() {
         <div class="row"><input type="color" name="color" value="${esc(me.color || "#7c5cff")}" style="width:60px;padding:2px"><label class="row" style="margin:0"><input type="checkbox" name="nocolor" ${me.color ? "" : "checked"} style="width:auto"> Default colour</label></div>
         <div class="row" style="margin-top:10px"><button type="button" id="pf-pic">Choose picture…</button><button type="button" class="ghost" id="pf-rm">Remove picture</button></div>
       </div></div>
-      <p class="muted">Your profile is sent end-to-end encrypted to the people in your communities; the server can't see it. Others always see your @username beside your display name.</p>`,
+      <p class="muted">Your profile is sent end-to-end encrypted to the people in your communities; the server can't see it. Others always see your @username beside your display name.</p>
+      <div class="set-row"><div class="grow"><b>Your identity</b><br><span class="muted">Fingerprint</span> <code>${esc(state.identity?.fingerprint || "")}</code></div><button type="button" class="ghost" id="pf-phrase">Show recovery phrase</button></div>
+      <div id="pf-phrase-box"></div>`,
     "Save", async (f) => {
       const body = { name: String(f.get("name") || ""), color: f.get("nocolor") ? "" : String(f.get("color") || "") };
       if (pic !== undefined) body.avatar = pic;
@@ -442,6 +790,12 @@ function profileDialog() {
       await loadProfiles(h.url);
       render();
     });
+  $("#pf-phrase").onclick = async () => {
+    try {
+      const { phrase } = await api("/api/identity/phrase");
+      $("#pf-phrase-box").innerHTML = `<p class="muted">Anyone with these words is you. Keep them private.</p><ol class="phrase">${phrase.split(" ").map((w) => `<li><span>${esc(w)}</span></li>`).join("")}</ol>`;
+    } catch (e) { toast(e.message, true); }
+  };
   $("#pf-pic").onclick = () => $("#avatar-file").click();
   $("#pf-rm").onclick = () => { pic = ""; $("#pf-preview").innerHTML = `<span class="av av-letter">${esc([...(h.username || "?")][0].toUpperCase())}</span>`; };
   $("#avatar-file").onchange = async (e) => {
@@ -475,8 +829,11 @@ async function devicesDialog() {
     const dec = e.target.closest("[data-decide]");
     if (dec) {
       try {
-        await api("/api/pair/decide", { server: h.url, device_key: dec.dataset.key, approve: dec.dataset.decide === "yes" });
-        toast(dec.dataset.decide === "yes" ? "Device added. It joins your channels in a few seconds." : "Device refused");
+        const d = await api("/api/pair/decide", { server: h.url, device_key: dec.dataset.key, approve: dec.dataset.decide === "yes" });
+        toast(dec.dataset.decide !== "yes" ? "Device refused"
+          : d.history_messages ? `Device added with your last ${d.history_messages} messages. It joins your channels in a few seconds.`
+          : d.history_failed ? "Device added, but your message history couldn't be copied. It joins your channels in a few seconds."
+          : "Device added. It joins your channels in a few seconds.");
         clearInterval(pairPoll);
         $("#dlg").close();
       } catch (err) { toast(err.message, true); }
@@ -484,18 +841,35 @@ async function devicesDialog() {
   };
   $("#dlg").addEventListener("close", () => clearInterval(pairPoll), { once: true });
 }
+// A QR code is drawn by the app (nothing is sent anywhere) and fetched with the page's secret, like icons.
+async function qrInto(sel, text) {
+  const img = $(sel);
+  if (!img) return;
+  try {
+    const r = await fetch(`/api/qr?text=${encodeURIComponent(text)}`, { headers: { "x-beacon-token": TOKEN } });
+    if (r.ok) img.src = URL.createObjectURL(await r.blob());
+  } catch {}
+}
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#pair-copy")) return;
+  const i = $("#pair-text");
+  i.select();
+  navigator.clipboard?.writeText(i.value).then(() => toast("Pairing text copied"), () => toast("Press Ctrl+C to copy"));
+});
 async function startPairing(h) {
   let p;
   try { p = await api("/api/pair/start", { server: h.url }); } catch (e) { return toast(e.message, true); }
   const box = $("#pair-box");
   const show = (waiting) => {
-    box.innerHTML = `<div class="pair-code"><p>On the new device choose <b>Sign in with another device</b> and enter:</p>
-      <p>Server <code>${esc(p.server)}</code> · Code <code class="big">${esc(p.code)}</code></p>
-      <p class="muted">Valid for 10 minutes, once.</p>
+    box.innerHTML = `<div class="pair-code"><div class="pair-qr"><img id="pair-qr" alt="Pairing QR code" width="180" height="180"></div>
+      <p>On the new device, scan this QR code with the Beacon phone app, or choose <b>Sign in with another device</b> and paste this text:</p>
+      <div class="row"><input readonly id="pair-text" value="${esc(p.link)}"><button type="button" class="ghost" id="pair-copy">Copy</button></div>
+      <p class="muted">Or enter server <code>${esc(p.server)}</code> and code <code class="big">${esc(p.code)}</code> by hand (that way it only links the account, without handing over your identity). Valid for 10 minutes, once.</p>
       ${waiting.length ? waiting.map((w) => `<div class="set-row"><div class="grow">A device is asking to join. Approve only if it shows<br><code class="big">${esc(w.fingerprint)}</code></div>
         <button type="button" class="primary" data-decide="yes" data-key="${esc(w.key)}">Approve</button><button type="button" class="danger" data-decide="no" data-key="${esc(w.key)}">Refuse</button></div>`).join("") : '<p class="muted">Waiting for the new device…</p>'}</div>`;
   };
   show([]);
+  qrInto("#pair-qr", p.link);
   clearInterval(pairPoll);
   let shown = "";
   pairPoll = setInterval(async () => {
@@ -503,15 +877,19 @@ async function startPairing(h) {
       const d = await api(`/api/devices?server=${encodeURIComponent(h.url)}`);
       // Redraw only when the waiting list changes, so the Approve button doesn't move under the pointer.
       const key = d.waiting.map((w) => w.key).join(",");
-      if (key !== shown) { shown = key; show(d.waiting); }
+      if (key !== shown) { shown = key; show(d.waiting); qrInto("#pair-qr", p.link); }
     } catch {}
   }, 3000);
 }
 function pairDialog() {
-  ask("Sign in with another device", `<p class="muted">On a device where you're already signed in, open your name → <b>Devices…</b> → <b>Add a device</b>, then enter what it shows.</p>
-    <label>Server's domain<input name="server" placeholder="beacon.yourdomain.com" autocomplete="off" spellcheck="false" required></label>
-    <label>Code<input name="code" autocomplete="off" spellcheck="false" required></label>`, "Continue", async (f) => {
-      const r = await api("/api/pair/claim", { server: String(f.get("server")), code: String(f.get("code")) });
+  ask("Sign in with another device", `<p class="muted">On a device where you're already signed in, open your name → <b>Devices…</b> → <b>Add a device</b>, then paste the pairing text it shows.</p>
+    <label>Pairing text<input name="link" placeholder="beacon-pair:1|…" autocomplete="off" spellcheck="false"></label>
+    <p class="muted">Or enter the server and code by hand:</p>
+    <label>Server's domain<input name="server" placeholder="beacon.yourdomain.com" autocomplete="off" spellcheck="false"></label>
+    <label>Code<input name="code" autocomplete="off" spellcheck="false"></label>`, "Continue", async (f) => {
+      const link = String(f.get("link") || "").trim();
+      if (!link && !(f.get("server") && f.get("code"))) throw new Error("Paste the pairing text, or enter the server and code");
+      const r = await api("/api/pair/claim", link ? { link } : { server: String(f.get("server")), code: String(f.get("code")) });
       await loadState();
       waitForApproval(r);
     });
@@ -859,7 +1237,7 @@ async function endServer(sp, method, path, done) {
 document.addEventListener("contextmenu", (e) => {
   const b = e.target.closest(".srv[data-community]");
   const menu = $("#srv-menu");
-  if (!b) { menu.classList.add("hidden"); return; }
+  if (!b) { if (!e.target.closest("[data-ctx-list]")) menu.classList.add("hidden"); return; }
   e.preventDefault();
   const sp = communities().find((s) => s.server === b.dataset.server && s.id === b.dataset.community);
   if (!sp) return;
@@ -1005,6 +1383,16 @@ function joinDialog() {
     });
 }
 
+// On a PC with your restored identity: get back into the account you had on a server, with no approval needed.
+function reconnectDialog() {
+  ask("Reconnect to a server", `<p class="muted">If you restored your identity from its recovery phrase, this brings this PC back into your account on a server you were already on. Your username there is kept.</p>
+    <label>Server's domain<input name="server" placeholder="beacon.yourdomain.com" autocomplete="off" spellcheck="false" required></label>`, "Reconnect", async (f) => {
+      const r = await api("/api/recover", { server: String(f.get("server")) });
+      await loadState();
+      toast(`Back in as @${r.username}. Your channels appear as other members' apps add this PC; older messages stay on your old PC.`);
+    });
+}
+
 function setupDialog() {
   ask("Set up a new server", `<p class="muted">After starting a Beacon server (see the README), its log shows a one-time setup code. The first account becomes the server's admin.</p>
     <label>Server's domain<input name="server" placeholder="beacon.yourdomain.com" autocomplete="off" spellcheck="false" required></label>
@@ -1066,7 +1454,7 @@ function renderWizard() {
         <label>Server address<div class="row"><input name="server" autocomplete="off" spellcheck="false" required value="${esc(w.server || (local ? "localhost:8080" : ""))}" placeholder="beacon.yourdomain.com"><button type="button" class="ghost" id="wiz-check">Check</button></div></label>
         <p class="muted" id="wiz-probe"></p>
         <label>Setup code<input name="code" autocomplete="off" required value="${esc(w.code || "")}" placeholder="From the server's output"></label>
-        <label>Your username<input name="username" autocomplete="off" spellcheck="false" required placeholder="2 to 32: a-z 0-9 _ . -"></label>
+        <label>Your username on this server<input name="username" autocomplete="off" spellcheck="false" value="${esc(state.identity?.username || "")}" placeholder="2 to 32: a-z 0-9 _ . -"></label>
         <p class="err" id="wiz-err"></p>
         <div class="row end wiz-nav"><button type="button" class="ghost" data-wiz="run">Back</button><button class="primary">Create account</button></div>
       </form>`;
@@ -1197,12 +1585,18 @@ async function inviteDialog() {
   };
 }
 
-function channelDialog() {
+function channelDialog(opts = {}) {
   const { sp } = current();
-  ask("New channel", `<label>Name<input name="name" maxlength="64" required placeholder="raids"></label>
-    <label>Kind<select name="kind"><option value="text">Text: messages, files, reactions</option><option value="voice">Voice: calls (end-to-end encrypted)</option></select></label>`, "Create", async (f) => {
+  const under = opts.parent && sp.channels.find((c) => c.id === opts.parent);
+  ask(under ? `New child channel of # ${under.name}` : "New channel", `<label>Name<input name="name" maxlength="64" required placeholder="raids"></label>
+    <label>Kind<select name="kind"><option value="text">Text: messages, files, reactions</option><option value="forum">Forum: posts with titles, each with its own replies</option><option value="announcement">Announcement: only admins post, everyone reads</option><option value="media">Media: a gallery of pictures and files</option><option value="voice">Voice: calls (end-to-end encrypted)</option></select></label>
+    ${under ? "" : `<label>Category<select name="category">${catOptions(sp, opts.category)}</select></label>`}
+    ${readFields(sp, null)}`, "Create", async (f) => {
     const kind = f.get("kind");
-    const r = await api("/api/channels", { server: sp.server, community: sp.id, name: f.get("name"), kind });
+    const priv = f.get("read") === "some";
+    const r = await api("/api/channels", { server: sp.server, community: sp.id, name: f.get("name"), kind, private: priv, access: priv ? f.getAll("who") : [] });
+    const place = under ? { parent: under.id } : f.get("category") ? { category: f.get("category") } : null;
+    if (place) await manage("PATCH", `/v1/channels/${r.channel}`, place);
     if (kind !== "voice") state.sel.channel = r.channel;
     await loadState();
   });
@@ -1223,7 +1617,7 @@ document.addEventListener("click", (e) => {
   if (e.target.closest("#add-community")) return addDialog();
   const a = e.target.closest("[data-act]");
   if (!a) return;
-  ({ join: joinDialog, pair: pairDialog, setup: setupDialog, invite: inviteDialog, channel: channelDialog, settings: () => openSettings("overview"), create: () => newServerDialog(a.dataset.server) })[a.dataset.act]?.();
+  ({ join: joinDialog, pair: pairDialog, reconnect: reconnectDialog, setup: setupDialog, invite: inviteDialog, channel: channelDialog, settings: () => openSettings("overview"), create: () => newServerDialog(a.dataset.server) })[a.dataset.act]?.();
 });
 
 // ---------- live updates ----------
