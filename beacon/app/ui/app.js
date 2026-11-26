@@ -1397,7 +1397,8 @@ async function seeCameras(on) {
 const RUNE_EDGE = '<div class="rune-edge" aria-hidden="true"><svg class="re re-t"><rect width="100%" height="100%" fill="url(#rune-h)"/></svg><svg class="re re-b"><rect width="100%" height="100%" fill="url(#rune-h)"/></svg><svg class="re re-l"><rect width="100%" height="100%" fill="url(#rune-v)"/></svg><svg class="re re-r"><rect width="100%" height="100%" fill="url(#rune-v)"/></svg></div>';
 // A bar under the top bar while someone in your call shares their screen and you aren't watching it.
 function updateShareBanner() {
-  const el = $("#share-banner");
+  const el = $("#stage #share-banner");
+  if (!el) return;
   const call = voice.call;
   const sharers = call ? call.participants.filter((p) => p.sharing && !p.me && !call.watching.includes(p.slot)) : [];
   if (!sharers.length) { el.classList.add("hidden"); setHTML(el, ""); return; }
@@ -1408,7 +1409,6 @@ function updateShareBanner() {
 function renderStage() {
   const stage = $("#stage");
   const call = voice.call;
-  updateShareBanner();
   if (call && call.watching.length) voice.view = true;
   const show = !!(call && voice.view);
   if (call) seeCameras(show); else voice.camsOn = false;
@@ -1428,6 +1428,7 @@ function renderStage() {
     stage.dataset.videos = key;
     stage.innerHTML = `<header class="stage-head"><b>${ic("volume")} ${esc(ch?.name || "Call")}</b><span class="lock">${ic("lock")} end-to-end encrypted</span><span class="grow"></span>
         <button type="button" class="ghost" data-stage="close" title="Back to the chat (you stay in the call)">Back to chat</button></header>
+      <div class="share-banner hidden" id="share-banner" role="status"></div>
       ${screens.length ? `<div class="stage-grid n${Math.min(screens.length, 4)}">${screens.map((slot) => {
         const mine = slot === call.slot;
         const p = person(slot);
@@ -1466,6 +1467,7 @@ function renderStage() {
     const live = p.sharing && !p.me ? `<button type="button" class="live ${watching ? "on" : ""}" data-watch="${p.slot}">${watching ? "Watching" : "Watch"}</button>` : p.sharing ? '<span class="live">LIVE</span>' : "";
     setHTML(t.querySelector(".tile-state"), `${p.deafened ? '<span title="Deafened">' + ic("headphones-off") + '</span>' : p.muted ? '<span title="Muted">' + ic("mic-off") + '</span>' : ""}${live}`);
   }
+  updateShareBanner();
   // The call's controls, under the tiles (same buttons as the sidebar's call bar).
   setHTML(stage.querySelector(".stage-controls"), `
     <button type="button" data-call="mute" class="${call.muted ? "active" : ""}" title="${call.muted ? "Unmute" : "Mute"}">${ic(call.muted ? "mic-off" : "mic")}<small>${call.muted ? "Unmute" : "Mute"}</small></button>

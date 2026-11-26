@@ -383,29 +383,26 @@ button .i { width: 20px; height: 20px; }
 .tile { position: relative; overflow: visible; }
 .tile.has-cam .tile-media { border-radius: calc(var(--radius) - 2px); overflow: hidden; }
 .tile.has-cam .tile-foot { border-radius: 0 0 calc(var(--radius) - 2px) calc(var(--radius) - 2px); }
-.stage-people:not(.strip) { padding: 36px; gap: 36px; }
-.stage-people.strip { padding: 30px 30px 26px; gap: 30px; }
+.stage-people:not(.strip) { padding: 30px; gap: 30px; }
+.stage-people.strip { padding: 26px 26px 22px; gap: 26px; }
 .rune-edge { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .25s; }
 .tile.speaking .rune-edge { opacity: 1; animation: rune-shimmer 2.2s ease-in-out infinite; }
-.rune-edge .re { position: absolute; overflow: hidden; filter: drop-shadow(0 0 4px rgba(95, 212, 255, .85)); }
-.rune-edge .re-t, .rune-edge .re-b { left: -2px; right: -2px; height: 14px; }
-.rune-edge .re-t { top: -20px; }
-.rune-edge .re-b { bottom: -20px; }
-.rune-edge .re-l, .rune-edge .re-r { top: -2px; bottom: -2px; width: 14px; }
-.rune-edge .re-l { left: -20px; }
-.rune-edge .re-r { right: -20px; }
-@keyframes rune-shimmer { 0%, 100% { opacity: .6; } 50% { opacity: 1; } }
+.rune-edge .re { position: absolute; overflow: hidden; filter: drop-shadow(0 0 3px rgba(95, 212, 255, .5)); }
+.rune-edge .re-t, .rune-edge .re-b { left: -2px; right: -2px; height: 10px; }
+.rune-edge .re-t { top: -16px; }
+.rune-edge .re-b { bottom: -16px; }
+.rune-edge .re-l, .rune-edge .re-r { top: -2px; bottom: -2px; width: 10px; }
+.rune-edge .re-l { left: -16px; }
+.rune-edge .re-r { right: -16px; }
+@keyframes rune-shimmer { 0%, 100% { opacity: .45; } 50% { opacity: .85; } }
 /* the outline is replaced by the runes */
 .tile.speaking { border-color: transparent; box-shadow: none; }
 .vc-person.speaking .av { box-shadow: none; filter: drop-shadow(0 0 5px var(--spark)); }
 .vc-person.speaking { color: var(--text); }
 @media (prefers-reduced-motion: reduce) { .tile.speaking .rune-edge { animation: none; } }
 
-/* Someone is sharing their screen: a bar under the top bar, with who and a Watch button */
-.layout { grid-template-rows: 58px auto minmax(0, 1fr); }
-.share-banner { grid-column: 1 / -1; grid-row: 2; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 12px; padding: 9px 16px; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 30%, var(--bg-2)), color-mix(in srgb, var(--spark) 22%, var(--bg-2))); border-bottom: 1px solid color-mix(in srgb, var(--spark) 55%, var(--line)); box-shadow: 0 6px 24px rgba(124, 92, 255, .25); }
-.share-banner .sb-item { display: flex; align-items: center; gap: 10px; padding: 4px 6px 4px 14px; background: color-mix(in srgb, var(--bg) 45%, transparent); border: 1px solid color-mix(in srgb, var(--spark) 40%, transparent); border-radius: 10px; }
-.share-banner .sb-item .i { color: var(--spark); width: 22px; height: 22px; filter: drop-shadow(0 0 5px var(--spark)); }
-.share-banner button { padding: 5px 16px; border-radius: 0; clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); font-weight: 700; }
-.channels, .chat, .members, .stage { grid-row: 3; }
-.members { top: 58px; }
+/* Someone in the call is sharing their screen: a thin bar at the top of the call view, with who and a Watch button */
+.share-banner { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 10px; padding: 5px 14px; font-size: 13px; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 22%, var(--bg-2)), color-mix(in srgb, var(--spark) 14%, var(--bg-2))); border-bottom: 1px solid color-mix(in srgb, var(--spark) 40%, var(--line)); }
+.share-banner .sb-item { display: flex; align-items: center; gap: 8px; padding: 2px 4px 2px 10px; background: color-mix(in srgb, var(--bg) 40%, transparent); border: 1px solid color-mix(in srgb, var(--spark) 32%, transparent); border-radius: 8px; }
+.share-banner .sb-item .i { color: var(--spark); width: 16px; height: 16px; }
+.share-banner button { padding: 2px 12px; font-size: 12px; font-weight: 700; border-radius: 0; clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%); }
