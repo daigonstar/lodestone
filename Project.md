@@ -3,7 +3,7 @@
 What needs doing to get Lodestone to users, and where each item stands. Update this file whenever an
 item is finished or partly done.
 
-Last updated: 2026-11-26 (Comms naming replan added)
+Last updated: 2026-11-26 (Beacon rename done in code)
 
 ## Current focus
 
@@ -52,20 +52,23 @@ process list, Comms plug-in install, update checks for installed programs.
 Suggested order, all on `comms`: add a Windows build to CI and releases; test the Epic/GOG and Steam
 changes on a Windows PC; then the Medium items. Merge `comms` to `main` only for the 0.3.0 release.
 
-## Comms naming replan (feeds roadmap item 3)
+## Beacon rename and rebrand (feeds roadmap item 3)
 
-Robb wants **server** to mean the self-hosted machine/software, **community** to replace what Comms calls
-a server today (the group people join), and is open to renaming "Comms" itself. Plan written in
-`comms/NAMING-PLAN.md` (on `comms`): inventory, new vocabulary, 4 candidate names, cost, recommendation.
+Decided by Robb on 2026-11-26: the Comms plug-in becomes **Lodestone Beacon**. In its words: **server** is
+the self-hosted machine/software, **community** is the group people join (was "server"/"space"),
+**channel** is unchanged. Test data can start fresh, so there is no migration. It is a full rebrand of the
+look too, moving away from Discord's look. Plan and inventory: `beacon/NAMING-PLAN.md`.
 
 | Item | Status |
 | --- | --- |
-| Plan: inventory, vocabulary, candidate names, cost | Done, in `comms/NAMING-PLAN.md` |
-| Robb approves vocabulary (server / community / channel) | Done 2026-11-26; fresh start, no data migration |
-| Robb picks plug-in name | **Waiting on Robb** (he wants the suite of apps to stay fairly similar in naming) |
-| Vocabulary change (server/community, remove `space`) in UI, protocol, code, docs | Not started |
-| Plug-in rename (only if chosen): id, Flatpak id, tag prefix, crates, protocol strings | Not started |
-| Adjust PR #7 (plug-in installer) to the final names | Not started, decide order first |
+| Plan, inventory, vocabulary approved, name picked | Done |
+| Text rename: Comms to Beacon (folder `beacon/`, crates, Flatpak id `io.github.daigonstar.Lodestone.Beacon`, tag prefix `beacon-v`, `BEACON_*` settings, `lodestone-beacon/v1` protocol strings, Lodestone's installer and UI) | Done in code, builds and server/client tests pass on Linux; Windows and Flatpak builds not run |
+| Vocabulary change: host to server, server/space to community (UI, API routes, database, docs) | Done, same checks |
+| App icon for Beacon and matching icons for the other apps | Not started: direction needs Robb's approval |
+| Redo the internal icons (camera, streaming, etc.) in one style | Not started |
+| Move the layout and look away from Discord | Not started: direction needs Robb's approval |
+| PR #7 (plug-in installer) still uses `comms`, `comms-v` and the old Flatpak id | Needs merging with this rename before either lands |
+| Existing `comms-v*` draft releases on GitHub | Would be re-published as `beacon-v*` |
 
 ## Releases
 

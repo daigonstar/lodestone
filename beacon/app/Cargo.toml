@@ -1,0 +1,22 @@
+[package]
+name = "lodestone-beacon"
+version = "0.2.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Lodestone Beacon: end-to-end encrypted chat as a Lodestone plug-in"
+
+[dependencies]
+lodestone-beacon-client = { path = "../client" }
+lodestone-beacon-media = { path = "../media" }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-std", "io-util", "net"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+getrandom = "0.2"
+base64 = "0.22"
+
+# Windows: Beacon' own window (there's no Lodestone there). The same window libraries Tauri uses.
+[target.'cfg(windows)'.dependencies]
+tao = "0.37"
+wry = "0.57"

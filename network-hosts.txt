@@ -72,8 +72,8 @@ api.curseforge.com                            # mod search, with your key
 console.curseforge.com                        # link to get a CurseForge key (opened in your browser)
 
 # --- Tools Lodestone sets up (official GitHub releases) ---
-api.github.com                                # newest release of umu-launcher, legendary, gogdl, MangoHud and Lodestone Comms (when you open Plug-ins); libretro box art lists
-github.com                                    # Lodestone Comms release downloads (only when you press Install or Update); links to MangoHud's documentation
+api.github.com                                # newest release of umu-launcher, legendary, gogdl, MangoHud and Lodestone Beacon (when you open Plug-ins); libretro box art lists
+github.com                                    # Lodestone Beacon release downloads (only when you press Install or Update); links to MangoHud's documentation
 # GitHub sends release downloads on to its file servers (release-assets.githubusercontent.com); every
 # file is checked against GitHub's published SHA-256 before it's installed.
 
@@ -89,10 +89,10 @@ raw.githubusercontent.com                     # libretro-thumbnails box art imag
 buildbot.libretro.com                         # official RetroArch cores (checked against libretro's CRC32 list)
 dl.flathub.org                                # Flathub's repository file, passed to flatpak (flatpak contacts it, not Lodestone)
 
-# --- Plug-ins (only when you open one, such as Lodestone Comms) ---
+# --- Plug-ins (only when you open one, such as Lodestone Beacon) ---
 127.0.0.1                                     # a plug-in's own page on this PC, shown in Lodestone's window (never leaves the PC)
-tauri.localhost                               # Lodestone's own window, named in Comms's page policy so only Lodestone may show it (never leaves the PC)
-# Lodestone Comms talks only to the Comms hosts you choose (yours or your friends'), so their addresses
+tauri.localhost                               # Lodestone's own window, named in Beacon's page policy so only Lodestone may show it (never leaves the PC)
+# Lodestone Beacon talks only to the Beacon servers you choose (yours or your friends'), so their addresses
 # aren't in the code; you see each one when you set it up or join with an invite.
 
 # --- Inside Lodestone only ---

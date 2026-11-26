@@ -1,0 +1,44 @@
+# Lodestone Beacon behind a reverse proxy you already run (Zoraxy, Traefik, Nginx Proxy Manager, Caddy),
+# for example: Cloudflare Tunnel -> Zoraxy -> Beacon.
+#
+#   1. Copy this folder to the server and create a .env next to this file:
+#        BEACON_DOMAIN=beacon.yourdomain.com
+#   2. docker compose -f compose.proxy.yml up -d --build      (or podman-compose)
+#   3. Read the one-time setup code:  docker compose -f compose.proxy.yml logs beacon
+#   4. In your proxy, send https://beacon.yourdomain.com to this container (see below).
+#
+# Beacon listens on plain HTTP; the proxy (and Cloudflare) provide HTTPS. BEACON_PUBLIC_URL must be the
+# exact address people use: it's part of every signed sign-in and every invite link.
+services:
+  beacon:
+    build: .
+    restart: unless-stopped
+    environment:
+      BEACON_PUBLIC_URL: https://${BEACON_DOMAIN:?set BEACON_DOMAIN in .env}
+      # BEACON_ADMIN_ONLY_COMMUNITIES: "true"   # only server admins may create communities
+    volumes:
+      - beacon-data:/data
+    # Option A (default): reachable on the server itself at 127.0.0.1:${BEACON_PORT:-8095}.
+    # Use this when Zoraxy runs on the server, or in Docker with network_mode: server.
+    ports:
+      - "127.0.0.1:${BEACON_PORT:-8095}:8080"
+    # Option B: Zoraxy runs in Docker on its own network. Comment out `ports` above, uncomment both
+    # `networks` blocks, set the network name, and point Zoraxy at http://lodestone-beacon:8080.
+    # networks:
+    #   - proxy
+    container_name: lodestone-beacon
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  beacon-data:
+
+# networks:
+#   proxy:
+#     external: true
+#     name: zoraxy_default   # the network your Zoraxy container is on (docker network ls)
