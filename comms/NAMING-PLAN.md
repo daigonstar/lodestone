@@ -1,6 +1,6 @@
 # Naming replan for Comms (plan only, no code changed)
 
-Status: **waiting for Robb to pick names.** Written 2026-11-26 from a read of the `comms` branch
+Status: **vocabulary approved by Robb (2026-11-26); plug-in name still to pick.** Robb also said his running server holds nothing valuable and testers can start fresh, so no database migration or Flatpak data copy is needed. He wants the suite of apps to keep fairly similar names. Written 2026-11-26 from a read of the `comms` branch
 (and PR #7, the plug-in installer). Nothing has been renamed.
 
 ## The problem

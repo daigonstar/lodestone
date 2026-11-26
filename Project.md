@@ -61,7 +61,8 @@ a server today (the group people join), and is open to renaming "Comms" itself. 
 | Item | Status |
 | --- | --- |
 | Plan: inventory, vocabulary, candidate names, cost | Done, in `comms/NAMING-PLAN.md` |
-| Robb picks vocabulary and plug-in name | **Waiting on Robb** |
+| Robb approves vocabulary (server / community / channel) | Done 2026-11-26; fresh start, no data migration |
+| Robb picks plug-in name | **Waiting on Robb** (he wants the suite of apps to stay fairly similar in naming) |
 | Vocabulary change (server/community, remove `space`) in UI, protocol, code, docs | Not started |
 | Plug-in rename (only if chosen): id, Flatpak id, tag prefix, crates, protocol strings | Not started |
 | Adjust PR #7 (plug-in installer) to the final names | Not started, decide order first |
