@@ -165,9 +165,14 @@ pub async fn fetch_verified(src: &Source, rel: &Release) -> Result<Vec<u8>, Stri
     Ok(bytes.to_vec())
 }
 
-/// "0.2.10" > "0.2.9": compare the numbers, not the text.
+/// "0.2.10" > "0.2.9": compare the numbers, not the text. A finished version is newer than its own test
+/// builds ("0.3.0" > "0.3.0-rc.2").
 pub fn newer(a: &str, b: &str) -> bool {
-    let parse = |v: &str| v.split(['.', '-']).map(|p| p.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
+    let numbers = |v: &str| v.split(['.', '-']).map(|p| p.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
+    let parse = |v: &str| {
+        let (core, test) = v.split_once('-').map_or((v, None), |(c, t)| (c, Some(t)));
+        (numbers(core), test.is_none(), test.map(numbers))
+    };
     parse(a) > parse(b)
 }
 
@@ -231,7 +236,9 @@ pub async fn install_flatpak(label: &str, version: &str, bytes: &[u8]) -> Result
     let file = dir.join(format!("plugin-{}-{version}.flatpak", safe_name(label)));
     fs::write(&file, bytes).map_err(|e| e.to_string())?;
     let mut c = Command::new("flatpak");
-    c.args(["install", "--user", "-y", "--noninteractive"]).arg(&file);
+    // --reinstall: without it flatpak refuses a bundle for an app that's already installed, so an update would
+    // fail. The app's own data is kept.
+    c.args(["install", "--user", "-y", "--noninteractive", "--reinstall"]).arg(&file);
     let out = tauri::async_runtime::spawn_blocking(move || crate::host::wrap(c).stdin(Stdio::null()).output())
         .await
         .map_err(|e| e.to_string())?
@@ -326,6 +333,10 @@ mod tests {
         assert!(newer("0.3.0", "0.2.99"));
         assert!(!newer("0.2.0", "0.2.0"));
         assert!(!newer("0.1.9", "0.2.0"));
+        assert!(newer("0.3.0", "0.3.0-rc.2"));
+        assert!(!newer("0.3.0-rc.2", "0.3.0"));
+        assert!(newer("0.3.0-rc.10", "0.3.0-rc.9"));
+        assert!(newer("0.3.0-rc.1", "0.2.9"));
     }
 
     #[test]

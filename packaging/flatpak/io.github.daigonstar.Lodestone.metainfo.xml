@@ -77,6 +77,8 @@
         <p>Hotfix: testers can now get test builds of plug-ins.</p>
         <ul>
           <li>Plug-ins page: a switch, off by default, to also offer test builds (pre-releases) of plug-ins, still checked against GitHub's checksum</li>
+          <li>Fixed: installing a Flatpak plug-in over one already installed failed</li>
+          <li>A finished version now counts as newer than its own test builds</li>
         </ul>
       </description>
     </release>
