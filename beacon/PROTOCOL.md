@@ -73,6 +73,38 @@ one server can't be replayed on another.
    - The token is 32 random bytes (base64url). The server stores only its SHA-256. Send it as
      `Authorization: Bearer <token>`. Sessions last 30 days.
 
+## Identity: one key that belongs to the person
+
+Devices sign in with their own keys (above). On top of that, a person has an **identity**: one more Ed25519
+key made by their app on first run. It is never sent anywhere; servers only ever see its public half. It is
+backed up as a 24-word recovery phrase (the key's 32 bytes as BIP-39 words); whoever has the phrase is that
+person. The point: the same person is recognisable across servers, and can get back into their accounts on a
+new device. Nobody holds an account database: each server stores only public keys.
+
+- **Registering with an identity.** `POST /v1/register` also takes `identity_key` (base64 public key) and
+  `identity_signature` over `lodestone-beacon/v1 identity <server url> <username> <device_key>`. The server
+  stores the key on the account (`GET /v1/me` and community member lists show it as `identity`). One account
+  per identity per server (a second one gets 409); usernames stay unique per server, and a person may use a
+  different one on each server. Clients show the identity's fingerprint (SHA-256 of the base64 key, first 8
+  bytes, as `3f9a-02c1-77de-b410`).
+- **Recovering on a new device** (no approval from another device, because the identity key proves who you are):
+  - `POST /v1/recover/challenge` `{ identity_key }` returns `{ nonce }` (2 minutes, single use). The answer is
+    the same whether or not the identity has an account here.
+  - `POST /v1/recover` `{ identity_key, device_key, nonce, identity_signature, device_signature }`.
+    `identity_signature` is over `lodestone-beacon/v1 recover <server url> <identity_key> <device_key> <nonce>`
+    and `device_signature` over `lodestone-beacon/v1 recover-device <server url> <device_key> <nonce>`, so the
+    identity vouches for this exact device and this device holds its own key. The device is added to the
+    identity's account (at most 10 devices), and members' apps add it to the channels as for any new device. It
+    reads messages from then on, not older ones.
+- **Pairing can hand over the identity.** `POST /v1/pairing/approve` takes an optional `blob` (up to 1 KiB):
+  the identity, AES-256-GCM encrypted by the approving app with a key that only travels in the pairing QR code
+  (`beacon-pair:1|<server url>|<code>|<key>`). `POST /v1/pairing/status` returns it once with `approved`. The
+  server never sees the key, so it can't read the blob; the status call has no sign-in, so anyone who knows the
+  new device's key could take the (still encrypted) blob first, which would make that device fall back to
+  asking for a recovery phrase.
+- **Not done yet:** clients don't pin or warn when a username shows up with a different identity, and old
+  messages don't travel to a new device (see Project.md).
+
 ## Communities, channels and invites
 
 | Request | Who | Does |
@@ -97,8 +129,11 @@ Roles: **owner** (one per community), **admin**, **member**. Names: 1 to 64 char
 | `GET /v1/communities/{community}/icon` | member | the icon, with `nosniff` and a CSP that runs nothing |
 | `PUT /v1/communities/{community}/banner` (image body) / `DELETE` | owner or admin | sets or removes the banner shown on the community's home-page card: same image rules as the icon, up to 512 KiB |
 | `GET /v1/communities/{community}/banner` | member | the banner, served like the icon |
+| `POST /v1/communities/{community}/categories` `{ name }` | owner or admin | adds a channel category (up to 50) |
+| `PATCH /v1/categories/{category}` `{ name }` / `DELETE` | owner or admin | renames a category; deleting one keeps its channels, uncategorised |
+| `PUT /v1/communities/{community}/category-order` `{ categories }` | owner or admin | sets the category order (every category once) |
 | `DELETE /v1/communities/{community}` | owner | deletes the community with its channels, messages and invites |
-| `PATCH /v1/channels/{channel}` `{ name?, topic? }` / `DELETE` | owner or admin | renames a channel, sets its topic (up to 300 characters), or deletes it (a community keeps at least one) |
+| `PATCH /v1/channels/{channel}` `{ name?, topic?, category?, parent?, post_rule? }` / `DELETE` | owner or admin | renames a channel, sets its topic (up to 300 characters), moves it into a category (`null` for none), makes it a child of a top-level text channel (`parent`, one level only; `null` for top level), or sets who can post (`post_rule`: `everyone` or `admins`; the server rejects `application` messages from other members, commits and proposals still pass). Deleting a channel (a community keeps at least one) moves its children to the top level |
 | `PUT /v1/communities/{community}/channel-order` `{ channels: [...] }` | owner or admin | the channel order; must list every channel once |
 | `PUT /v1/communities/{community}/members/{username}/role` `{ role }` | owner | `admin` or `member` |
 | `POST /v1/communities/{community}/transfer` `{ username }` | owner | makes another member the owner; the old owner becomes an admin |

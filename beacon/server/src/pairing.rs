@@ -102,7 +102,17 @@ pub async fn status(State(app): State<Shared>, Json(r): Json<StatusReq>) -> ApiR
         Ok((registered, waiting))
     })?;
     let status = if registered { "approved" } else if waiting { "waiting" } else { "refused" };
-    Ok(Json(json!({ "status": status })))
+    // The hand-over data (if any) is given once, to the device it was meant for.
+    let blob: Option<String> = if registered {
+        app.db.with(|c| {
+            let blob = c.query_row("SELECT blob FROM pairing_blobs WHERE device_key = ?1", [&r.device_key], |r| r.get(0)).optional()?;
+            c.execute("DELETE FROM pairing_blobs WHERE device_key = ?1", [&r.device_key])?;
+            Ok(blob)
+        })?
+    } else {
+        None
+    };
+    Ok(Json(json!({ "status": status, "blob": blob })))
 }
 
 /// `GET /v1/pairing`: devices waiting for your approval, with their fingerprints.
@@ -117,6 +127,10 @@ pub async fn waiting(State(app): State<Shared>, me: Auth) -> ApiResult<Json<Valu
 #[derive(Deserialize)]
 pub struct Decide {
     device_key: String,
+    /// On approve: something for the new device, encrypted on the approving device with a key the server never
+    /// sees (it travels in the QR code), such as the person's identity. Up to 1 KiB; handed over once.
+    #[serde(default)]
+    blob: Option<String>,
 }
 
 /// `POST /v1/pairing/approve`: add the waiting device to your account.
@@ -132,6 +146,12 @@ pub async fn approve(State(app): State<Shared>, me: Auth, Json(r): Json<Decide>)
             return Ok(Err(ApiError::bad("An account can have at most 10 devices; remove one first")));
         }
         tx.execute("INSERT INTO devices (key, account, created) VALUES (?1, ?2, ?3)", params![r.device_key, me.account, now()])?;
+        if let Some(blob) = &r.blob {
+            if blob.len() > 1024 {
+                return Ok(Err(ApiError::bad("The hand-over data can be at most 1 KiB")));
+            }
+            tx.execute("INSERT OR REPLACE INTO pairing_blobs (device_key, blob) VALUES (?1, ?2)", params![r.device_key, blob])?;
+        }
         tx.commit()?;
         Ok(Ok(()))
     })??;

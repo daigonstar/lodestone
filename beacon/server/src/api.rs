@@ -22,6 +22,8 @@ pub fn router(app: Shared) -> Router {
         .route("/v1/challenge", post(auth::challenge))
         .route("/v1/session", post(auth::new_session).delete(auth::sign_out))
         .route("/v1/devices", post(auth::add_device))
+        .route("/v1/recover/challenge", post(crate::auth::recover_challenge))
+        .route("/v1/recover", post(crate::auth::recover))
         .route("/v1/devices/remove", post(crate::pairing::remove_device))
         .route("/v1/pairing", post(crate::pairing::start).get(crate::pairing::waiting))
         .route("/v1/pairing/claim", post(crate::pairing::claim))
@@ -43,6 +45,9 @@ pub fn router(app: Shared) -> Router {
         .route("/v1/communities/{community}/transfer", post(settings::transfer))
         .route("/v1/communities/{community}/bans", get(settings::list_bans))
         .route("/v1/communities/{community}/bans/{username}", delete(settings::unban))
+        .route("/v1/communities/{community}/categories", post(settings::create_category))
+        .route("/v1/communities/{community}/category-order", axum::routing::put(settings::reorder_categories))
+        .route("/v1/categories/{category}", axum::routing::patch(settings::rename_category).delete(settings::delete_category))
         .route("/v1/channels/{channel}", axum::routing::patch(settings::update_channel).delete(settings::delete_channel))
         .route("/v1/invites/{code}", get(preview_invite))
         .route("/v1/invites/{code}/accept", post(accept_invite))
@@ -131,7 +136,7 @@ fn channel_community(app: &Shared, channel: &str, me: &Auth) -> ApiResult<String
 // ---------- you ----------
 
 async fn me(State(app): State<Shared>, me: Auth) -> ApiResult<Json<Value>> {
-    let (status, status_text): (String, String) = app.db.with(|c| c.query_row("SELECT status, status_text FROM accounts WHERE id = ?1", [me.account], |r| Ok((r.get(0)?, r.get(1)?))))?;
+    let (status, status_text, identity): (String, String, Option<String>) = app.db.with(|c| c.query_row("SELECT status, status_text, identity_key FROM accounts WHERE id = ?1", [me.account], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))))?;
     let (devices, communities) = app.db.with(|c| {
         let devices: Vec<String> = c.prepare("SELECT key FROM devices WHERE account = ?1 ORDER BY created")?.query_map([me.account], |r| r.get(0))?.collect::<Result<_, _>>()?;
         let communities: Vec<Value> = c
@@ -141,7 +146,7 @@ async fn me(State(app): State<Shared>, me: Auth) -> ApiResult<Json<Value>> {
         Ok((devices, communities))
     })?;
     let devices: Vec<Value> = devices.iter().map(|d| json!({ "key": d, "fingerprint": crate::pairing::fingerprint(d), "this": d == &me.device })).collect();
-    Ok(Json(json!({ "username": me.username, "device": me.device, "server_admin": me.server_admin, "devices": devices, "communities": communities, "status": status, "status_text": status_text })))
+    Ok(Json(json!({ "username": me.username, "device": me.device, "server_admin": me.server_admin, "devices": devices, "communities": communities, "status": status, "status_text": status_text, "identity": identity })))
 }
 
 // ---------- communities and channels ----------
@@ -152,6 +157,12 @@ struct NameReq {
     /// "text" (default) or "voice".
     #[serde(default)]
     kind: Option<String>,
+    /// Put the new channel in this category.
+    #[serde(default)]
+    category: Option<String>,
+    /// Make the new channel a child of this text channel.
+    #[serde(default)]
+    parent: Option<String>,
 }
 
 async fn create_community(State(app): State<Shared>, me: Auth, Json(r): Json<NameReq>) -> ApiResult<Json<Value>> {
@@ -176,27 +187,31 @@ async fn get_community(State(app): State<Shared>, me: Auth, Path(community): Pat
         let (name, description, has_icon, has_banner): (String, String, bool, bool) =
             c.query_row("SELECT name, description, icon IS NOT NULL, banner IS NOT NULL FROM communities WHERE id = ?1", [&community], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
         let channels: Vec<Value> = c
-            .prepare("SELECT id, name, epoch, topic, kind FROM channels WHERE community = ?1 ORDER BY position, created, name")?
+            .prepare("SELECT id, name, epoch, topic, kind, category, parent, post_rule FROM channels WHERE community = ?1 ORDER BY position, created, name")?
             .query_map([&community], |r| {
                 let id: String = r.get(0)?;
                 let kind: String = r.get(4)?;
                 // Who's in a voice channel right now (usernames), for the channel list.
                 let in_call = if kind == "voice" { app.voice.usernames(&id) } else { Vec::new() };
-                Ok(json!({ "id": id, "name": r.get::<_, String>(1)?, "epoch": r.get::<_, i64>(2)?, "topic": r.get::<_, String>(3)?, "kind": kind, "in_call": in_call }))
+                Ok(json!({ "id": id, "name": r.get::<_, String>(1)?, "epoch": r.get::<_, i64>(2)?, "topic": r.get::<_, String>(3)?, "kind": kind, "in_call": in_call, "category": r.get::<_, Option<String>>(5)?, "parent": r.get::<_, Option<String>>(6)?, "post_rule": r.get::<_, String>(7)? }))
             })?
+            .collect::<Result<_, _>>()?;
+        let categories: Vec<Value> = c
+            .prepare("SELECT id, name FROM categories WHERE community = ?1 ORDER BY position, created, name")?
+            .query_map([&community], |r| Ok(json!({ "id": r.get::<_, String>(0)?, "name": r.get::<_, String>(1)? })))?
             .collect::<Result<_, _>>()?;
         // Members with their device keys: clients check MLS credentials against these.
         let mut members: Vec<Value> = Vec::new();
-        let mut stmt = c.prepare("SELECT a.id, a.username, m.role, a.status, a.status_text FROM members m JOIN accounts a ON a.id = m.account WHERE m.community = ?1 ORDER BY a.username")?;
-        let rows: Vec<(i64, String, String, String, String)> = stmt.query_map([&community], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<Result<_, _>>()?;
-        for (id, username, role, status, status_text) in rows {
+        let mut stmt = c.prepare("SELECT a.id, a.username, m.role, a.status, a.status_text, a.identity_key FROM members m JOIN accounts a ON a.id = m.account WHERE m.community = ?1 ORDER BY a.username")?;
+        let rows: Vec<(i64, String, String, String, String, Option<String>)> = stmt.query_map([&community], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?.collect::<Result<_, _>>()?;
+        for (id, username, role, status, status_text, identity) in rows {
             let devices: Vec<String> = c.prepare("SELECT key FROM devices WHERE account = ?1 ORDER BY created")?.query_map([id], |r| r.get(0))?.collect::<Result<_, _>>()?;
             let presence = crate::presence::shown(&app, id, &status);
             // Someone who looks offline shows no status message either.
             let text = if presence == "offline" { String::new() } else { status_text };
-            members.push(json!({ "username": username, "role": role, "devices": devices, "presence": presence, "status_text": text }));
+            members.push(json!({ "username": username, "role": role, "devices": devices, "presence": presence, "status_text": text, "identity": identity }));
         }
-        Ok(json!({ "id": community, "name": name, "description": description, "has_icon": has_icon, "has_banner": has_banner, "your_role": role, "channels": channels, "members": members }))
+        Ok(json!({ "id": community, "name": name, "description": description, "has_icon": has_icon, "has_banner": has_banner, "your_role": role, "channels": channels, "categories": categories, "members": members }))
     })?;
     Ok(Json(out))
 }
@@ -213,10 +228,12 @@ async fn create_channel(State(app): State<Shared>, me: Auth, Path(community): Pa
     if count >= 200 {
         return Err(ApiError::bad("A community can have at most 200 channels"));
     }
+    let (category, parent) = (r.category.clone().map(Some), r.parent.clone().map(Some));
+    crate::settings::check_placement(&app, &community, &id, category.as_ref(), parent.as_ref())?;
     app.db.with(|c| {
         c.execute(
-            "INSERT INTO channels (id, community, name, created, position, kind) VALUES (?1, ?2, ?3, ?4, (SELECT COALESCE(MAX(position), -1) + 1 FROM channels WHERE community = ?2), ?5)",
-            params![id, community, name, now(), kind],
+            "INSERT INTO channels (id, community, name, created, position, kind, category, parent) VALUES (?1, ?2, ?3, ?4, (SELECT COALESCE(MAX(position), -1) + 1 FROM channels WHERE community = ?2), ?5, ?6, ?7)",
+            params![id, community, name, now(), kind, if r.parent.is_some() { None } else { r.category.clone() }, r.parent.clone()],
         )
     })?;
     app.live.to_community(&app, &community, json!({ "type": "channel_created", "community": community, "channel": id, "name": name, "kind": kind }));
@@ -404,6 +421,13 @@ async fn send_message(State(app): State<Shared>, me: Auth, Path(channel): Path<S
     let community = channel_community(&app, &channel, &me)?;
     if !["commit", "proposal", "application"].contains(&r.kind.as_str()) {
         return Err(ApiError::bad("kind must be commit, proposal or application"));
+    }
+    // "Only admins can post" channels: members read, and their key-handling messages (commits, proposals) still go through.
+    if r.kind == "application" {
+        let rule: String = app.db.with(|c| c.query_row("SELECT post_rule FROM channels WHERE id = ?1", [&channel], |r| r.get(0)))?;
+        if rule == "admins" && require_admin(&app, &community, &me).is_err() {
+            return Err(ApiError::forbidden("Only admins can post in this channel"));
+        }
     }
     let body = b64_decode(&r.body).filter(|b| !b.is_empty() && b.len() <= MAX_BODY).ok_or_else(|| ApiError::bad("body must be base64, up to 64 KiB"))?;
     if !app.limits.allow(&format!("send:{}", me.device), 60, Duration::from_secs(60)) {

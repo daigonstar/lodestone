@@ -27,6 +27,7 @@ base64 = "0.22"
 aes-gcm = "0.10"
 sha2 = "0.10"
 rusqlite = { version = "0.43", features = ["bundled"] }
+bip39 = "2"
 
 [dev-dependencies]
 lodestone-beacon-server = { path = "../server" }

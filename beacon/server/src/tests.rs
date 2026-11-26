@@ -248,7 +248,37 @@ async fn server_settings_and_permissions() {
     assert_eq!(call(&app, "PUT", &format!("{sp_path}/channel-order"), Some(&ta), json!({ "channels": [raids, general] })).await.0, StatusCode::OK);
     let (_, got) = call(&app, "GET", &sp_path, Some(&tb), Value::Null).await;
     assert_eq!((got["channels"][0]["name"].as_str(), got["channels"][0]["topic"].as_str()), (Some("raid-plans"), Some("Who's in?")));
+    // Categories, child channels and posting rules.
+    assert_eq!(call(&app, "POST", &format!("{sp_path}/categories"), Some(&tb), json!({ "name": "Games" })).await.0, StatusCode::FORBIDDEN);
+    let (st, cat) = call(&app, "POST", &format!("{sp_path}/categories"), Some(&ta), json!({ "name": "Games" })).await;
+    assert_eq!(st, StatusCode::OK);
+    let cat = cat["id"].as_str().unwrap().to_string();
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{raids}"), Some(&ta), json!({ "category": "nope" })).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{raids}"), Some(&ta), json!({ "category": cat })).await.0, StatusCode::OK);
+    let (_, kid) = call(&app, "POST", &format!("{sp_path}/channels"), Some(&ta), json!({ "name": "raid-loot", "parent": raids })).await;
+    let kid = kid["id"].as_str().unwrap().to_string();
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{kid}"), Some(&ta), json!({ "parent": kid })).await.0, StatusCode::BAD_REQUEST, "not its own parent");
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{general}"), Some(&ta), json!({ "parent": kid })).await.0, StatusCode::BAD_REQUEST, "no grandchildren");
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{raids}"), Some(&ta), json!({ "parent": general })).await.0, StatusCode::BAD_REQUEST, "a channel with children can't become a child");
+    let (_, got) = call(&app, "GET", &sp_path, Some(&tb), Value::Null).await;
+    let find = |id: &str| got["channels"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap().clone();
+    assert_eq!((find(&raids)["category"].as_str(), find(&kid)["parent"].as_str(), got["categories"][0]["name"].as_str()), (Some(cat.as_str()), Some(raids.as_str()), Some("Games")));
+    // Posting rules: only admins can post once a channel is "admins"; commits still go through.
+    let msg = |kind: &str| json!({ "kind": kind, "epoch": 0, "body": b64(b"hi") });
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{kid}"), Some(&tb), json!({ "post_rule": "admins" })).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{kid}"), Some(&ta), json!({ "post_rule": "everybody" })).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{kid}"), Some(&ta), json!({ "post_rule": "admins" })).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "POST", &format!("/v1/channels/{kid}/messages"), Some(&tb), msg("application")).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(&app, "POST", &format!("/v1/channels/{kid}/messages"), Some(&ta), msg("application")).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "PUT", &format!("{sp_path}/category-order"), Some(&ta), json!({ "categories": [] })).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(call(&app, "PUT", &format!("{sp_path}/category-order"), Some(&ta), json!({ "categories": [cat] })).await.0, StatusCode::OK);
+    // Deleting a parent promotes its children; deleting a category keeps its channels.
+    assert_eq!(call(&app, "DELETE", &format!("/v1/categories/{cat}"), Some(&tb), Value::Null).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(&app, "DELETE", &format!("/v1/categories/{cat}"), Some(&ta), Value::Null).await.0, StatusCode::OK);
     assert_eq!(call(&app, "DELETE", &format!("/v1/channels/{raids}"), Some(&ta), Value::Null).await.0, StatusCode::OK);
+    let (_, got) = call(&app, "GET", &sp_path, Some(&tb), Value::Null).await;
+    assert!(got["channels"].as_array().unwrap().iter().any(|c| c["id"] == kid.as_str() && c["parent"].is_null()), "child promoted");
+    assert_eq!(call(&app, "DELETE", &format!("/v1/channels/{kid}"), Some(&ta), Value::Null).await.0, StatusCode::OK);
     assert_eq!(call(&app, "DELETE", &format!("/v1/channels/{general}"), Some(&ta), Value::Null).await.0, StatusCode::BAD_REQUEST, "last channel stays");
 
     // Roles: only the owner promotes; an admin can remove members but not other admins or the owner.
@@ -599,4 +629,71 @@ async fn voice_relay_forwards_between_participants() {
     call(&app, "POST", &format!("/v1/channels/{voice}/voice/leave"), Some(&tb), Value::Null).await;
     let (_, st) = call(&app, "GET", &format!("/v1/channels/{voice}/voice"), Some(&tb), Value::Null).await;
     assert_eq!(st["participants"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn identity_keys_link_accounts_and_recover_on_a_new_device() {
+    let (app, code) = server();
+    let identity = Device::new();
+    let phone = Device::new();
+    let first = Device::new();
+    // Registering with an identity needs its signature.
+    let reg = |dev: &Device, id: &Device, user: &str, invite: &str, good: bool| {
+        let sig = dev.sign(&format!("lodestone-beacon/v1 register {SERVER} {user} {}", dev.public()));
+        let id_sig = if good { id.sign(&format!("lodestone-beacon/v1 identity {SERVER} {user} {}", dev.public())) } else { id.sign("something else") };
+        json!({ "username": user, "device_key": dev.public(), "signature": sig, "invite": invite, "identity_key": id.public(), "identity_signature": id_sig })
+    };
+    assert_eq!(call(&app, "POST", "/v1/register", None, reg(&first, &identity, "robb", &code, false)).await.0, StatusCode::UNAUTHORIZED);
+    let (s, r) = call(&app, "POST", "/v1/register", None, reg(&first, &identity, "robb", &code, true)).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    let t1 = first.sign_in(&app).await;
+    let (_, me) = call(&app, "GET", "/v1/me", Some(&t1), Value::Null).await;
+    assert_eq!(me["identity"], identity.public());
+    // The same identity can't make a second account on this server, even under another name.
+    let (_, c) = call(&app, "POST", "/v1/communities", Some(&t1), json!({ "name": "Raids" })).await;
+    let sid = c["id"].as_str().unwrap();
+    let (_, inv) = call(&app, "POST", &format!("/v1/communities/{sid}/invites"), Some(&t1), json!({ "max_uses": 3, "expires_in": 3600 })).await;
+    let invite = inv["code"].as_str().unwrap().to_string();
+    let other = Device::new();
+    assert_eq!(call(&app, "POST", "/v1/register", None, reg(&other, &identity, "robb2", &invite, true)).await.0, StatusCode::CONFLICT);
+
+    // Recovery: a new device proves the identity key and its own key, and joins the existing account.
+    let recover = |nonce: &str, dev: &Device, id: &Device| json!({
+        "identity_key": id.public(), "device_key": dev.public(), "nonce": nonce,
+        "identity_signature": id.sign(&format!("lodestone-beacon/v1 recover {SERVER} {} {} {nonce}", id.public(), dev.public())),
+        "device_signature": dev.sign(&format!("lodestone-beacon/v1 recover-device {SERVER} {} {nonce}", dev.public())),
+    });
+    let (_, ch) = call(&app, "POST", "/v1/recover/challenge", None, json!({ "identity_key": identity.public() })).await;
+    let nonce = ch["nonce"].as_str().unwrap().to_string();
+    let stranger = Device::new();
+    assert_eq!(call(&app, "POST", "/v1/recover", None, recover(&nonce, &phone, &stranger)).await.0, StatusCode::UNAUTHORIZED, "the nonce belongs to another identity");
+    let (_, ch) = call(&app, "POST", "/v1/recover/challenge", None, json!({ "identity_key": identity.public() })).await;
+    let nonce = ch["nonce"].as_str().unwrap().to_string();
+    let (s, r) = call(&app, "POST", "/v1/recover", None, recover(&nonce, &phone, &identity)).await;
+    assert_eq!((s, r["username"].as_str()), (StatusCode::OK, Some("robb")), "{r}");
+    assert_eq!(call(&app, "POST", "/v1/recover", None, recover(&nonce, &phone, &identity)).await.0, StatusCode::UNAUTHORIZED, "single use");
+    assert_eq!(phone.sign_in(&app).await.is_empty(), false);
+    // An identity with no account here gets the same challenge but no recovery.
+    let nobody = Device::new();
+    let (_, ch) = call(&app, "POST", "/v1/recover/challenge", None, json!({ "identity_key": nobody.public() })).await;
+    let nonce = ch["nonce"].as_str().unwrap().to_string();
+    assert_eq!(call(&app, "POST", "/v1/recover", None, recover(&nonce, &Device::new(), &nobody)).await.0, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn pairing_can_hand_over_encrypted_data_once() {
+    let (app, code) = server();
+    let (a, b) = (Device::new(), Device::new());
+    a.register(&app, "alice", &code).await;
+    let ta = a.sign_in(&app).await;
+    let (_, p) = call(&app, "POST", "/v1/pairing", Some(&ta), json!({})).await;
+    let pcode = p["code"].as_str().unwrap().to_string();
+    let sig = b.sign(&format!("lodestone-beacon/v1 pair {SERVER} {pcode} {}", b.public()));
+    assert_eq!(call(&app, "POST", "/v1/pairing/claim", None, json!({ "code": pcode, "device_key": b.public(), "signature": sig })).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "POST", "/v1/pairing/approve", Some(&ta), json!({ "device_key": b.public(), "blob": "x".repeat(2000) })).await.0, StatusCode::BAD_REQUEST, "too big");
+    assert_eq!(call(&app, "POST", "/v1/pairing/approve", Some(&ta), json!({ "device_key": b.public(), "blob": "sealed" })).await.0, StatusCode::OK);
+    let (_, st) = call(&app, "POST", "/v1/pairing/status", None, json!({ "code": pcode, "device_key": b.public() })).await;
+    assert_eq!((st["status"].as_str(), st["blob"].as_str()), (Some("approved"), Some("sealed")));
+    let (_, st) = call(&app, "POST", "/v1/pairing/status", None, json!({ "code": pcode, "device_key": b.public() })).await;
+    assert!(st["blob"].is_null(), "handed over once");
 }
