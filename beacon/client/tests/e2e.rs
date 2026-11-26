@@ -28,7 +28,7 @@ async fn encrypted_chat_end_to_end() {
 
     // Alice sets up the server and a community.
     let alice = Client::open(&tmp.path().join("alice"), &url).unwrap();
-    alice.register("alice", &setup).await.unwrap();
+    alice.register("alice", &setup, None).await.unwrap();
     let community = alice.create_community("Raid night").await.unwrap();
     let general = alice.channels().unwrap()[0].0.clone();
     let invite = alice.create_invite(&community, 5, 3600).await.unwrap();
@@ -36,7 +36,7 @@ async fn encrypted_chat_end_to_end() {
 
     // Bob joins with the invite; Alice's client adds him to the channel's encrypted group.
     let bob = Client::open(&tmp.path().join("bob"), &url).unwrap();
-    bob.register("bob", &code).await.unwrap();
+    bob.register("bob", &code, None).await.unwrap();
     alice.sync().await.unwrap();
     bob.sync().await.unwrap();
     assert_eq!(bob.channels().unwrap().len(), 1, "Bob joined the channel's group from the welcome");
@@ -120,7 +120,7 @@ async fn encrypted_chat_end_to_end() {
 
     // Carol joins later: she can read what's sent after she's added, not before.
     let carol = Client::open(&tmp.path().join("carol"), &url).unwrap();
-    carol.register("carol", &code).await.unwrap();
+    carol.register("carol", &code, None).await.unwrap();
     bob.sync().await.unwrap(); // any member can add her
     alice.sync().await.unwrap();
     carol.sync().await.unwrap();
@@ -141,11 +141,11 @@ async fn encrypted_chat_end_to_end() {
     let (pcode, _) = alice.pair_start().await.unwrap();
     let (user, fp) = desktop.pair_claim(&pcode).await.unwrap();
     assert_eq!(user, "alice");
-    assert_eq!(desktop.pair_check().await.unwrap(), "waiting");
+    assert_eq!(desktop.pair_check().await.unwrap().0, "waiting");
     let waiting = alice.pair_waiting().await.unwrap();
     assert_eq!(waiting, vec![(desktop.device_key().to_string(), fp.clone())]);
-    alice.pair_decide(desktop.device_key(), true).await.unwrap();
-    assert_eq!(desktop.pair_check().await.unwrap(), "approved");
+    alice.pair_decide(desktop.device_key(), true, None).await.unwrap();
+    assert_eq!(desktop.pair_check().await.unwrap().0, "approved");
     assert_eq!(desktop.username().as_deref(), Some("alice"));
     // Alice's laptop (or any member) adds the new device to the channels.
     alice.sync().await.unwrap();
@@ -199,11 +199,11 @@ async fn what_youre_playing_reaches_your_server_encrypted() {
     let tmp = tempfile::tempdir().unwrap();
     let (url, setup) = start_server(tmp.path()).await;
     let alice = Client::open(&tmp.path().join("alice"), &url).unwrap();
-    alice.register("alice", &setup).await.unwrap();
+    alice.register("alice", &setup, None).await.unwrap();
     let community = alice.create_community("Raid night").await.unwrap();
     let invite = alice.create_invite(&community, 1, 3600).await.unwrap();
     let bob = Client::open(&tmp.path().join("bob"), &url).unwrap();
-    bob.register("bob", invite["code"].as_str().unwrap()).await.unwrap();
+    bob.register("bob", invite["code"].as_str().unwrap(), None).await.unwrap();
     alice.sync().await.unwrap();
     bob.sync().await.unwrap();
 
@@ -217,4 +217,47 @@ async fn what_youre_playing_reaches_your_server_encrypted() {
     alice.set_playing(None).await.unwrap();
     bob.sync().await.unwrap();
     assert_eq!(bob.activities().get("alice"), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_identity_across_servers_and_recovery_on_a_new_pc() {
+    use lodestone_beacon_client::identity::Identity;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("a")).unwrap();
+    std::fs::create_dir_all(tmp.path().join("b")).unwrap();
+    let (url_a, setup_a) = start_server(&tmp.path().join("a")).await;
+    let (url_b, setup_b) = start_server(&tmp.path().join("b")).await;
+    let me = Identity::generate();
+
+    // The same identity (and username) on two servers.
+    let pc_a = Client::open(&tmp.path().join("pc-a"), &url_a).unwrap();
+    pc_a.register("robb", &setup_a, Some(&me)).await.unwrap();
+    let pc_b = Client::open(&tmp.path().join("pc-b"), &url_b).unwrap();
+    pc_b.register("robb", &setup_b, Some(&me)).await.unwrap();
+    let me_a = pc_a.server.get("/v1/me").await.unwrap();
+    let me_b = pc_b.server.get("/v1/me").await.unwrap();
+    assert_eq!((me_a["identity"].as_str(), me_b["identity"].as_str()), (Some(me.public().as_str()), Some(me.public().as_str())));
+
+    // A new PC restores the identity from the 24 words and gets back into both accounts.
+    let restored = Identity::from_phrase(&me.phrase()).unwrap();
+    let new_a = Client::open(&tmp.path().join("new-a"), &url_a).unwrap();
+    assert_eq!(new_a.recover(&restored).await.unwrap(), "robb");
+    let new_b = Client::open(&tmp.path().join("new-b"), &url_b).unwrap();
+    assert_eq!(new_b.recover(&restored).await.unwrap(), "robb");
+    assert_eq!(new_a.devices().await.unwrap().len(), 2);
+
+    // Someone else's identity can't recover into the account.
+    let thief = Client::open(&tmp.path().join("thief"), &url_a).unwrap();
+    assert!(thief.recover(&Identity::generate()).await.is_err());
+    assert_eq!(new_a.devices().await.unwrap().len(), 2);
+
+    // Pairing a phone can hand the identity over, sealed with a key that only the QR code carries.
+    let phone = Client::open(&tmp.path().join("phone"), &url_a).unwrap();
+    let (pcode, _) = pc_a.pair_start().await.unwrap();
+    phone.pair_claim(&pcode).await.unwrap();
+    let key = [9u8; 32];
+    pc_a.pair_decide(phone.device_key(), true, Some(me.seal(&key))).await.unwrap();
+    let (status, blob) = phone.pair_check().await.unwrap();
+    assert_eq!(status, "approved");
+    assert_eq!(Identity::open(&blob.unwrap(), &key).unwrap().public(), me.public());
 }

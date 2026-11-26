@@ -66,12 +66,12 @@ async fn two_engines_talk_through_the_relay_encrypted() {
     tokio::spawn(serve(listener, state));
 
     let alice = Client::open(&tmp.path().join("alice"), &url).unwrap();
-    alice.register("alice", &setup).await.unwrap();
+    alice.register("alice", &setup, None).await.unwrap();
     let community = alice.create_community("Raid night").await.unwrap();
     let voice = alice.create_voice_channel(&community, "Lounge").await.unwrap();
     let invite = alice.create_invite(&community, 1, 3600).await.unwrap();
     let bob = Client::open(&tmp.path().join("bob"), &url).unwrap();
-    bob.register("bob", invite["code"].as_str().unwrap()).await.unwrap();
+    bob.register("bob", invite["code"].as_str().unwrap(), None).await.unwrap();
     alice.sync().await.unwrap(); // adds Bob to the voice channel's group
     bob.sync().await.unwrap();
     // Both derive the same call base from the group; the relay never has it.
@@ -137,14 +137,14 @@ async fn screen_share_reaches_only_watchers_encrypted() {
     tokio::spawn(serve(listener, state));
 
     let alice = Client::open(&tmp.path().join("alice"), &url).unwrap();
-    alice.register("alice", &setup).await.unwrap();
+    alice.register("alice", &setup, None).await.unwrap();
     let community = alice.create_community("Raid night").await.unwrap();
     let voice = alice.create_voice_channel(&community, "Lounge").await.unwrap();
     let invite = alice.create_invite(&community, 2, 3600).await.unwrap();
     let bob = Client::open(&tmp.path().join("bob"), &url).unwrap();
-    bob.register("bob", invite["code"].as_str().unwrap()).await.unwrap();
+    bob.register("bob", invite["code"].as_str().unwrap(), None).await.unwrap();
     let carol = Client::open(&tmp.path().join("carol"), &url).unwrap();
-    carol.register("carol", invite["code"].as_str().unwrap()).await.unwrap();
+    carol.register("carol", invite["code"].as_str().unwrap(), None).await.unwrap();
     alice.sync().await.unwrap();
     bob.sync().await.unwrap();
     carol.sync().await.unwrap();
@@ -223,14 +223,14 @@ async fn cameras_reach_people_with_the_call_view_open() {
     let state = app(Config { public_url: url.clone(), admin_only_communities: false, blob_dir: tmp.path().join("blobs"), max_file: 1 << 20, community_quota: 1 << 20, media_addr: Some(media.clone()), media_bind: media }, db);
     tokio::spawn(serve(listener, state));
     let alice = Client::open(&tmp.path().join("alice"), &url).unwrap();
-    alice.register("alice", &setup).await.unwrap();
+    alice.register("alice", &setup, None).await.unwrap();
     let community = alice.create_community("Raid night").await.unwrap();
     let voice = alice.create_voice_channel(&community, "Lounge").await.unwrap();
     let invite = alice.create_invite(&community, 2, 3600).await.unwrap();
     let bob = Client::open(&tmp.path().join("bob"), &url).unwrap();
-    bob.register("bob", invite["code"].as_str().unwrap()).await.unwrap();
+    bob.register("bob", invite["code"].as_str().unwrap(), None).await.unwrap();
     let carol = Client::open(&tmp.path().join("carol"), &url).unwrap();
-    carol.register("carol", invite["code"].as_str().unwrap()).await.unwrap();
+    carol.register("carol", invite["code"].as_str().unwrap(), None).await.unwrap();
     alice.sync().await.unwrap();
     bob.sync().await.unwrap();
     carol.sync().await.unwrap();
