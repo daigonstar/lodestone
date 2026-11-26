@@ -35,7 +35,7 @@ play time.
 
 | Where | How |
 |---|---|
-| Arch Linux and friends (AUR) | `yay -S lodestone` (builds from source) or `yay -S lodestone-bin` (prebuilt) |
+| Arch Linux and friends | The AUR packages aren't published yet. Use the AppImage below, or build the PKGBUILD in `packaging/aur/lodestone` with `makepkg -si` (untested on Arch so far) |
 | Most other distributions | the `.AppImage` from the [latest release](https://github.com/daigonstar/lodestone/releases/latest): make it executable and run it |
 | Debian, Ubuntu, Mint, Pop!_OS | the `.deb` from the latest release: `sudo apt install ./Lodestone_*_amd64.deb` |
 | Flatpak (any distribution, Steam Deck) | the `.flatpak` from the latest release: `flatpak install --user lodestone-*.flatpak` |
