@@ -3,7 +3,7 @@
 What needs doing to get Lodestone to users, and where each item stands. Update this file whenever an
 item is finished or partly done.
 
-Last updated: 2026-11-26
+Last updated: 2026-11-26 (roadmap added)
 
 ## Current focus
 
@@ -11,6 +11,17 @@ Last updated: 2026-11-26
 to the AUR. The packaging work is done and kept up to date in the repository, so it can be picked up
 again as soon as an account exists. Meanwhile, the release channels below that don't need the AUR
 carry on.
+
+## Roadmap
+
+In priority order, set by Robb on 2026-11-26. A longer feature list lives on Robb's home PC and isn't
+tracked here.
+
+| # | Item | Status |
+| --- | --- | --- |
+| 1 | Windows version at the same level as the Linux version | Not started |
+| 2 | Write-up on how other people can make plugins for Lodestone | Not started |
+| 3 | Convert Kiln into a plugin, released as 0.3.0 (target: mid December 2026) | Not started |
 
 ## Releases
 
