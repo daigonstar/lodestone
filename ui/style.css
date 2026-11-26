@@ -698,5 +698,7 @@ body:not(.win) .win-only { display: none !important; }
 .prog-row .grow { flex: 1; }
 
 .plugins-sub { margin: 28px 0 6px; font-size: 16px; }
+.plugins-page label.check { display: flex; gap: 8px; align-items: center; }
+.plugins-page label.check input { accent-color: var(--accent); }
 #plugin-repo-input { flex: 1; min-width: 220px; }
 .plugins-page .row-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }

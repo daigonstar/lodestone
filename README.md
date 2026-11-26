@@ -133,6 +133,11 @@ Wine prefix; Lodestone only turns its "keep me logged in" option back on. Signin
   match; the store installers have no published checksum, so for those you're trusting the publisher.
   Minecraft mods are checked against Modrinth's and CurseForge's checksums.
 
+**Plug-ins and test builds.** The Plug-ins page asks `api.github.com` for each plug-in's releases when you
+open it, and downloads one only when you press the button, checking it against GitHub's published SHA-256.
+Releases marked as pre-release (test builds, which are unfinished) are skipped unless you turn on *Show test
+builds* on that page. It's off by default and applies to every plug-in, third-party ones included.
+
 **Unofficial APIs.** Steam's Web API is public, but Epic, GOG, EA, Ubisoft and Battle.net are reached
 through the web services and local programs their own apps use, not through public developer APIs. This
 is the same approach as Heroic, legendary and Lutris. It works today but isn't something these companies

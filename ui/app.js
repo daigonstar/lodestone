@@ -1750,10 +1750,26 @@ function renderPluginsPage() {
       </div></div>`;
   }).join("") || '<p class="muted">No plug-ins yet.</p>';
   const keep = document.querySelector("#plugin-repo-input")?.value || "";
-  $("#plugins-list").innerHTML += thirdPartyHTML();
+  $("#plugins-list").innerHTML += thirdPartyHTML() + testBuildsHTML();
   const inp = document.querySelector("#plugin-repo-input");
   if (inp) inp.value = keep;
 }
+// "Show test builds": off unless you turn it on; changing it looks the releases up again.
+function testBuildsHTML() {
+  return `<h2 class="plugins-sub">Test builds</h2>
+    <label class="check"><input type="checkbox" id="test-builds" ${state.testBuilds ? "checked" : ""} /> Show test builds</label>
+    <p class="muted small">Also offers releases marked as pre-release, for every plug-in on this page, including your third-party ones. They are unfinished and may break. Turning this off doesn't remove a test build you already installed.</p>`;
+}
+const testBuildNote = (r) => (r && r.prerelease ? " (test build)" : "");
+$("#plugins-list").addEventListener("change", async (e) => {
+  if (e.target.id !== "test-builds") return;
+  try {
+    await invoke("set_test_builds", { on: e.target.checked });
+    state.testBuilds = e.target.checked;
+    state.beaconRelease = null;
+    await Promise.all([checkBeaconRelease(), checkPluginReleases()]);
+  } catch (err) { toast(String(err), true); renderPluginsPage(); }
+});
 $("#plugins-list").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-plugin-act]");
   if (!b) return;
@@ -1807,6 +1823,7 @@ async function checkBeaconRelease() {
 async function checkPluginReleases() {
   state.pluginReleases = {};
   try { state.pluginRepos = await invoke("plugin_repos"); } catch { state.pluginRepos = []; }
+  try { state.testBuilds = (await invoke("get_settings")).test_builds; } catch {}
   renderPluginsPage();
   await Promise.all(["kiln", ...state.pluginRepos].map(async (id) => {
     try { state.pluginReleases[id] = await invoke("plugin_release_check", { id }); } catch (e) { state.pluginReleases[id] = { error: String(e) }; }
@@ -1817,8 +1834,8 @@ function releaseHTML(id, p) {
   const r = (state.pluginReleases || {})[id];
   if (!r) return '<p class="muted small">Checking GitHub for the latest release…</p>';
   if (r.error) return `<p class="muted small">${esc(r.error)}</p>`;
-  if (r.update) return `<p class="small">Version ${esc(r.latest)} is out (you have ${esc(r.installed)}).</p>`;
-  if (!r.installed && !(p && p.installed)) return `<p class="small">Latest: ${esc(r.latest)}. It's downloaded from that repository's GitHub releases and checked against GitHub's checksum before it's installed.</p>`;
+  if (r.update) return `<p class="small">Version ${esc(r.latest)}${testBuildNote(r)} is out (you have ${esc(r.installed)}).</p>`;
+  if (!r.installed && !(p && p.installed)) return `<p class="small">Latest: ${esc(r.latest)}${testBuildNote(r)}. It's downloaded from that repository's GitHub releases and checked against GitHub's checksum before it's installed.</p>`;
   return "";
 }
 function installBtn(id, p) {
@@ -1849,8 +1866,8 @@ function beaconReleaseHTML(p) {
   const r = state.beaconRelease;
   if (!r) return '<p class="muted small">Checking for the latest Beacon…</p>';
   if (r.error) return `<p class="muted small">${esc(r.error)}</p>`;
-  if (r.update) return `<p class="small">Beacon ${esc(r.latest)} is out (you have ${esc(r.installed)}). Updating keeps your communities and messages.</p>`;
-  if (!p.installed) return `<p class="small">Latest: Beacon ${esc(r.latest)}. It's downloaded from Lodestone's official GitHub releases and checked before it's installed.</p>`;
+  if (r.update) return `<p class="small">Beacon ${esc(r.latest)}${testBuildNote(r)} is out (you have ${esc(r.installed)}). Updating keeps your communities and messages.</p>`;
+  if (!p.installed) return `<p class="small">Latest: Beacon ${esc(r.latest)}${testBuildNote(r)}. It's downloaded from Lodestone's official GitHub releases and checked before it's installed.</p>`;
   return "";
 }
 

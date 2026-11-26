@@ -1539,6 +1539,14 @@ fn plugin_repo_remove(repo: String) -> Result<(), String> {
     plugin_sources::remove_repo(&repo)
 }
 
+/// Offer plug-in test builds (GitHub pre-releases) or not.
+#[tauri::command]
+fn set_test_builds(on: bool) -> Result<(), String> {
+    let mut s = settings::load();
+    s.test_builds = on;
+    settings::save(&s)
+}
+
 /// Switch a companion plug-in (Kiln) on or off.
 #[tauri::command]
 fn plugin_set_enabled(id: String, enabled: bool) -> Result<(), String> {
@@ -1733,6 +1741,7 @@ fn main() {
             plugin_install,
             plugin_repos,
             plugin_repo_add,
+            set_test_builds,
             plugin_repo_remove,
             rom_reveal,
             emu_open,
