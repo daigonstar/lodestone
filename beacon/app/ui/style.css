@@ -334,3 +334,46 @@ button .i { width: 20px; height: 20px; }
 .leave, .vc-person .i, .danger .i { --spark: var(--danger); }
 .badge .i { width: 14px; height: 14px; }
 .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+/* ---------- Layout A: top bar of communities, channels on the left, a centred chat, members and calls that float ---------- */
+.layout { grid-template-columns: 232px minmax(0, 1fr) auto; grid-template-rows: 58px minmax(0, 1fr); }
+.communities { grid-column: 1 / -1; grid-row: 1; flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px; padding: 0 16px; border-right: 0; border-bottom: 1px solid var(--line); background: linear-gradient(var(--bg-2), var(--bg)); overflow: auto hidden; }
+.channels { grid-column: 1; grid-row: 2; }
+.chat { grid-column: 2; grid-row: 2; }
+.members { grid-column: 3; grid-row: 2; }
+.stage { grid-column: 2 / 4; grid-row: 2; }
+.logo { display: flex; align-items: center; gap: 8px; font-weight: 700; letter-spacing: .02em; color: #b8a6ff; margin-right: 14px; white-space: nowrap; --spark: #5fd4ff; }
+.logo .i { width: 24px; height: 24px; filter: drop-shadow(0 0 6px rgba(124, 92, 255, .7)); }
+.srv-sep { width: 0; height: 24px; border-top: 0; border-left: 1px solid var(--line); margin: 0 4px; }
+/* tabs with slanted ends, like facets */
+.srv { width: auto; height: 38px; flex: none; border-radius: 0; padding: 0 22px; gap: 8px; display: inline-flex; align-items: center; font-size: 14px; font-weight: 600; color: var(--muted); background: var(--bg-3); clip-path: polygon(11px 0, 100% 0, calc(100% - 11px) 100%, 0 100%); }
+.srv.on { color: #fff; background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 55%, var(--bg-3)), color-mix(in srgb, var(--spark) 35%, var(--bg-3))); box-shadow: inset 0 -2px var(--spark); border-radius: 0; }
+.srv.home, .srv.add { padding: 0 18px; font-size: 14px; }
+.srv.add { color: var(--spark); font-weight: 400; }
+.srv .srv-ic { display: grid; place-items: center; width: 22px; height: 22px; font-size: 10px; font-weight: 800; overflow: hidden; clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); background: color-mix(in srgb, var(--accent) 40%, var(--bg-2)); color: #fff; }
+.srv .srv-ic img { width: 100%; height: 100%; object-fit: cover; border-radius: 0; }
+.srv .srv-name { white-space: nowrap; max-width: 14ch; overflow: hidden; text-overflow: ellipsis; }
+.channels .ch { border-radius: 10px; }
+.channels .ch.on { background: var(--bg-3); box-shadow: inset 3px 0 var(--accent); }
+.chhead { letter-spacing: .12em; }
+/* gem avatars */
+.av { border-radius: 0; clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); }
+.av-letter { background: linear-gradient(135deg, #b8a6ff, #7c5cff); color: #0d0f14; }
+.icon-preview { clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); border-radius: 0; }
+.vc-person.speaking .av, .tile.speaking .av { box-shadow: none; filter: drop-shadow(0 0 5px #3ddc97); }
+/* chat in a centred column */
+.chat header { padding-left: max(20px, calc((100% - 780px) / 2)); padding-right: max(20px, calc((100% - 780px) / 2)); }
+.msgs { padding-left: max(20px, calc((100% - 780px) / 2)); padding-right: max(20px, calc((100% - 780px) / 2)); }
+.composer { padding-left: max(20px, calc((100% - 780px) / 2)); padding-right: max(20px, calc((100% - 780px) / 2)); border-top: 0; }
+.composer textarea, .compose-row textarea { border-radius: 14px; background: var(--bg-2); }
+.mention-pick { left: max(20px, calc((100% - 780px) / 2)); right: max(20px, calc((100% - 780px) / 2)); }
+/* members: a pull-out, opened from the people button */
+.members { position: fixed; right: 0; top: 58px; bottom: 0; z-index: 8; width: 260px; box-shadow: -14px 0 40px #0009; }
+/* the call: a pill that floats above the message box */
+.callbar { position: fixed; left: calc(232px + (100vw - 232px) / 2); bottom: 96px; transform: translateX(-50%); z-index: 9; margin: 0; display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: color-mix(in srgb, var(--bg-2) 92%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--line)); border-radius: 20px; box-shadow: 0 10px 40px rgba(124, 92, 255, .3); }
+.callbar .call-info { padding-right: 12px; border-right: 1px solid var(--line); max-width: 220px; }
+.callbar .call-btns button { flex: none; width: 42px; height: 42px; padding: 0; border-radius: 12px; border: 1px solid var(--line); display: grid; place-items: center; }
+.callbar .call-btns button.active:not(.share-on) { background: color-mix(in srgb, var(--danger) 25%, var(--bg-3)); }
+.callbar .call-btns button.share-on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 35%, var(--bg-3)); box-shadow: 0 0 14px rgba(124, 92, 255, .5); }
+.layout:has(.stage:not(.hidden)) .callbar { display: none; }
+@media (max-width: 860px) { .layout { grid-template-columns: 180px minmax(0, 1fr) auto; } .callbar { left: calc(180px + (100vw - 180px) / 2); } }

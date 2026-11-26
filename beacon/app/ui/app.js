@@ -9,7 +9,7 @@ const $ = (s) => document.querySelector(s);
 // An icon from the sprite in index.html (angular line icons; the cyan spark comes from --spark in the CSS).
 const ic = (name) => `<svg class="i" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const state = { servers: [], bridge: false, sel: { server: "", community: "", channel: "" }, me: "", showMembers: true, profiles: {}, prefs: { theme: "lodestone", accent: "" } };
+const state = { servers: [], bridge: false, sel: { server: "", community: "", channel: "" }, me: "", showMembers: false, profiles: {}, prefs: { theme: "lodestone", accent: "" } };
 
 async function api(path, body) {
   const r = await fetch(path, {
@@ -70,7 +70,7 @@ async function loadState() {
 // ---------- rendering ----------
 function render() {
   const all = communities();
-  $("#communities").innerHTML = `<button class="srv home ${state.home || !all.length ? "on" : ""}" id="home-btn" title="Home: join or create communities">${ic("home")}</button><div class="srv-sep"></div>` + all.map((s) => `<button class="srv ${!state.home && s.server === state.sel.server && s.id === state.sel.community ? "on" : ""}" data-community="${esc(s.id)}" data-server="${esc(s.server)}" title="${esc(s.name)}">${iconHTML(s)}</button>`).join("")
+  $("#communities").innerHTML = `<span class="logo">${ic("beacon")} Beacon</span><button class="srv home ${state.home || !all.length ? "on" : ""}" id="home-btn" title="Home: join or create communities">${ic("home")}</button><div class="srv-sep"></div>` + all.map((s) => `<button class="srv ${!state.home && s.server === state.sel.server && s.id === state.sel.community ? "on" : ""}" data-community="${esc(s.id)}" data-server="${esc(s.server)}" title="${esc(s.name)}"><span class="srv-ic">${iconHTML(s)}</span><span class="srv-name">${esc(s.name)}</span></button>`).join("")
     + `<button class="srv add" id="add-community" title="Join or create a community">${ic("plus")}</button>`;
   const { sp, ch } = current();
   if (!sp || state.home) return renderHome();
@@ -94,7 +94,7 @@ function render() {
   $("#chat").innerHTML = `<header><h3># ${esc(ch.name)}${ch.topic ? `<span class="topic">${esc(ch.topic)}</span>` : ""}</h3><button class="gear" id="toggle-members" title="Show or hide members">${ic("users")}</button><span class="lock" title="Only members' devices can read this channel; the server stores ciphertext.">${ic("lock")} end-to-end encrypted</span></header>
     <div class="msgs" id="msgs"></div><button type="button" class="new-msgs hidden" id="new-msgs">New messages ↓</button>
     <div class="composer">${ch.ready
-      ? '<div id="pending" class="pending hidden"></div><div class="compose-row"><button type="button" class="emoji-btn" id="attach-btn" title="Attach a file or image (or paste / drop one)">${ic("attach")}</button><textarea id="text" placeholder="Message (Enter to send, Shift+Enter for a new line)" maxlength="8000"></textarea><button type="button" class="emoji-btn" id="emoji-btn" title="Emoji">${ic("smile")}</button></div>'
+      ? `<div id="pending" class="pending hidden"></div><div class="compose-row"><button type="button" class="emoji-btn" id="attach-btn" title="Attach a file or image (or paste / drop one)">${ic("attach")}</button><textarea id="text" placeholder="Message (Enter to send, Shift+Enter for a new line)" maxlength="8000"></textarea><button type="button" class="emoji-btn" id="emoji-btn" title="Emoji">${ic("smile")}</button></div>`
       : '<p class="muted">You\'re a member, but no one in this channel has been online to give your device its keys yet. It happens automatically.</p>'}</div>`;
   // Stick to the newest message only while you're at the bottom; pictures that finish loading keep
   // you there. Scrolled up, you stay where you are.
