@@ -426,3 +426,19 @@ button .i { width: 20px; height: 20px; }
 .share-banner .sb-item { display: flex; align-items: center; gap: 8px; padding: 2px 4px 2px 10px; background: color-mix(in srgb, var(--bg) 40%, transparent); border: 1px solid color-mix(in srgb, var(--spark) 32%, transparent); border-radius: 8px; }
 .share-banner .sb-item .i { color: var(--spark); width: 16px; height: 16px; }
 .share-banner button { padding: 2px 12px; font-size: 12px; font-weight: 700; border-radius: 0; clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%); }
+
+/* welcome: quieter */
+.hero { padding: 40px 16px 22px; }
+.hero h1 { font-size: 34px; margin-bottom: 4px; }
+.hero-sub { font-size: 16px; letter-spacing: .01em; }
+.home-more { margin-top: 12px; justify-content: center; }
+.home-more .ghost { border-color: transparent; background: none; color: var(--muted); }
+.home-more .ghost:hover { color: var(--text); }
+.tips-box { margin-top: 22px; }
+.tips-box summary { cursor: pointer; color: var(--muted); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; font-weight: 600; list-style: none; text-align: center; }
+.tips-box summary::-webkit-details-marker { display: none; }
+.tips-box summary::after { content: " +"; }
+.tips-box[open] summary::after { content: " –"; }
+.tips-box .tips { margin-top: 12px; }
+.test-note { display: flex; gap: 8px; align-items: center; justify-content: center; margin: 24px 0 0; font-size: 12px; text-align: center; }
+.test-note .i { flex: none; width: 14px; height: 14px; }
