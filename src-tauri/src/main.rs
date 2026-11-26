@@ -358,7 +358,7 @@ async fn install_game(id: String, inner: State<'_, Shared>) -> Result<String, St
     let game = inner.games.lock().unwrap().get(&id).cloned().ok_or("Unknown game")?;
     if let Some(app) = id.strip_prefix("epic:").filter(|_| stores::epic::account().is_some() && game.install.is_none()) {
         tools::LEGENDARY.ensure().await?;
-        if tools::umu_path().is_none() {
+        if !cfg!(windows) && tools::umu_path().is_none() {
             tools::install_umu().await?;
         }
         downloads::start(&id, &game.title, &stores::epic::install_cmd(app)?, None)?;
@@ -366,7 +366,7 @@ async fn install_game(id: String, inner: State<'_, Shared>) -> Result<String, St
     }
     if let Some(gid) = id.strip_prefix("gog:").filter(|_| stores::gog::account().is_some() && game.install.is_none()) {
         tools::GOGDL.ensure().await?;
-        if tools::umu_path().is_none() {
+        if !cfg!(windows) && tools::umu_path().is_none() {
             tools::install_umu().await?;
         }
         let (g2, t2) = (gid.to_string(), game.title.clone());

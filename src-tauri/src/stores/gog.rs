@@ -195,6 +195,10 @@ pub fn installed() -> Vec<Installed> {
 }
 
 fn launch_spec(i: &Installed) -> Option<LaunchSpec> {
+    // Windows: gogdl starts the game itself, natively.
+    if cfg!(windows) {
+        return gogdl(&["launch", &i.path, &i.id, "--platform", "windows"]).ok();
+    }
     let umu = tools::umu_path()?;
     let mut s = gogdl(&["launch", &i.path, &i.id, "--platform", "windows", "--no-wine", "--wrapper", &umu.to_string_lossy()]).ok()?;
     let pfx = prefix(&i.id);
@@ -220,7 +224,7 @@ pub fn scan() -> Vec<Game> {
             Game {
                 id: format!("gog:{}", e.id),
                 store: "gog".into(),
-                via: "Lodestone · Proton".into(),
+                via: if cfg!(windows) { "Lodestone".into() } else { "Lodestone · Proton".into() },
                 title: e.title.clone(),
                 installed: i.is_some(),
                 cover: e.cover.clone(),
@@ -229,7 +233,8 @@ pub fn scan() -> Vec<Game> {
                 detect: i.and_then(|i| Path::new(&i.path).file_name()).map(|n| Detect::Contains(n.to_string_lossy().into_owned())),
                 can_install: i.is_none(),
                 can_uninstall: i.is_some(),
-                prefix: Some(path_str(&prefix(&e.id))),
+                // Windows games run natively there: no Wine prefix.
+                prefix: (!cfg!(windows)).then(|| path_str(&prefix(&e.id))),
                 update: update.then(|| "available".into()),
                 update_via: update.then(|| "lodestone".into()),
                 genres: e.genres.clone().unwrap_or_default(),
