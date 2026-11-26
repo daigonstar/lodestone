@@ -227,6 +227,18 @@ async fn server_settings_and_permissions() {
     assert_eq!(res.headers()["content-type"], "image/png");
     assert_eq!(res.headers()["x-content-type-options"], "nosniff");
 
+    // Banner: same rules as the icon.
+    assert_eq!(put_raw(&app, &format!("{sp_path}/banner"), &ta, b"<svg onload=alert(1)>".to_vec()).await, StatusCode::BAD_REQUEST);
+    assert_eq!(put_raw(&app, &format!("{sp_path}/banner"), &tb, png.clone()).await, StatusCode::FORBIDDEN);
+    assert_eq!(put_raw(&app, &format!("{sp_path}/banner"), &ta, png.clone()).await, StatusCode::OK);
+    let req = Request::builder().uri(format!("{sp_path}/banner")).header("authorization", format!("Bearer {tc}")).body(Body::empty()).unwrap();
+    let res = crate::api::router(app.clone()).oneshot(req).await.unwrap();
+    assert_eq!((res.headers()["content-type"].to_str().unwrap(), res.headers()["x-content-type-options"].to_str().unwrap()), ("image/png", "nosniff"));
+    let (_, got) = call(&app, "GET", &sp_path, Some(&tc), Value::Null).await;
+    assert_eq!(got["has_banner"].as_bool(), Some(true));
+    assert_eq!(call(&app, "DELETE", &format!("{sp_path}/banner"), Some(&tb), Value::Null).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(&app, "DELETE", &format!("{sp_path}/banner"), Some(&ta), Value::Null).await.0, StatusCode::OK);
+
     // Channels: create, rename with a topic, reorder, delete (never the last one).
     let (_, raids) = call(&app, "POST", &format!("{sp_path}/channels"), Some(&ta), json!({ "name": "raids" })).await;
     let raids = raids["id"].as_str().unwrap().to_string();

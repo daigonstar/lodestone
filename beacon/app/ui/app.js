@@ -155,12 +155,15 @@ function renderHome() {
     <div id="callbar"></div>${servers.length ? meBar() : ""}`;
   renderVoice();
   $("#chat").dataset.key = "";
+  if (state.wizard) return renderWizard();
   $("#chat").innerHTML = `<div class="home-page">
     <div class="hero">
       <div class="hero-mark"><span class="hero-rings" aria-hidden="true"></span>${ic("beacon")}</div>
       <h1>Beacon</h1>
-      <p class="hero-sub">Your people, one signal away.</p>
+      <p class="hero-sub">Find your people. Keep it private.</p>
     </div>
+    ${all.length ? `<h3 class="home-h">Your communities</h3><div class="cc-grid">${all.map(communityCard).join("")}</div>` : ""}
+    ${all.length ? '<h3 class="home-h">Join or create</h3>' : ""}
     <div class="home-cards">
       <section class="card">
         <div class="card-head"><span class="card-ic">${ic("link")}</span><div><h3>Join a community</h3><p class="muted">Paste a friend's invite link.</p></div></div>
@@ -715,6 +718,37 @@ function forgetIcon(s) {
   icons.delete(key);
 }
 
+// Banners (shown on a community's card on the home page) are fetched the same way as icons.
+const banners = new Map();
+function bannerHTML(s) {
+  const key = s.server + "|" + s.id;
+  const url = banners.get(key);
+  if (url) return `<img src="${esc(url)}" alt="">`;
+  if (s.has_banner && !banners.has(key)) {
+    banners.set(key, "");
+    fetch(`/api/banner?server=${encodeURIComponent(s.server)}&community=${encodeURIComponent(s.id)}`, { headers: { "x-beacon-token": TOKEN } })
+      .then((r) => (r.ok ? r.blob() : null))
+      .then((b) => { if (b) { banners.set(key, URL.createObjectURL(b)); render(); } });
+  }
+  return "";
+}
+function forgetBanner(s) {
+  const key = s.server + "|" + s.id;
+  const url = banners.get(key);
+  if (url) URL.revokeObjectURL(url);
+  banners.delete(key);
+}
+// A community on the home page: its banner (or a colour picked from its name), icon, name and description.
+function communityCard(s) {
+  const tone = [...s.name].reduce((n, c) => n + c.codePointAt(0), 0) % 6;
+  const people = (s.members || []).length;
+  return `<button type="button" class="cc" data-community="${esc(s.id)}" data-server="${esc(s.server)}">
+    <span class="cc-banner tone${tone}">${bannerHTML(s)}</span>
+    <span class="cc-body"><span class="icon-preview cc-icon">${iconHTML(s)}</span>
+      <span class="cc-text"><b>${esc(s.name)}</b><small>${esc(s.description || `${people} ${people === 1 ? "person" : "people"}`)}</small></span></span>
+  </button>`;
+}
+
 // ---------- community settings ----------
 /** A confirmation using Beacon's own dialog (native confirm() isn't reliable inside Lodestone's frame).
  *  With `typed`, the person has to type that text to confirm. */
@@ -759,8 +793,10 @@ function tabOverview(sp, admin) {
         <label>Name<input id="s-name" maxlength="64" value="${esc(sp.name)}" ${admin ? "" : "disabled"}></label>
         <label>Description<textarea id="s-desc" class="desc" maxlength="500" ${admin ? "" : "disabled"}>${esc(sp.description || "")}</textarea></label>
       </div></div>
+    ${admin ? `<div class="s-banner"><span class="cc-banner tone0">${bannerHTML(sp)}</span><div><b>Banner</b><p class="muted">Shown on your community's card on everyone's home page. A wide picture works best (up to 512 KiB).</p>
+      <div class="row"><button type="button" class="ghost" id="s-banner">Change banner…</button>${sp.has_banner ? '<button type="button" class="ghost" id="s-banner-rm">Remove banner</button>' : ""}</div></div></div>` : ""}
     ${admin ? `<div class="row end"><button type="button" class="ghost" id="s-icon">Change icon…</button>${sp.has_icon ? '<button type="button" class="ghost" id="s-icon-rm">Remove icon</button>' : ""}<button type="button" class="primary" id="s-save">Save</button></div>` : ""}
-    <p class="muted" style="margin-top:18px">Community names, descriptions, icons, channel names and topics are visible to the server. Messages are not.</p>
+    <p class="muted" style="margin-top:18px">Community names, descriptions, icons, banners, channel names and topics are visible to the server. Messages are not.</p>
     <div class="row end" style="margin-top:18px">
       ${owner ? '<button type="button" class="danger" id="s-delete">Delete community…</button>' : '<button type="button" class="danger" id="s-leave">Leave community</button>'}
     </div>`;
@@ -776,6 +812,18 @@ function tabOverview(sp, admin) {
       forgetIcon(sp);
       after("overview", () => api("/api/icon", { server: sp.server, community: sp.id, data }));
     };
+    $("#s-banner").onclick = () => $("#banner-file").click();
+    $("#banner-file").onchange = async (e) => {
+      const f = e.target.files[0];
+      e.target.value = "";
+      if (!f) return;
+      if (f.size > 512 * 1024) return toast("Banners can be at most 512 KiB", true);
+      const data = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.readAsDataURL(f); });
+      forgetBanner(sp);
+      after("overview", () => api("/api/banner", { server: sp.server, community: sp.id, data }));
+    };
+    const brm = $("#s-banner-rm");
+    if (brm) brm.onclick = () => { forgetBanner(sp); after("overview", () => manage("DELETE", `/v1/communities/${sp.id}/banner`)); };
     const rm = $("#s-icon-rm");
     if (rm) rm.onclick = () => { forgetIcon(sp); after("overview", () => manage("DELETE", `/v1/communities/${sp.id}/icon`)); };
   }
@@ -969,6 +1017,115 @@ function setupDialog() {
     });
 }
 
+// ---------- guided server setup ----------
+// A page (not a dialog) that walks through running a Beacon server, on this device or another one, then
+// signing in as its admin and making the first community. It only explains and checks: nothing is
+// downloaded or started for you.
+const copyBtn = (text) => `<button type="button" class="ghost copy" data-copy="${esc(text)}">Copy</button>`;
+const cmd = (text) => `<div class="cmd"><code>${esc(text)}</code>${copyBtn(text)}</div>`;
+function setupDialog() { if ($("#dlg").open) $("#dlg").close(); state.wizard = { step: "where" }; state.home = true; render(); }
+function renderWizard() {
+  const w = state.wizard;
+  const here = w.where === "here";
+  const order = ["where", ...(here ? ["reach"] : []), "run", "connect", "done"];
+  const labels = { where: "Where", reach: "Who", run: "Run it", connect: "Connect", done: "First community" };
+  const i = order.indexOf(w.step);
+  const steps = `<ol class="wiz-steps">${order.map((k, n) => `<li class="${n < i ? "past" : n === i ? "now" : ""}"><span>${n < i ? ic("check") : n + 1}</span>${labels[k]}</li>`).join("")}</ol>`;
+  const nav = (back, next, nextLabel = "Continue") => `<div class="row end wiz-nav">${back ? `<button type="button" class="ghost" data-wiz="${back}">Back</button>` : ""}${next ? `<button type="button" class="primary" data-wiz="${next}">${nextLabel}</button>` : ""}</div>`;
+  let body = "";
+  if (w.step === "where") {
+    body = `<h2>Where will the server run?</h2><p class="muted">A server is the program that passes your community's encrypted messages along. It never sees what's in them.</p>
+      <div class="wiz-choices">
+        <button type="button" class="wiz-choice" data-wiz-where="here"><span class="card-ic">${ic("gamepad")}</span><b>On this device</b><small>Simplest to start. It only works while this computer is on and online.</small></button>
+        <button type="button" class="wiz-choice" data-wiz-where="other"><span class="card-ic">${ic("stream")}</span><b>On another device</b><small>A home server, NAS, Raspberry Pi or rented server that stays on all the time.</small></button>
+      </div>
+      <div class="row end wiz-nav"><button type="button" class="ghost" data-wiz="exit">Cancel</button></div>`;
+  } else if (w.step === "reach") {
+    body = `<h2>Who will use it?</h2>
+      <div class="wiz-choices">
+        <button type="button" class="wiz-choice ${w.reach === "local" ? "on" : ""}" data-wiz-reach="local"><span class="card-ic">${ic("home")}</span><b>Just me, to try it out</b><small>Only this computer can reach it. Nothing to set up on your router or with a domain.</small></button>
+        <button type="button" class="wiz-choice ${w.reach === "net" ? "on" : ""}" data-wiz-reach="net"><span class="card-ic">${ic("users")}</span><b>Me and my friends</b><small>Needs a domain name, and a way to reach this computer from the internet.</small></button>
+      </div>${nav("where", null)}`;
+  } else if (w.step === "run") {
+    const local = here && w.reach === "local";
+    const where = here ? "on this computer" : "on the other device";
+    body = `<h2>Start the server ${where}</h2>` + (local ? `
+      <p class="muted">From the Beacon folder of the Lodestone source, in a terminal:</p>
+      ${cmd("cargo run -p lodestone-beacon-server")}
+      <p class="muted">It listens on port 8080 and prints a <b>one-time setup code</b> in its output. Keep that window open and copy the code.</p>` : `
+      <p class="muted">You need Docker on ${here ? "this computer" : "that device"}. Copy the <b>beacon</b> folder (it holds <code>compose.yml</code>) there, open a terminal in it, and run, with your own domain:</p>
+      ${cmd("BEACON_DOMAIN=beacon.yourdomain.com docker compose up -d")}
+      ${cmd("docker compose logs beacon")}
+      <p class="muted">The second command shows the <b>one-time setup code</b>; copy it.</p>
+      <div class="wiz-note"><b>Make it reachable.</b> Point your domain at ${here ? "this computer" : "that device"} and forward the ports the compose file opens on your router. If you use a reverse proxy or a Cloudflare Tunnel instead, the README has a variant (<code>compose.proxy.yml</code>). ${here ? "Friends can only join while this computer is on." : ""}</div>
+      <div class="wiz-note"><b>Voice and video</b> travel over UDP: forward port 7881 and set <code>BEACON_MEDIA_ADDR</code> (see the README). Text chat works without it.</div>`) + nav(here ? "reach" : "where", "connect");
+  } else if (w.step === "connect") {
+    const local = here && w.reach === "local";
+    body = `<h2>Connect and create your admin account</h2>
+      <form id="wiz-form" class="stack">
+        <label>Server address<div class="row"><input name="server" autocomplete="off" spellcheck="false" required value="${esc(w.server || (local ? "localhost:8080" : ""))}" placeholder="beacon.yourdomain.com"><button type="button" class="ghost" id="wiz-check">Check</button></div></label>
+        <p class="muted" id="wiz-probe"></p>
+        <label>Setup code<input name="code" autocomplete="off" required placeholder="From the server's output"></label>
+        <label>Your username<input name="username" autocomplete="off" spellcheck="false" required placeholder="2 to 32: a-z 0-9 _ . -"></label>
+        <p class="err" id="wiz-err"></p>
+        <div class="row end wiz-nav"><button type="button" class="ghost" data-wiz="run">Back</button><button class="primary">Create account</button></div>
+      </form>`;
+  } else {
+    body = `<h2>You're set up. Make your first community</h2>
+      <form id="wiz-first" class="stack"><label>Community name<input name="name" maxlength="64" required placeholder="Friday raids" autocomplete="off"></label>
+        <p class="muted">You can add an icon and a banner afterwards, in the community's settings.</p>
+        <p class="err" id="wiz-err"></p>
+        <div class="row end wiz-nav"><button type="button" class="ghost" data-wiz="exit">Skip for now</button><button class="primary">Create community</button></div></form>`;
+  }
+  $("#chat").innerHTML = `<div class="home-page wizard"><button type="button" class="ghost wiz-exit" data-wiz="exit">${ic("close")} Exit setup</button>${steps}<div class="wiz-body">${body}</div></div>`;
+  const form = $("#wiz-form");
+  if (form) {
+    const probe = async () => {
+      const server = new FormData(form).get("server");
+      w.server = server;
+      $("#wiz-probe").className = "muted";
+      $("#wiz-probe").textContent = "Checking…";
+      try { const r = await api("/api/probe", { server }); $("#wiz-probe").className = "ok"; $("#wiz-probe").textContent = `Found a Beacon server at ${r.server.replace(/^https?:\/\//, "")}.`; return true; }
+      catch (e) { $("#wiz-probe").className = "err"; $("#wiz-probe").textContent = e.message; return false; }
+    };
+    $("#wiz-check").onclick = probe;
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const f = new FormData(form);
+      try {
+        const r = await api("/api/setup", { server: f.get("server"), code: f.get("code"), username: f.get("username") });
+        w.server = r.server;
+        w.step = "done";
+        await loadState();
+        render();
+      } catch (err) { $("#wiz-err").textContent = err.message; }
+    };
+  }
+  const first = $("#wiz-first");
+  if (first) first.onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api("/api/communities", { server: w.server, name: new FormData(first).get("name") });
+      state.wizard = null;
+      state.home = false;
+      state.sel = { server: w.server, community: r.community, channel: "" };
+      await loadState();
+    } catch (err) { $("#wiz-err").textContent = err.message; }
+  };
+}
+document.addEventListener("click", (e) => {
+  const w = state.wizard;
+  if (!w) return;
+  const copy = e.target.closest("[data-copy]");
+  if (copy) { navigator.clipboard?.writeText(copy.dataset.copy).then(() => toast("Copied"), () => toast("Press Ctrl+C to copy")); return; }
+  const where = e.target.closest("[data-wiz-where]");
+  if (where) { w.where = where.dataset.wizWhere; w.step = w.where === "here" ? "reach" : "run"; return renderWizard(); }
+  const reach = e.target.closest("[data-wiz-reach]");
+  if (reach) { w.reach = reach.dataset.wizReach; w.step = "run"; return renderWizard(); }
+  const go = e.target.closest("[data-wiz]");
+  if (go) { if (go.dataset.wiz === "exit") { state.wizard = null; return render(); } w.step = go.dataset.wiz; renderWizard(); }
+});
+
 function newServerDialog(server) {
   ask("Create a community", `<label>Name<input name="name" maxlength="64" required placeholder="Friday raids"></label>`, "Create", async (f) => {
     const r = await api("/api/communities", { server, name: f.get("name") });
@@ -1042,7 +1199,7 @@ function channelDialog() {
 
 document.addEventListener("click", (e) => {
   const s = e.target.closest("[data-community]");
-  if (s) { state.home = false; state.sel = { server: s.dataset.server, community: s.dataset.community, channel: "" }; return loadState(); }
+  if (s) { state.wizard = null; state.home = false; state.sel = { server: s.dataset.server, community: s.dataset.community, channel: "" }; return loadState(); }
   if (e.target.closest("#home-btn")) { state.home = true; voice.view = false; renderStage(); return render(); }
   const c = e.target.closest("[data-channel]");
   if (c) { state.sel.channel = c.dataset.channel; voice.view = false; clearMentions(state.sel.server, c.dataset.channel); renderStage(); return render(); }

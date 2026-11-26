@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 const MAX_ICON: usize = 256 * 1024;
+const MAX_BANNER: usize = 512 * 1024;
 
 fn clean_text(t: &str, max: usize, what: &str) -> ApiResult<String> {
     let t = t.trim();
@@ -95,6 +96,39 @@ pub async fn get_icon(State(app): State<Shared>, me: Auth, Path(community): Path
         c.query_row("SELECT icon, icon_type FROM communities WHERE id = ?1 AND icon IS NOT NULL", [&community], |r| Ok((r.get(0)?, r.get(1)?))).optional()
     })?;
     let (bytes, kind) = icon.ok_or_else(|| ApiError::not_found("No icon"))?;
+    let mut h = HeaderMap::new();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_str(&kind).unwrap_or(HeaderValue::from_static("application/octet-stream")));
+    h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+    h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'"));
+    Ok((h, bytes).into_response())
+}
+
+/// `PUT /v1/communities/{community}/banner` with the image as the body (PNG, JPEG, GIF or WebP, up to 512 KiB).
+pub async fn put_banner(State(app): State<Shared>, me: Auth, Path(community): Path<String>, body: Bytes) -> ApiResult<Json<Value>> {
+    require_admin(&app, &community, &me)?;
+    if body.len() > MAX_BANNER {
+        return Err(ApiError::bad("Community banners can be at most 512 KiB"));
+    }
+    let kind = image_type(&body).ok_or_else(|| ApiError::bad("Community banners must be PNG, JPEG, GIF or WebP"))?;
+    app.db.with(|c| c.execute("UPDATE communities SET banner = ?2, banner_type = ?3 WHERE id = ?1", params![community, body.to_vec(), kind]))?;
+    updated(&app, &community);
+    Ok(Json(json!({ "ok": true })))
+}
+
+pub async fn delete_banner(State(app): State<Shared>, me: Auth, Path(community): Path<String>) -> ApiResult<Json<Value>> {
+    require_admin(&app, &community, &me)?;
+    app.db.with(|c| c.execute("UPDATE communities SET banner = NULL, banner_type = NULL WHERE id = ?1", [&community]))?;
+    updated(&app, &community);
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// The banner, for members. Served the same careful way as the icon.
+pub async fn get_banner(State(app): State<Shared>, me: Auth, Path(community): Path<String>) -> ApiResult<Response> {
+    require_member(&app, &community, &me)?;
+    let banner: Option<(Vec<u8>, String)> = app.db.with(|c| {
+        c.query_row("SELECT banner, banner_type FROM communities WHERE id = ?1 AND banner IS NOT NULL", [&community], |r| Ok((r.get(0)?, r.get(1)?))).optional()
+    })?;
+    let (bytes, kind) = banner.ok_or_else(|| ApiError::not_found("No banner"))?;
     let mut h = HeaderMap::new();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_str(&kind).unwrap_or(HeaderValue::from_static("application/octet-stream")));
     h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));

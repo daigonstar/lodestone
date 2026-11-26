@@ -95,6 +95,8 @@ Roles: **owner** (one per community), **admin**, **member**. Names: 1 to 64 char
 | `PATCH /v1/communities/{community}` `{ name?, description? }` | owner or admin | renames the community or sets its description (up to 500 characters) |
 | `PUT /v1/communities/{community}/icon` (image body) / `DELETE` | owner or admin | sets or removes the icon: PNG, JPEG, GIF or WebP, up to 256 KiB, checked by its first bytes |
 | `GET /v1/communities/{community}/icon` | member | the icon, with `nosniff` and a CSP that runs nothing |
+| `PUT /v1/communities/{community}/banner` (image body) / `DELETE` | owner or admin | sets or removes the banner shown on the community's home-page card: same image rules as the icon, up to 512 KiB |
+| `GET /v1/communities/{community}/banner` | member | the banner, served like the icon |
 | `DELETE /v1/communities/{community}` | owner | deletes the community with its channels, messages and invites |
 | `PATCH /v1/channels/{channel}` `{ name?, topic? }` / `DELETE` | owner or admin | renames a channel, sets its topic (up to 300 characters), or deletes it (a community keeps at least one) |
 | `PUT /v1/communities/{community}/channel-order` `{ channels: [...] }` | owner or admin | the channel order; must list every channel once |

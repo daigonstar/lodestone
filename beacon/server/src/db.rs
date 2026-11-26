@@ -110,6 +110,8 @@ const ADDED: &[(&str, &str, &str)] = &[
     ("communities", "description", "TEXT NOT NULL DEFAULT ''"),
     ("communities", "icon", "BLOB"),
     ("communities", "icon_type", "TEXT"),
+    ("communities", "banner", "BLOB"),
+    ("communities", "banner_type", "TEXT"),
     ("channels", "topic", "TEXT NOT NULL DEFAULT ''"),
     ("channels", "position", "INTEGER NOT NULL DEFAULT 0"),
     ("accounts", "status", "TEXT NOT NULL DEFAULT 'online'"),

@@ -56,6 +56,8 @@ pub fn router(app: Shared) -> Router {
         .route("/api/events", get(events))
         .route("/api/manage", post(manage))
         .route("/api/icon", get(icon).post(set_icon))
+        .route("/api/banner", get(banner).post(set_banner).layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)))
+        .route("/api/probe", post(probe))
         .route("/api/voice", get(voice_status))
         .route("/api/voice/join", post(voice_join))
         .route("/api/voice/leave", post(voice_leave))
@@ -651,11 +653,20 @@ struct IconQuery {
 
 /// A community's icon, fetched from its server for the page.
 async fn icon(State(app): State<Shared>, Query(q): Query<IconQuery>) -> Response {
-    let Ok(c) = client(&app, &q.server) else { return StatusCode::NOT_FOUND.into_response() };
+    community_image(&app, q, "icon").await
+}
+
+/// A community's banner, fetched the same way.
+async fn banner(State(app): State<Shared>, Query(q): Query<IconQuery>) -> Response {
+    community_image(&app, q, "banner").await
+}
+
+async fn community_image(app: &Shared, q: IconQuery, what: &str) -> Response {
+    let Ok(c) = client(app, &q.server) else { return StatusCode::NOT_FOUND.into_response() };
     if ensure_signed_in(&c).await.is_err() || !q.community.bytes().all(|b| b.is_ascii_hexdigit()) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    match c.server.get_raw(&format!("/v1/communities/{}/icon", q.community)).await {
+    match c.server.get_raw(&format!("/v1/communities/{}/{what}", q.community)).await {
         Ok((bytes, kind)) if kind.starts_with("image/") && !kind.contains("svg") => {
             let mut r = Response::new(Body::from(bytes));
             r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_str(&kind).unwrap_or(HeaderValue::from_static("image/png")));
@@ -676,13 +687,32 @@ struct SetIcon {
 }
 
 async fn set_icon(State(app): State<Shared>, Json(r): Json<SetIcon>) -> R {
-    let c = client(&app, &r.server)?;
+    put_community_image(&app, r, "icon").await
+}
+
+async fn set_banner(State(app): State<Shared>, Json(r): Json<SetIcon>) -> R {
+    put_community_image(&app, r, "banner").await
+}
+
+#[derive(Deserialize)]
+struct ProbeReq {
+    server: String,
+}
+
+/// The setup guide's "is it reachable?" check: asks what was typed for its Beacon details (nothing is sent but the request).
+async fn probe(Json(r): Json<ProbeReq>) -> R {
+    let url = lodestone_beacon_client::discover::discover(&r.server).await.map_err(Fail)?;
+    Ok(Json(json!({ "server": url })))
+}
+
+async fn put_community_image(app: &Shared, r: SetIcon, what: &str) -> R {
+    let c = client(app, &r.server)?;
     ensure_signed_in(&c).await?;
     if !r.community.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(Fail("Bad community".into()));
     }
     let bytes = lodestone_beacon_client::server::unb64(&r.data).ok_or_else(|| Fail("Bad image".into()))?;
-    c.server.put_raw(&format!("/v1/communities/{}/icon", r.community), bytes).await?;
+    c.server.put_raw(&format!("/v1/communities/{}/{what}", r.community), bytes).await?;
     let _ = app.events.send(json!({ "type": "state" }).to_string());
     Ok(Json(json!({ "ok": true })))
 }

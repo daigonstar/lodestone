@@ -33,6 +33,7 @@ pub fn router(app: Shared) -> Router {
         .route("/v1/communities", post(create_community))
         .route("/v1/communities/{community}", get(get_community).patch(settings::update_community).delete(settings::delete_community))
         .route("/v1/communities/{community}/icon", get(settings::get_icon).put(settings::put_icon).delete(settings::delete_icon))
+        .route("/v1/communities/{community}/banner", get(settings::get_banner).put(settings::put_banner).delete(settings::delete_banner))
         .route("/v1/communities/{community}/channels", post(create_channel))
         .route("/v1/communities/{community}/channel-order", axum::routing::put(settings::reorder_channels))
         .route("/v1/communities/{community}/invites", post(create_invite).get(settings::list_invites))
@@ -172,8 +173,8 @@ async fn create_community(State(app): State<Shared>, me: Auth, Json(r): Json<Nam
 async fn get_community(State(app): State<Shared>, me: Auth, Path(community): Path<String>) -> ApiResult<Json<Value>> {
     let role = require_member(&app, &community, &me)?;
     let out = app.db.with(|c| {
-        let (name, description, has_icon): (String, String, bool) =
-            c.query_row("SELECT name, description, icon IS NOT NULL FROM communities WHERE id = ?1", [&community], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        let (name, description, has_icon, has_banner): (String, String, bool, bool) =
+            c.query_row("SELECT name, description, icon IS NOT NULL, banner IS NOT NULL FROM communities WHERE id = ?1", [&community], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
         let channels: Vec<Value> = c
             .prepare("SELECT id, name, epoch, topic, kind FROM channels WHERE community = ?1 ORDER BY position, created, name")?
             .query_map([&community], |r| {
@@ -195,7 +196,7 @@ async fn get_community(State(app): State<Shared>, me: Auth, Path(community): Pat
             let text = if presence == "offline" { String::new() } else { status_text };
             members.push(json!({ "username": username, "role": role, "devices": devices, "presence": presence, "status_text": text }));
         }
-        Ok(json!({ "id": community, "name": name, "description": description, "has_icon": has_icon, "your_role": role, "channels": channels, "members": members }))
+        Ok(json!({ "id": community, "name": name, "description": description, "has_icon": has_icon, "has_banner": has_banner, "your_role": role, "channels": channels, "members": members }))
     })?;
     Ok(Json(out))
 }
