@@ -35,6 +35,24 @@ mod count), `--status <id>`. Action commands: `--game <id>` (open on a game, for
 instance), `--play <id>`, `--play-vanilla <id>`. Unknown fields are ignored and missing optional ones
 tolerated (older Kiln versions lack `mods`), so a companion can add fields without breaking Lodestone.
 
+## Installing and updating (`plugin_sources.rs`)
+
+- **Official** plug-ins are a fixed list in the code (`official()`: id, repo, release tag prefix). A clean
+  install knows nothing else.
+- **Third-party**: you type `owner/repo` on the Plug-ins page; it's stored only in your settings
+  (`plugin_repos`), like a Comms server address. GitHub only, name checked (`parse_repo`).
+- A release is usable when it isn't a draft or pre-release, has the tag prefix, and has a file ending
+  `-linux-x86_64.flatpak` (Linux) or `-windows-x86_64.zip` (Windows). The file must be downloaded from
+  `https://github.com/<repo>/releases/download/` and carry GitHub's `sha256:` digest, which is checked.
+- Optional `lodestone-plugin.json` in the release (≤16 KB): `name`, `description`, `kind`
+  (`embedded` or `companion`), `permissions`. It's only shown to you before installing.
+- Checks happen only when the Plug-ins page is opened; installs only on a button press.
+- Linux installs the Flatpak for your user. Windows unpacks the zip to
+  `%LOCALAPPDATA%\Lodestone\Plugins\<id>\<version>` with `current.txt` naming the version in use (Comms
+  keeps its older `Comms\` layout).
+- Not built yet: running third-party *embedded* plug-ins (the host in `plugins.rs` handles only Comms),
+  and release signing. Third-party plug-ins other than Flatpaks are not sandboxed.
+
 ## Windows
 
 - Locating a program: on Linux, PATH then the `.desktop` entry; on Windows there are no `.desktop` files,
@@ -43,7 +61,7 @@ tolerated (older Kiln versions lack `mods`), so a companion can add fields witho
 
 ## Open questions for the write-up
 
-- Should companions be able to be installed by Lodestone (releases + checksum), like Comms?
+- Release signing (public key built into Lodestone) to protect against a taken-over repository.
 - Should a companion get a bridge (events, permissions) so it can show state inside Lodestone?
 - A manifest file (`plugin.json`) instead of ids hard-coded in `plugins.rs`, so third parties can add
   plug-ins without changing Lodestone. Today adding one means editing `plugins.rs` and `app.js`.

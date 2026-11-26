@@ -302,7 +302,7 @@ pub fn list() -> Vec<PluginInfo> {
         running: false,
         version: None,
         permissions: vec![],
-        install_hint: "Kiln isn't installed. Lodestone doesn't download it yet: get it from github.com/daigonstar/kiln and make sure `kiln` runs from a terminal.",
+        install_hint: "Kiln isn't installed. Lodestone can install it from its official releases on GitHub once Kiln publishes one; until then, get it from github.com/daigonstar/kiln and make sure `kiln` runs from a terminal.",
         kind: "companion",
         enabled: enabled(KILN),
         uses: vec![

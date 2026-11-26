@@ -53,6 +53,9 @@ pub struct Settings {
     /// Plug-ins you switched off (Plug-ins page). A plug-in that isn't listed is on.
     #[serde(default)]
     pub plugins_disabled: Vec<String>,
+    /// GitHub repositories ("owner/repo") you added for third-party plug-ins. Only here, never built in.
+    #[serde(default)]
+    pub plugin_repos: Vec<String>,
 }
 
 fn yes() -> bool {

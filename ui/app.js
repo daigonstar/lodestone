@@ -909,7 +909,7 @@ function render() {
   $("#comms").classList.toggle("hidden", !commsView);
   $("#plugins").classList.toggle("hidden", !pluginsView);
   // Opening Plug-ins looks up the latest Comms release (only then: never in the background).
-  if (pluginsView && render.prevView !== "plugins") checkCommsRelease();
+  if (pluginsView && render.prevView !== "plugins") { checkCommsRelease(); checkPluginReleases(); }
   render.prevView = state.view;
   if (pluginsView) {
     for (const el of ["#empty", "#mini", "#mc", "#shop", "#downloads"]) $(el).classList.add("hidden");
@@ -1734,21 +1734,40 @@ function renderPluginsPage() {
       <div class="plugin-head"><div><h2>${esc(p.name)}</h2><p class="muted">${esc(p.description)}</p></div><span class="plugin-status ${p.running ? "on" : ""}">${status}</span></div>
       ${p.note ? `<p class="warn-text">${esc(p.note)}</p>` : ""}
       ${body}
-      ${p.id === "comms" ? commsReleaseHTML(p) : ""}
+      ${p.id === "comms" ? commsReleaseHTML(p) : p.id === "kiln" ? releaseHTML("kiln", p) : ""}
       <div class="row-btns">
         ${p.installed && !companion ? `<button class="play" data-view="${p.id === "comms" ? "comms" : ""}">Open</button>` : ""}
         ${companion && p.installed ? `<button class="${p.enabled ? "ghost" : "play"}" data-plugin-act="${p.enabled ? "disable" : "enable"}">${p.enabled ? "Turn off" : "Turn on"}</button>` : ""}
         ${p.id === "comms" && state.commsRelease?.latest && (!p.installed || state.commsRelease.update) ? `<button class="${p.installed ? "ghost" : "play"}" data-plugin-act="install">${p.installed ? "Update to" : "Install Comms"} ${esc(state.commsRelease.latest)}</button>` : ""}
+        ${p.id === "kiln" ? installBtn("kiln", p) : ""}
         ${p.running ? '<button class="ghost" data-plugin-act="stop">Stop</button>' : ""}
         ${anyGranted ? '<button class="ghost" data-plugin-act="revoke">Revoke permissions</button>' : ""}
       </div></div>`;
   }).join("") || '<p class="muted">No plug-ins yet.</p>';
+  const keep = document.querySelector("#plugin-repo-input")?.value || "";
+  $("#plugins-list").innerHTML += thirdPartyHTML();
+  const inp = document.querySelector("#plugin-repo-input");
+  if (inp) inp.value = keep;
 }
 $("#plugins-list").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-plugin-act]");
   if (!b) return;
-  const id = b.closest("[data-plugin]").dataset.plugin;
+  const id = b.dataset.pluginId || b.closest("[data-plugin]")?.dataset.plugin;
   try {
+    if (b.dataset.pluginAct === "add-repo") {
+      const repo = await invoke("plugin_repo_add", { repo: $("#plugin-repo-input").value });
+      toast(`Added ${repo}. Looking for its latest release…`);
+      return checkPluginReleases();
+    }
+    if (b.dataset.pluginAct === "remove-repo") { await invoke("plugin_repo_remove", { repo: id }); return checkPluginReleases(); }
+    if (b.dataset.pluginAct === "install-release") {
+      b.disabled = true;
+      b.textContent = "Downloading and checking…";
+      const v = await invoke("plugin_install", { id });
+      toast(`Installed ${v}.`);
+      state.pluginReleases[id] = { ...state.pluginReleases[id], installed: v, update: false };
+      if (id === "kiln") load(true);
+    }
     if (b.dataset.pluginAct === "stop") await invoke("plugin_stop", { id });
     if (b.dataset.pluginAct === "enable" || b.dataset.pluginAct === "disable") {
       await invoke("plugin_set_enabled", { id, enabled: b.dataset.pluginAct === "enable" });
@@ -1778,6 +1797,48 @@ $("#open-plugins").onclick = () => { $("#dlg-settings").close(); state.view = "p
 async function checkCommsRelease() {
   try { state.commsRelease = await invoke("comms_check_update"); } catch (e) { state.commsRelease = { error: String(e) }; }
   if (state.view === "plugins") renderPluginsPage();
+}
+// Other plug-ins' releases (Kiln, and repositories you added): looked up when you open Plug-ins, never in the background.
+async function checkPluginReleases() {
+  state.pluginReleases = {};
+  try { state.pluginRepos = await invoke("plugin_repos"); } catch { state.pluginRepos = []; }
+  renderPluginsPage();
+  await Promise.all(["kiln", ...state.pluginRepos].map(async (id) => {
+    try { state.pluginReleases[id] = await invoke("plugin_release_check", { id }); } catch (e) { state.pluginReleases[id] = { error: String(e) }; }
+  }));
+  if (state.view === "plugins") renderPluginsPage();
+}
+function releaseHTML(id, p) {
+  const r = (state.pluginReleases || {})[id];
+  if (!r) return '<p class="muted small">Checking GitHub for the latest release…</p>';
+  if (r.error) return `<p class="muted small">${esc(r.error)}</p>`;
+  if (r.update) return `<p class="small">Version ${esc(r.latest)} is out (you have ${esc(r.installed)}).</p>`;
+  if (!r.installed && !(p && p.installed)) return `<p class="small">Latest: ${esc(r.latest)}. It's downloaded from that repository's GitHub releases and checked against GitHub's checksum before it's installed.</p>`;
+  return "";
+}
+function installBtn(id, p) {
+  const r = (state.pluginReleases || {})[id];
+  if (!r || r.error || !r.latest) return "";
+  const have = r.installed || (p && p.installed);
+  if (have && !r.update) return "";
+  return `<button class="${have ? "ghost" : "play"}" data-plugin-act="install-release" data-plugin-id="${esc(id)}">${have ? "Update to" : "Install"} ${esc(r.latest)}</button>`;
+}
+function thirdPartyHTML() {
+  const repos = state.pluginRepos || [];
+  const rows = repos.map((repo) => {
+    const r = (state.pluginReleases || {})[repo];
+    const m = r && r.manifest;
+    const perms = m && m.permissions && m.permissions.length ? `<p class="small">Asks for: ${m.permissions.map(esc).join(", ")}</p>` : "";
+    return `<div class="plugin-card" data-plugin="${esc(repo)}">
+      <div class="plugin-head"><div><h2>${esc((m && m.name) || repo)}</h2><p class="muted">${esc((m && m.description) || "")}</p><p class="muted small">github.com/${esc(repo)}</p></div><span class="plugin-status">${r && r.installed ? "Installed " + esc(r.installed) : "Third-party"}</span></div>
+      ${perms}${releaseHTML(repo)}
+      <div class="row-btns">${installBtn(repo)}<button class="ghost" data-plugin-act="remove-repo" data-plugin-id="${esc(repo)}">Remove from list</button></div></div>`;
+  }).join("");
+  return `<h2 class="plugins-sub">Third-party plug-ins</h2>
+    <p class="muted">Plug-ins from other people. Lodestone didn't check them: they run as you, and only a Flatpak (Linux) is sandboxed. Add a repository only if you trust who publishes it. The list is kept only on this PC.</p>
+    <div class="row-btns"><input id="plugin-repo-input" type="text" placeholder="owner/repo, e.g. daigonstar/kiln" spellcheck="false" /><button class="ghost" data-plugin-act="add-repo">Add</button></div>
+    ${rows}
+    ${repos.length ? '<p class="muted small">Running third-party plug-ins from inside Lodestone isn\'t supported yet: Lodestone can find, install and update them.</p>' : ""}`;
 }
 function commsReleaseHTML(p) {
   const r = state.commsRelease;

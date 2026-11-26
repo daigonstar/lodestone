@@ -24,6 +24,9 @@ pub struct KilnGame {
     pub mods: Option<usize>,
 }
 
+#[cfg(not(windows))]
+const KILN_FLATPAK: &str = "io.github.daigonstar.Kiln";
+
 /// How to run Kiln, or None when it isn't installed or you've turned the Kiln plug-in off
 /// (Plug-ins page). Everything in Lodestone that talks to Kiln goes through here, so switching the
 /// plug-in off hides all of it.
@@ -39,7 +42,7 @@ pub fn installed() -> bool {
     locate().is_some()
 }
 
-/// Find Kiln. Linux: `kiln` on the PATH, else the command in its desktop entry
+/// Find Kiln. Linux: `kiln` on the PATH, its Flatpak, else the command in its desktop entry
 /// (e.g. `env PYTHONPATH=… python3 -m kiln`). Windows: `kiln.exe` on the PATH, or in
 /// %LOCALAPPDATA%\Lodestone\Kiln or %LOCALAPPDATA%\Programs\Kiln. (Kiln has no Windows build yet, so
 /// on Windows this finds nothing until it does.)
@@ -50,6 +53,13 @@ fn locate() -> Option<Vec<String>> {
             return Some(vec![p.to_string_lossy().into_owned()]);
         }
         let local = dirs::data_local_dir()?;
+        // The release Lodestone installed (plugin_sources): Plugins\kiln\<version>\kiln.exe, `current.txt` names the version.
+        if let Ok(v) = std::fs::read_to_string(local.join("Lodestone").join("Plugins").join("kiln").join("current.txt")) {
+            let exe = local.join("Lodestone").join("Plugins").join("kiln").join(v.trim()).join("kiln.exe");
+            if exe.is_file() {
+                return Some(vec![exe.to_string_lossy().into_owned()]);
+            }
+        }
         for dir in [local.join("Lodestone").join("Kiln"), local.join("Programs").join("Kiln")] {
             let exe = dir.join("kiln.exe");
             if exe.is_file() {
@@ -62,6 +72,12 @@ fn locate() -> Option<Vec<String>> {
     {
         if let Some(p) = which("kiln") {
             return Some(vec![p.to_string_lossy().into_owned()]);
+        }
+        // The Flatpak Lodestone installs from Kiln's releases (the app id Kiln's release will use).
+        let mut info = std::process::Command::new("flatpak");
+        info.args(["info", KILN_FLATPAK]);
+        if crate::host::wrap(info).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success()) {
+            return Some(vec!["flatpak".into(), "run".into(), KILN_FLATPAK.into()]);
         }
         let h = home();
         for f in [h.join(".local/share/applications/kiln.desktop"), "/usr/share/applications/kiln.desktop".into()] {

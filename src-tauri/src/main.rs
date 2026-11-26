@@ -2,6 +2,7 @@
 
 mod achievements;
 mod comms_install;
+mod plugin_sources;
 mod plugins;
 mod program_updates;
 mod downloads;
@@ -1469,6 +1470,41 @@ async fn plugin_stop(app: AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Is there a release to install, or a newer one? For an official plug-in or a repository you added.
+#[tauri::command]
+async fn plugin_release_check(id: String) -> Result<serde_json::Value, String> {
+    let src = plugin_sources::find(&id).ok_or("Unknown plug-in")?;
+    plugin_sources::check(&src).await
+}
+
+/// Download, check and install a plug-in's newest release. Returns the version installed.
+#[tauri::command]
+async fn plugin_install(id: String) -> Result<String, String> {
+    if id == plugins::COMMS {
+        return comms_install::install().await;
+    }
+    let src = plugin_sources::find(&id).ok_or("Unknown plug-in")?;
+    let v = plugin_sources::install(&src).await?;
+    kiln::forget();
+    Ok(v)
+}
+
+/// The GitHub repositories you added for third-party plug-ins.
+#[tauri::command]
+fn plugin_repos() -> Vec<String> {
+    plugin_sources::user().into_iter().map(|s| s.repo).collect()
+}
+
+#[tauri::command]
+fn plugin_repo_add(repo: String) -> Result<String, String> {
+    plugin_sources::add_repo(&repo)
+}
+
+#[tauri::command]
+fn plugin_repo_remove(repo: String) -> Result<(), String> {
+    plugin_sources::remove_repo(&repo)
+}
+
 /// Switch a companion plug-in (Kiln) on or off.
 #[tauri::command]
 fn plugin_set_enabled(id: String, enabled: bool) -> Result<(), String> {
@@ -1653,6 +1689,11 @@ fn main() {
             plugins_list,
             plugin_stop,
             plugin_set_enabled,
+            plugin_release_check,
+            plugin_install,
+            plugin_repos,
+            plugin_repo_add,
+            plugin_repo_remove,
             rom_reveal,
             emu_open,
             emu_set_folder,

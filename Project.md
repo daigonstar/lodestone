@@ -3,7 +3,7 @@
 What needs doing to get Lodestone to users, and where each item stands. Update this file whenever an
 item is finished or partly done.
 
-Last updated: 2026-11-26 (Kiln plug-in first step)
+Last updated: 2026-11-26 (Kiln plug-in, plug-in installer)
 
 ## Current focus
 
@@ -34,7 +34,8 @@ shape of the plugin API are in `docs/plugin-api-notes.md`.
 | Kiln listed on the Plug-ins page with an on/off switch (off hides all Kiln tags and launching) | Done, builds and unit test pass on Linux; UI not clicked through yet |
 | Windows-aware Kiln lookup (replaces the Linux-only `.desktop` search on Windows: `kiln.exe` on PATH, `%LOCALAPPDATA%\Lodestone\Kiln`, `%LOCALAPPDATA%\Programs\Kiln`) | Done in code, not built or run on Windows |
 | Kiln itself running on Windows | **Not started**: Kiln is Linux-only (Proton prefixes, Steam's Linux folders, Qt). Needs a port before the Windows lookup finds anything |
-| Install and update Kiln from Lodestone like Comms (GitHub releases, checksum) | Not started: Kiln has no releases yet |
+| One-click install/update from official GitHub releases (checksum-verified), shared by Comms and Kiln; users can add their own GitHub repos for third-party plug-ins | Done in code, unit-tested; page smoke-tested with a stubbed backend only, never against real releases. Kiln needs to publish a release (`…-linux-x86_64.flatpak`, app id `io.github.daigonstar.Kiln`) before it can install |
+| Running third-party embedded plug-ins; release signing | Not started |
 | Kiln speaks the Lodestone bridge (`--lodestone-bridge`) and shows its page in Lodestone | Not started: decide whether it's wanted (needs a web UI) |
 
 ## Releases
