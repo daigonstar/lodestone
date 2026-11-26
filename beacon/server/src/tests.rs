@@ -735,3 +735,64 @@ async fn pairing_history_goes_only_to_the_waiting_device_and_only_once() {
     assert_eq!(get(tb.clone()).await, (StatusCode::OK, vec![1, 2, 3]));
     assert_eq!(get(tb).await.0, StatusCode::NOT_FOUND, "handed over once");
 }
+
+#[tokio::test]
+async fn private_channels_are_hidden_from_people_not_on_the_list() {
+    let (app, code) = server();
+    let (alice, bob, carol) = (Device::new(), Device::new(), Device::new());
+    alice.register(&app, "alice", &code).await;
+    let ta = alice.sign_in(&app).await;
+    let (_, c) = call(&app, "POST", "/v1/communities", Some(&ta), json!({ "name": "Guild" })).await;
+    let sid = c["id"].as_str().unwrap().to_string();
+    let (_, inv) = call(&app, "POST", &format!("/v1/communities/{sid}/invites"), Some(&ta), json!({ "max_uses": 5, "expires_in": 3600 })).await;
+    let code = inv["code"].as_str().unwrap().to_string();
+    bob.register(&app, "bob", &code).await;
+    carol.register(&app, "carol", &code).await;
+    let (tb, tc) = (bob.sign_in(&app).await, carol.sign_in(&app).await);
+
+    // Only people in the community can be on the list; the creator is always on it.
+    let path = format!("/v1/communities/{sid}/channels");
+    assert_eq!(call(&app, "POST", &path, Some(&ta), json!({ "name": "officers", "private": true, "access": ["mallory"] })).await.0, StatusCode::BAD_REQUEST);
+    let (s, ch) = call(&app, "POST", &path, Some(&ta), json!({ "name": "officers", "private": true, "access": ["bob"] })).await;
+    assert_eq!(s, StatusCode::OK, "{ch}");
+    let id = ch["id"].as_str().unwrap().to_string();
+
+    let names = |v: &Value| v["channels"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let (_, la) = call(&app, "GET", &format!("/v1/communities/{sid}"), Some(&ta), Value::Null).await;
+    let (_, lb) = call(&app, "GET", &format!("/v1/communities/{sid}"), Some(&tb), Value::Null).await;
+    let (_, lc) = call(&app, "GET", &format!("/v1/communities/{sid}"), Some(&tc), Value::Null).await;
+    assert!(names(&la).contains(&"officers".to_string()) && names(&lb).contains(&"officers".to_string()));
+    assert!(!names(&lc).contains(&"officers".to_string()), "Carol can't see it");
+    let ch_a = la["channels"].as_array().unwrap().iter().find(|c| c["id"] == id.as_str()).unwrap();
+    assert_eq!((ch_a["private"].as_bool(), ch_a["access"].clone()), (Some(true), json!(["alice", "bob"])));
+    assert_eq!(lc["channels"][0]["private"], false);
+
+    // Carol is refused everywhere a channel is used: messages, sending, files, welcomes, voice.
+    let msgs = format!("/v1/channels/{id}/messages");
+    assert_eq!(call(&app, "GET", &msgs, Some(&tc), Value::Null).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(call(&app, "POST", &msgs, Some(&tc), json!({ "kind": "application", "epoch": 0, "body": b64(b"x") })).await.0, StatusCode::NOT_FOUND);
+    let req = Request::builder().method("POST").uri(format!("/v1/channels/{id}/blobs")).header("authorization", format!("Bearer {tc}")).body(Body::from(vec![1u8])).unwrap();
+    assert_eq!(crate::api::router(app.clone()).oneshot(req).await.unwrap().status(), StatusCode::NOT_FOUND);
+    assert_eq!(call(&app, "GET", &msgs, Some(&tb), Value::Null).await.0, StatusCode::OK);
+    // A welcome for the channel only reaches devices of people on the list.
+    let (_, w) = call(&app, "POST", "/v1/welcomes", Some(&ta), json!({ "channel": id, "to": [bob.public(), carol.public()], "body": b64(b"w") })).await;
+    assert_eq!(w["delivered"], 1);
+
+    // Carol can't change it either (only owners and admins can), and a list can't be emptied.
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{id}"), Some(&tc), json!({ "private": false })).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{id}"), Some(&ta), json!({ "access": [] })).await.0, StatusCode::BAD_REQUEST);
+    // Adding Carol makes it visible to her; making a channel public clears the list.
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{id}"), Some(&ta), json!({ "access": ["alice", "carol"] })).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "GET", &msgs, Some(&tc), Value::Null).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "GET", &msgs, Some(&tb), Value::Null).await.0, StatusCode::NOT_FOUND, "Bob was taken off");
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{id}"), Some(&ta), json!({ "private": false })).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "GET", &msgs, Some(&tb), Value::Null).await.0, StatusCode::OK);
+
+    // Making a public channel private needs a list; removing someone from the community removes them from lists.
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{id}"), Some(&ta), json!({ "private": true })).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(call(&app, "PATCH", &format!("/v1/channels/{id}"), Some(&ta), json!({ "private": true, "access": ["alice", "bob"] })).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "DELETE", &format!("/v1/communities/{sid}/members/bob"), Some(&ta), Value::Null).await.0, StatusCode::OK);
+    let (_, la) = call(&app, "GET", &format!("/v1/communities/{sid}"), Some(&ta), Value::Null).await;
+    let ch_a = la["channels"].as_array().unwrap().iter().find(|c| c["id"] == id.as_str()).unwrap();
+    assert_eq!(ch_a["access"], json!(["alice"]));
+}

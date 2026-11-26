@@ -263,12 +263,18 @@ struct ChannelReq {
     name: String,
     #[serde(default)]
     kind: String,
+    /// Only the people in `access` (and you) can read it.
+    #[serde(default)]
+    private: bool,
+    #[serde(default)]
+    access: Vec<String>,
 }
 
 async fn create_channel(State(app): State<Shared>, Json(r): Json<ChannelReq>) -> R {
     let c = client(&app, &r.server)?;
     ensure_signed_in(&c).await?;
-    let id = if r.kind == "voice" { c.create_voice_channel(&r.community, &r.name).await? } else { c.create_channel(&r.community, &r.name).await? };
+    let kind = if r.kind == "voice" { "voice" } else { "text" };
+    let id = if r.private { c.create_private_channel(&r.community, &r.name, kind, &r.access).await? } else if kind == "voice" { c.create_voice_channel(&r.community, &r.name).await? } else { c.create_channel(&r.community, &r.name).await? };
     let _ = app.events.send(json!({ "type": "state" }).to_string());
     Ok(Json(json!({ "channel": id })))
 }

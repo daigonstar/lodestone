@@ -66,6 +66,11 @@ CREATE TABLE IF NOT EXISTS categories (
     position INTEGER NOT NULL DEFAULT 0,
     created INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS channel_access (
+    channel TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    account INTEGER NOT NULL,
+    PRIMARY KEY (channel, account)
+);
 CREATE TABLE IF NOT EXISTS invites (
     code_hash TEXT PRIMARY KEY,
     community TEXT NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
@@ -143,6 +148,7 @@ const ADDED: &[(&str, &str, &str)] = &[
     ("channels", "category", "TEXT"),
     ("channels", "parent", "TEXT"),
     ("channels", "post_rule", "TEXT NOT NULL DEFAULT 'everyone'"),
+    ("channels", "private", "INTEGER NOT NULL DEFAULT 0"),
 ];
 
 fn migrate(c: &Connection) -> rusqlite::Result<()> {

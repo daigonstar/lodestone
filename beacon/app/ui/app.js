@@ -64,7 +64,7 @@ async function loadState() {
     state.sel = first ? { server: first.server, community: first.id, channel: "" } : { server: "", community: "", channel: "" };
   }
   const { sp } = current();
-  if (sp && !sp.channels.some((c) => c.id === state.sel.channel && c.kind !== "voice")) { const text = sp.channels.filter((c) => c.kind !== "voice"); state.sel.channel = (text.find((c) => c.ready) || text[0] || {}).id || ""; }
+  if (sp && !sp.channels.some((c) => c.id === state.sel.channel && c.kind !== "voice" && c.can_read !== false)) { const text = sp.channels.filter((c) => c.kind !== "voice" && c.can_read !== false); state.sel.channel = (text.find((c) => c.ready) || text[0] || {}).id || ""; }
   render();
 }
 
@@ -72,7 +72,9 @@ async function loadState() {
 const collapsedCats = new Set();
 function channelRowHTML(sp, c, child) {
   const kids = child ? [] : sp.channels.filter((k) => k.parent === c.id);
-  const lockNote = c.post_rule === "admins" ? `<span class="rule" title="Only admins can post here">${ic("lock")}</span>` : "";
+  const lockNote = (c.private ? `<span class="rule" title="Private: only chosen people can read it">${ic("lock")}</span>` : "") + (c.post_rule === "admins" ? `<span class="rule" title="Only admins can post here">${ic("lock")}</span>` : "");
+  // A private channel you manage but aren't on the list for: shown dimmed, can't be opened.
+  if (c.can_read === false) return `<div class="ch locked ${child ? "child" : ""}" data-ctx-channel="${esc(c.id)}" title="Private, and you're not on its list. You can still manage it (right-click)."># ${esc(c.name)}<span class="rule">${ic("lock")}</span></div>`;
   const wait = c.ready ? "" : ' <span class="wait">(waiting for keys)</span>';
   const row = c.kind === "voice"
     ? `<button class="ch vc ${child ? "child" : ""}" data-voice="${esc(c.id)}" data-ctx-channel="${esc(c.id)}" title="${c.ready ? "Join the call" : "Waiting for this device's keys"}">${ic("volume")} ${esc(c.name)}${wait}</button><div class="vc-people ${child ? "child" : ""}" data-vc="${esc(c.id)}"></div>`
@@ -122,14 +124,35 @@ function editChannelDialog(id) {
     });
 }
 
+// "Who can read" controls shared by the new-channel and permissions dialogs.
+function readFields(sp, c) {
+  const priv = !!(c && c.private);
+  const chosen = new Set(c ? c.access || [] : []);
+  const boxes = [...sp.members].sort((a, b) => a.username.localeCompare(b.username)).map((m) => {
+    const you = !c && m.username === sp.me; // the creator is always on a new channel's list
+    return `<label class="check"><input type="checkbox" name="who" value="${esc(m.username)}" ${chosen.has(m.username) || you ? "checked" : ""} ${you ? "disabled" : ""}> ${esc(m.username)}${you ? " (you)" : ""}</label>`;
+  }).join("");
+  return `<label>Who can read
+      <select name="read" data-read><option value="all" ${priv ? "" : "selected"}>Everyone in the community</option><option value="some" ${priv ? "selected" : ""}>Only chosen people (private)</option></select></label>
+    <fieldset class="access" data-access ${priv ? "" : "hidden"}><legend>Chosen people</legend>${boxes}</fieldset>
+    <p class="muted">A private channel is hidden from everyone else, and its messages and files are encrypted for the chosen people's devices only. Owners and admins can change the list, but can't read it unless they're on it. People taken off the list keep what they already read.</p>`;
+}
+document.addEventListener("change", (e) => {
+  const sel = e.target.closest("[data-read]");
+  const fs = sel && sel.closest("form")?.querySelector("[data-access]");
+  if (fs) fs.hidden = sel.value !== "some";
+});
+const readBody = (f) => f.get("read") === "some" ? { private: true, access: f.getAll("who") } : { private: false };
+
 function permissionsDialog(id) {
   const { sp } = current();
   const c = sp.channels.find((x) => x.id === id);
   if (!c) return;
   ask(`Permissions: # ${c.name}`, `<label>Who can post
       <select name="rule"><option value="everyone" ${c.post_rule !== "admins" ? "selected" : ""}>Everyone in the community</option><option value="admins" ${c.post_rule === "admins" ? "selected" : ""}>Only admins and the owner</option></select></label>
-    <p class="muted">Everyone can still read the channel. Reactions are messages too, so with "Only admins" members can't react either. Choosing who can read a channel (private channels) is not available yet.</p>`, "Save", async (f) => {
-      await manage("PATCH", `/v1/channels/${id}`, { post_rule: f.get("rule") });
+    <p class="muted">Reactions are messages too, so with "Only admins" members can't react either.</p>
+    ${readFields(sp, c)}`, "Save", async (f) => {
+      await manage("PATCH", `/v1/channels/${id}`, { post_rule: f.get("rule"), ...readBody(f) });
       await loadState();
     });
 }
@@ -1468,9 +1491,11 @@ function channelDialog(opts = {}) {
   const under = opts.parent && sp.channels.find((c) => c.id === opts.parent);
   ask(under ? `New child channel of # ${under.name}` : "New channel", `<label>Name<input name="name" maxlength="64" required placeholder="raids"></label>
     <label>Kind<select name="kind"><option value="text">Text: messages, files, reactions</option><option value="voice">Voice: calls (end-to-end encrypted)</option></select></label>
-    ${under ? "" : `<label>Category<select name="category">${catOptions(sp, opts.category)}</select></label>`}`, "Create", async (f) => {
+    ${under ? "" : `<label>Category<select name="category">${catOptions(sp, opts.category)}</select></label>`}
+    ${readFields(sp, null)}`, "Create", async (f) => {
     const kind = f.get("kind");
-    const r = await api("/api/channels", { server: sp.server, community: sp.id, name: f.get("name"), kind });
+    const priv = f.get("read") === "some";
+    const r = await api("/api/channels", { server: sp.server, community: sp.id, name: f.get("name"), kind, private: priv, access: priv ? f.getAll("who") : [] });
     const place = under ? { parent: under.id } : f.get("category") ? { category: f.get("category") } : null;
     if (place) await manage("PATCH", `/v1/channels/${r.channel}`, place);
     if (kind !== "voice") state.sel.channel = r.channel;

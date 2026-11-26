@@ -495,9 +495,23 @@ impl Client {
         self.create_channel_of(community, name, "voice").await
     }
 
+    /// Add a channel only the people in `access` (usernames of community members) and you can read. Its encrypted
+    /// group only ever gets their devices.
+    pub async fn create_private_channel(&self, community: &str, name: &str, kind: &str, access: &[String]) -> Result<String> {
+        self.create_channel_with(community, name, kind, json!({ "private": true, "access": access })).await
+    }
+
     async fn create_channel_of(&self, community: &str, name: &str, kind: &str) -> Result<String> {
+        self.create_channel_with(community, name, kind, json!({})).await
+    }
+
+    async fn create_channel_with(&self, community: &str, name: &str, kind: &str, extra: Value) -> Result<String> {
         let _g = self.op.lock().await;
-        let ch = self.server.post(&format!("/v1/communities/{community}/channels"), json!({ "name": name, "kind": kind })).await?;
+        let mut body = json!({ "name": name, "kind": kind });
+        if let (Some(b), Some(e)) = (body.as_object_mut(), extra.as_object()) {
+            b.extend(e.clone());
+        }
+        let ch = self.server.post(&format!("/v1/communities/{community}/channels"), body).await?;
         let id = ch["id"].as_str().unwrap_or_default().to_string();
         self.new_group(&id, community, name)?;
         Ok(id)
@@ -809,11 +823,34 @@ impl Client {
         for s in me["communities"].as_array().into_iter().flatten() {
             let community_id = s["id"].as_str().unwrap_or_default();
             let community = self.server.get(&format!("/v1/communities/{community_id}")).await?;
-            let devices = devices_of(&community);
+            // Channels that have gone from your list (taken off a private channel, or it was deleted): forget their
+            // encrypted groups so a later welcome can bring you back. What you already read stays on this device.
+            let readable: Vec<&str> = community["channels"].as_array().into_iter().flatten().filter(|c| c["can_read"] != false).filter_map(|c| c["id"].as_str()).collect();
+            for (id, comm, ..) in self.store.channels()? {
+                if comm == community_id && !readable.contains(&id.as_str()) {
+                    if let Some(mut g) = self.group(&id)? {
+                        g.delete(self.provider.storage()).map_err(local)?;
+                        self.persist()?;
+                    }
+                }
+            }
             for ch in community["channels"].as_array().into_iter().flatten() {
                 let channel = ch["id"].as_str().unwrap_or_default();
-                if self.group(channel)?.is_none() {
-                    continue; // waiting for a member to add us
+                // Private channels you can't read (admins see them in the list) have no group for you.
+                if ch["can_read"] == false {
+                    continue;
+                }
+                let devices = devices_of(&community, Some(ch));
+                match self.group(channel)? {
+                    None => continue, // waiting for a member to add us
+                    // Taken out of this channel earlier (a private channel's list, say): forget the dead group
+                    // so a new welcome can bring us back in.
+                    Some(mut g) if !g.is_active() => {
+                        g.delete(self.provider.storage()).map_err(local)?;
+                        self.persist()?;
+                        continue;
+                    }
+                    Some(_) => {}
                 }
                 self.store.add_channel(channel, community_id, ch["name"].as_str().unwrap_or_default(), 0)?;
                 new.extend(self.catch_up(channel, &devices).await?);
@@ -828,7 +865,9 @@ impl Client {
     /// Device key -> username for every member of the channel's community, from the server.
     async fn community_devices_for(&self, channel: &str) -> Result<HashMap<String, String>> {
         let community = self.store.channels()?.into_iter().find(|c| c.0 == channel).map(|c| c.1).ok_or_else(|| Error::Local("Unknown channel".into()))?;
-        Ok(devices_of(&self.server.get(&format!("/v1/communities/{community}")).await?))
+        let c = self.server.get(&format!("/v1/communities/{community}")).await?;
+        let ch = c["channels"].as_array().into_iter().flatten().find(|x| x["id"] == channel).cloned();
+        Ok(devices_of(&c, ch.as_ref()))
     }
 
     async fn take_welcomes(&self) -> Result<()> {
@@ -838,6 +877,14 @@ impl Client {
             let Some(bytes) = item["body"].as_str().and_then(unb64) else { continue };
             let Ok(msg) = MlsMessageIn::tls_deserialize_exact(&bytes) else { continue };
             let MlsMessageBodyIn::Welcome(welcome) = msg.extract() else { continue };
+            // A group we were taken out of (it stops being active once we read the removal) is dead; forget it so
+            // a welcome that adds us back can be used. A live group is never replaced.
+            if let Some(mut old) = self.group(channel)? {
+                if old.is_active() {
+                    continue;
+                }
+                old.delete(self.provider.storage()).map_err(local)?;
+            }
             match StagedWelcome::new_from_welcome(&self.provider, &Self::join_config(), welcome, None).and_then(|s| s.into_group(&self.provider)) {
                 Ok(group) => {
                     // The group ID must be the channel the server delivered it for.
@@ -1015,6 +1062,9 @@ impl Client {
     /// whose accounts left. Any member may do this; the server's one-commit-per-epoch rule settles races.
     async fn reconcile(&self, channel: &str, devices: &HashMap<String, String>) -> Result<()> {
         let Some(mut group) = self.group(channel)? else { return Ok(()) };
+        if !group.is_active() {
+            return Ok(()); // we were taken out of this channel; the next sync forgets it
+        }
         let in_group: BTreeMap<String, LeafNodeIndex> = group.members().filter_map(|m| identity_of(&m.credential).map(|(_, d)| (d, m.index))).collect();
         let remove: Vec<LeafNodeIndex> = in_group.iter().filter(|(d, _)| !devices.contains_key(*d) && **d != self.device).map(|(_, i)| *i).collect();
         let mut users: Vec<&String> = devices.iter().filter(|(d, _)| !in_group.contains_key(*d)).map(|(_, u)| u).collect();
@@ -1079,11 +1129,16 @@ impl Client {
     }
 }
 
-/// Device key -> username for a community's members (from `GET /v1/communities/{id}`).
-fn devices_of(community: &Value) -> HashMap<String, String> {
+/// Device key -> username for the devices that belong in a channel's group: every community member's, or for a
+/// private channel only those on its list (from `GET /v1/communities/{id}`).
+fn devices_of(community: &Value, channel: Option<&Value>) -> HashMap<String, String> {
     let mut out = HashMap::new();
+    let only: Option<Vec<&str>> = channel.filter(|c| c["private"] == true).map(|c| c["access"].as_array().into_iter().flatten().filter_map(|u| u.as_str()).collect());
     for m in community["members"].as_array().into_iter().flatten() {
         let user = m["username"].as_str().unwrap_or_default();
+        if only.as_ref().is_some_and(|o| !o.contains(&user)) {
+            continue;
+        }
         for d in m["devices"].as_array().into_iter().flatten() {
             if let Some(d) = d.as_str() {
                 out.insert(d.to_string(), user.to_string());
