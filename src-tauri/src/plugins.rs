@@ -5,7 +5,9 @@
 //! talks to it only over its standard input and output, and answers only the requests you approved.
 //! It never hands a plug-in sign-in data, keys, cookies, file paths, or the ability to run programs.
 
-use crate::{host, settings};
+#[cfg(not(windows))]
+use crate::host;
+use crate::settings;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -15,6 +17,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 pub const BEACON: &str = "beacon";
+#[cfg(not(windows))]
 const BEACON_FLATPAK: &str = "io.github.daigonstar.Lodestone.Beacon";
 
 /// What each permission means, in the words Lodestone shows when asking.
@@ -51,15 +54,16 @@ pub struct Status {
 
 /// How to start Beacon: its Flatpak, or a `lodestone-beacon` program on the PATH. On Windows, the Beacon
 /// Lodestone installed (beacon_install).
+#[cfg(windows)]
 fn beacon_command() -> Option<Command> {
-    #[cfg(windows)]
-    {
-        let exe = crate::beacon_install::windows_exe()?;
-        let mut c = Command::new(exe);
-        c.arg("--lodestone-bridge");
-        return Some(c);
-    }
-    #[allow(unreachable_code)]
+    let exe = crate::beacon_install::windows_exe()?;
+    let mut c = Command::new(exe);
+    c.arg("--lodestone-bridge");
+    Some(c)
+}
+
+#[cfg(not(windows))]
+fn beacon_command() -> Option<Command> {
     let mut info = Command::new("flatpak");
     info.args(["info", BEACON_FLATPAK]);
     let has_flatpak = host::wrap(info).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success());

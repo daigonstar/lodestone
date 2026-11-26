@@ -72,6 +72,14 @@ pub fn detach(cmd: &mut Command) {
     }
 }
 
+/// Windows: run a helper without a console window flashing up.
+#[cfg(windows)]
+pub fn detach_console(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
 /// Free space on the drive holding `p`, in bytes (0 if unknown).
 pub fn free_space(p: &Path) -> u64 {
     #[cfg(unix)]
@@ -203,4 +211,25 @@ pub fn registry_subkeys(machine: bool, key: &str) -> Vec<String> {
         RegCloseKey(h);
     }
     out
+}
+
+/// Move a file or folder to the trash (Windows: the Recycle Bin; Linux: `gio trash`). Returns whether
+/// it worked; callers decide what to do if it didn't.
+pub fn trash(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::{SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FO_DELETE, SHFILEOPSTRUCTW};
+        // The list of names ends with two NULs.
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0, 0]).collect();
+        let mut op: SHFILEOPSTRUCTW = unsafe { std::mem::zeroed() };
+        op.wFunc = FO_DELETE;
+        op.pFrom = wide.as_ptr();
+        op.fFlags = (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT) as u16;
+        unsafe { SHFileOperationW(&mut op) == 0 && op.fAnyOperationsAborted == 0 }
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new("gio").arg("trash").arg(path).status().map(|s| s.success()).unwrap_or(false)
+    }
 }

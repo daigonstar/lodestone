@@ -194,11 +194,15 @@ pub fn installed() -> Vec<Installed> {
     read("installed.json")
 }
 
+/// Windows: gogdl starts the game itself, natively.
+#[cfg(windows)]
 fn launch_spec(i: &Installed) -> Option<LaunchSpec> {
-    // Windows: gogdl starts the game itself, natively.
-    if cfg!(windows) {
-        return gogdl(&["launch", &i.path, &i.id, "--platform", "windows"]).ok();
-    }
+    gogdl(&["launch", &i.path, &i.id, "--platform", "windows"]).ok()
+}
+
+/// Linux: through Proton (umu), with GOG's own setup steps first.
+#[cfg(not(windows))]
+fn launch_spec(i: &Installed) -> Option<LaunchSpec> {
     let umu = tools::umu_path()?;
     let mut s = gogdl(&["launch", &i.path, &i.id, "--platform", "windows", "--no-wine", "--wrapper", &umu.to_string_lossy()]).ok()?;
     let pfx = prefix(&i.id);
@@ -279,7 +283,7 @@ pub fn set_path(id: &str, path: &str) -> Result<(), String> {
 pub fn uninstall(id: &str) -> Result<(), String> {
     let mut list = installed();
     if let Some(i) = list.iter().find(|i| i.id == id) {
-        let ok = std::process::Command::new("gio").arg("trash").arg(&i.path).status().map(|s| s.success()).unwrap_or(false);
+        let ok = crate::os::trash(Path::new(&i.path));
         if !ok {
             fs::remove_dir_all(&i.path).map_err(|e| e.to_string())?;
         }

@@ -115,11 +115,14 @@ pub fn prefix(app: &str) -> PathBuf {
 }
 
 /// legendary resolves the game's exe and launch args (and online auth) and hands the command to umu.
+#[cfg(windows)]
 fn launch_spec(app: &str) -> Option<LaunchSpec> {
     // Windows: legendary starts the game itself, natively.
-    if cfg!(windows) {
-        return cmd(&["launch", app]).ok();
-    }
+    cmd(&["launch", app]).ok()
+}
+
+#[cfg(not(windows))]
+fn launch_spec(app: &str) -> Option<LaunchSpec> {
     let umu = tools::umu_path()?;
     let mut s = cmd(&["launch", app, "--no-wine", "--wrapper", &umu.to_string_lossy()]).ok()?;
     let pfx = prefix(app);

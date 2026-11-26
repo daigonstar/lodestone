@@ -22,35 +22,7 @@ use std::time::{Duration, Instant};
 
 pub const BUSY: &str = "bnet-agent-unavailable";
 
-/// Battle.net's internal ids ("uid") for its games, by launch code. Others use their product code.
-const UIDS: &[(&str, &str)] = &[
-    ("S1", "s1"),
-    ("S2", "s2"),
-    ("WOW", "wow"),
-    ("WOWF", "wowf"),
-    ("WOW_CLASSIC", "wow_classic"),
-    ("WOW_CLASSIC_ERA", "wow_classic_era"),
-    ("WOW_CLASSIC_ANNIVERSARY", "wow_classic_anniversary"),
-    ("PRO", "prometheus"),
-    ("W3", "w3"),
-    ("WTCG", "hs_beta"),
-    ("HERO", "heroes"),
-    ("D3", "diablo3"),
-    ("FEN", "fenris"),
-    ("OSI", "osi"),
-    ("RTRO", "rtro"),
-    ("VIPR", "viper"),
-    ("ODIN", "odin"),
-    ("LAZR", "lazarus"),
-    ("ZEUS", "zeus"),
-    ("FORE", "fore"),
-    ("WLBY", "wlby"),
-];
-
-/// The launch code (Lodestone's id) for an install uid: "prometheus" -> "PRO", "wow_classic" -> "WOW_CLASSIC".
-pub fn code_for_uid(uid: &str) -> String {
-    UIDS.iter().find(|(_, u)| u.eq_ignore_ascii_case(uid)).map(|(c, _)| c.to_string()).unwrap_or_else(|| uid.to_string())
-}
+use super::bnet_catalog::{code_for_uid, UIDS};
 
 pub fn uid_for(code: &str, tact: &str) -> String {
     UIDS.iter().find(|(c, _)| c.eq_ignore_ascii_case(code)).map(|(_, u)| u.to_string()).unwrap_or_else(|| tact.to_ascii_lowercase())
