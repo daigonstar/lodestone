@@ -26,19 +26,32 @@ docker compose logs beacon   # shows the one-time setup code for the first (admi
 
 Use `compose.proxy.yml`: Beacon listens on plain HTTP on the server and your proxy provides HTTPS.
 
-1. Copy this folder to the server and create `.env` beside it with `BEACON_DOMAIN=beacon.yourdomain.com`.
-2. `docker compose -f compose.proxy.yml up -d --build`, then `docker compose -f compose.proxy.yml logs beacon`
+It uses the official image from Docker Hub, `daigonstar/lodestonebeacon` (set `BEACON_VERSION` to pick a
+version), so you only need the compose file. To build from source instead, swap its `image:` line for
+`build: .` and run it from this folder.
+
+1. Put `compose.proxy.yml` on the server and create `.env` beside it (or, in Portainer, paste it as a
+   stack and set these as its environment variables):
+   `BEACON_DOMAIN=beacon.yourdomain.com`, and for voice calls
+   `BEACON_MEDIA_ADDR=home.yourdomain.com:7881,<server LAN IP>:7881` (see below).
+2. `docker compose -f compose.proxy.yml up -d`, then `docker compose -f compose.proxy.yml logs beacon`
    for the one-time setup code.
-3. **Zoraxy:** add a proxy rule for `beacon.yourdomain.com` to `127.0.0.1:8095` (or `lodestone-beacon:8080`
-   if you use the shared-network option in the file). WebSockets must be allowed (Zoraxy does by default).
+3. **Zoraxy:** add a proxy rule for `beacon.yourdomain.com`. If Zoraxy runs in Docker (the usual way),
+   point it at `lodestone-beacon:8080`: the container's own port, not 8095, with both containers on the
+   same Docker network (the `networks` option in the file). Only a Zoraxy installed directly on the
+   server uses `127.0.0.1:8095`. WebSockets must be allowed (Zoraxy does by default).
 4. **Cloudflare Tunnel:** a public hostname `beacon.yourdomain.com` pointing at Zoraxy, like your other
    services. If Cloudflare's bot protection or WAF challenges requests, add a skip rule for this
    hostname: Beacon clients are apps, not browsers, and can't solve challenges.
 5. Check it: `https://beacon.yourdomain.com/.well-known/lodestone-beacon` should show your address.
+   A Cloudflare "error 521" there usually means the proxy is pointed at the wrong port.
 6. In Lodestone → Beacon → **Set up a new server**, type `beacon.yourdomain.com` and the setup code.
 
-Voice and video (later) send media over UDP, which a Cloudflare Tunnel can't carry; they'll need a UDP
-port forwarded to the server. Text chat works through the tunnel as it is.
+Voice and video calls send media over UDP port 7881, which a Cloudflare Tunnel can't carry. Forward UDP
+7881 on your router to the server and set `BEACON_MEDIA_ADDR`: first a name for your home internet
+address that Cloudflare doesn't proxy (a grey-cloud record, such as one a DDNS container keeps current;
+Beacon reads it when it starts, so restart it if your IP changes), then the server's LAN address for
+people on your own network. Without it, voice is off and text chat still works through the tunnel.
 
 The container runs as a non-root user with a read-only filesystem and no Linux capabilities; only its
 data volume is writable.
