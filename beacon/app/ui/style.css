@@ -378,31 +378,34 @@ button .i { width: 20px; height: 20px; }
 .layout:has(.stage:not(.hidden)) .callbar { display: none; }
 @media (max-width: 860px) { .layout { grid-template-columns: 180px minmax(0, 1fr) auto; } .callbar { left: calc(180px + (100vw - 180px) / 2); } }
 
-/* Speaking: the card's outline turns to runes with a violet and cyan glow. The inside of the card is left as it is. */
-.tile { position: relative; }
+/* Speaking: runes run around the OUTSIDE of the card, in place of its outline, so nothing is drawn over a camera picture.
+   The card no longer clips its children (the runes sit outside it); the camera picture and its caption clip themselves. */
+.tile { position: relative; overflow: visible; }
+.tile.has-cam .tile-media { border-radius: calc(var(--radius) - 2px); overflow: hidden; }
+.tile.has-cam .tile-foot { border-radius: 0 0 calc(var(--radius) - 2px) calc(var(--radius) - 2px); }
+.stage-people:not(.strip) { padding: 36px; gap: 36px; }
+.stage-people.strip { padding: 30px 30px 26px; gap: 30px; }
 .rune-edge { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .25s; }
 .tile.speaking .rune-edge { opacity: 1; animation: rune-shimmer 2.2s ease-in-out infinite; }
 .rune-edge .re { position: absolute; overflow: hidden; filter: drop-shadow(0 0 4px rgba(95, 212, 255, .85)); }
-.rune-edge .re-t, .rune-edge .re-b { left: 22px; right: 22px; height: 14px; }
-.rune-edge .re-t { top: 5px; }
-.rune-edge .re-b { bottom: 5px; }
-.rune-edge .re-l, .rune-edge .re-r { top: 22px; bottom: 22px; width: 14px; }
-.rune-edge .re-l { left: 5px; }
-.rune-edge .re-r { right: 5px; }
-.stage-people.strip .rune-edge .re-t, .stage-people.strip .rune-edge .re-b { height: 12px; }
+.rune-edge .re-t, .rune-edge .re-b { left: -2px; right: -2px; height: 14px; }
+.rune-edge .re-t { top: -20px; }
+.rune-edge .re-b { bottom: -20px; }
+.rune-edge .re-l, .rune-edge .re-r { top: -2px; bottom: -2px; width: 14px; }
+.rune-edge .re-l { left: -20px; }
+.rune-edge .re-r { right: -20px; }
 @keyframes rune-shimmer { 0%, 100% { opacity: .6; } 50% { opacity: 1; } }
-.tile.speaking { border-color: color-mix(in srgb, var(--accent) 80%, var(--spark)); box-shadow: 0 0 22px rgba(124, 92, 255, .45); }
+/* the outline is replaced by the runes */
+.tile.speaking { border-color: transparent; box-shadow: none; }
 .vc-person.speaking .av { box-shadow: none; filter: drop-shadow(0 0 5px var(--spark)); }
 .vc-person.speaking { color: var(--text); }
 @media (prefers-reduced-motion: reduce) { .tile.speaking .rune-edge { animation: none; } }
 
 /* Someone is sharing their screen: a bar under the top bar, with who and a Watch button */
 .layout { grid-template-rows: 58px auto minmax(0, 1fr); }
-.share-banner { grid-column: 1 / -1; grid-row: 2; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 28px; padding: 9px 16px; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 30%, var(--bg-2)), color-mix(in srgb, var(--spark) 22%, var(--bg-2))); border-bottom: 1px solid color-mix(in srgb, var(--spark) 55%, var(--line)); box-shadow: 0 6px 24px rgba(124, 92, 255, .25); }
-.share-banner .sb-item { display: flex; align-items: center; gap: 10px; }
+.share-banner { grid-column: 1 / -1; grid-row: 2; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 12px; padding: 9px 16px; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 30%, var(--bg-2)), color-mix(in srgb, var(--spark) 22%, var(--bg-2))); border-bottom: 1px solid color-mix(in srgb, var(--spark) 55%, var(--line)); box-shadow: 0 6px 24px rgba(124, 92, 255, .25); }
+.share-banner .sb-item { display: flex; align-items: center; gap: 10px; padding: 4px 6px 4px 14px; background: color-mix(in srgb, var(--bg) 45%, transparent); border: 1px solid color-mix(in srgb, var(--spark) 40%, transparent); border-radius: 10px; }
 .share-banner .sb-item .i { color: var(--spark); width: 22px; height: 22px; filter: drop-shadow(0 0 5px var(--spark)); }
 .share-banner button { padding: 5px 16px; border-radius: 0; clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); font-weight: 700; }
 .channels, .chat, .members, .stage { grid-row: 3; }
 .members { top: 58px; }
-/* room under the name for the rune edge, always (so the name doesn't jump when someone starts talking) */
-.tile:not(.has-cam) .tile-foot { padding-bottom: 22px; }
