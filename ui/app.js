@@ -1836,7 +1836,7 @@ function thirdPartyHTML() {
   }).join("");
   return `<h2 class="plugins-sub">Third-party plug-ins</h2>
     <p class="muted">Plug-ins from other people. Lodestone didn't check them: they run as you, and only a Flatpak (Linux) is sandboxed. Add a repository only if you trust who publishes it. The list is kept only on this PC.</p>
-    <div class="row-btns"><input id="plugin-repo-input" type="text" placeholder="owner/repo, e.g. daigonstar/kiln" spellcheck="false" /><button class="ghost" data-plugin-act="add-repo">Add</button></div>
+    <div class="row-btns"><input id="plugin-repo-input" type="text" placeholder="owner/repo, e.g. someone/their-plugin" spellcheck="false" /><button class="ghost" data-plugin-act="add-repo">Add</button></div>
     ${rows}
     ${repos.length ? '<p class="muted small">Running third-party plug-ins from inside Lodestone isn\'t supported yet: Lodestone can find, install and update them.</p>' : ""}`;
 }

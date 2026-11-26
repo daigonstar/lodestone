@@ -6,7 +6,7 @@ This check makes that promise enforceable: it runs on every push and pull reques
 .github/workflows/checks.yml), and a new address anywhere in the app's code fails the build until it is
 added to network-hosts.txt, which means it's visible in the commit and reviewed.
 
-It reads the app's own code (src-tauri/src, ui). Addresses built at run time from data a store sends
+It reads the app's own code (src-tauri/src, ui, and the Comms and Kiln plug-ins). Addresses built at run time from data a store sends
 back (image and download servers in API answers) can't be seen here; network-hosts.txt says which
 services do that.
 
@@ -22,6 +22,8 @@ SOURCES = [
     *(root / "src-tauri/src").rglob("*.rs"), *(root / "ui").glob("*.js"), *(root / "ui").glob("*.html"),
     # Lodestone Comms (the plug-in, its client and the self-hosted server)
     *(root / "comms").glob("*/src/**/*.rs"), *(root / "comms/app/ui").glob("*.js"), *(root / "comms/app/ui").glob("*.html"),
+    # Kiln (the mod manager plug-in, Python)
+    *(root / "kiln/kiln").rglob("*.py"),
 ]
 URL = re.compile(r"""\b(?:https?|wss?)://([A-Za-z0-9{}$._*-]+)""")
 

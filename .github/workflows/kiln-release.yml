@@ -1,0 +1,25 @@
+# Publishes a Kiln release when a kiln-v<version> tag is pushed (git tag kiln-v0.1.0 && git push origin kiln-v0.1.0).
+# The tag must match __version__ in kiln/kiln/__init__.py. The release carries the files Lodestone's Plug-ins
+# page installs; GitHub publishes each file's SHA-256 checksum, which Lodestone checks before installing.
+name: Kiln release
+
+on:
+  push:
+    tags: ['kiln-v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the release files
+        run: python3 kiln/scripts/build_release.py --tag "$GITHUB_REF_NAME" --out kiln/dist
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "Kiln ${GITHUB_REF_NAME#kiln-v}" --generate-notes \
+            kiln/dist/kiln-*-linux-any.zip kiln/dist/lodestone-plugin.json

@@ -231,7 +231,7 @@ class Manifest:
 def manifest_download_url(api_key: str, download_path: str) -> str:
     if not api_key:
         raise NexusError("A Nexus API key is needed to download collections. Add it in Settings.")
-    url = download_path if download_path.startswith("http") else f"https://api.nexusmods.com{download_path}"
+    url = download_path if download_path.startswith("http") else "https://api.nexusmods.com/" + download_path.lstrip("/")
     r = session.get(url, headers={"apikey": api_key}, timeout=25)
     if r.status_code == 401:
         raise NexusError("Nexus rejected the API key (401).")

@@ -95,6 +95,24 @@ tauri.localhost                               # Lodestone's own window, named in
 # Lodestone Comms talks only to the Comms hosts you choose (yours or your friends'), so their addresses
 # aren't in the code; you see each one when you set it up or join with an invite.
 
+# --- Kiln (the mod manager plug-in; only when you use it) ---
+# Kiln talks to Nexus Mods with your own API key, and downloads the loaders a mod needs from their
+# publishers. Mod files and pictures come from the addresses Nexus sends back.
+api.nexusmods.com                             # Nexus Mods API: your mods, files and collections, with your API key
+www.nexusmods.com                             # Nexus pages (browse, search, free-account downloads in Kiln's own window)
+users.nexusmods.com                           # Nexus sign-in page (opened in Kiln's browser window; Kiln never sees your password)
+smapi.io                                      # SMAPI's mod database, to find the Nexus page of a Stardew mod
+aka.ms                                        # Microsoft's link to its Visual C++ runtime installer (Troubleshoot > update it)
+skse.silverlock.org                           # script extender home pages (SKSE, F4SE, FOSE, SFSE): links, and downloads you start
+f4se.silverlock.org                           # (same)
+fose.silverlock.org                           # (same)
+sfse.silverlock.org                           # (same)
+www.dev-c.com                                 # Script Hook RDR2 home page (link)
+tech.sportskeeda.com                          # a how-to article linked from the Skyrim version help (link)
+youtu.be                                      # video links in Nexus mod descriptions (opened in your browser when you click)
+shared.cloudflare.steamstatic.com             # Steam's game artwork (Kiln's game banner)
+# (github.com and api.github.com above also serve Kiln: SMAPI, BepInEx, REFramework, UE4SS and other loaders' official releases)
+
 # --- Inside Lodestone only ---
 lodestone.localhost                           # internal address for sign-in hand-offs; never leaves the app
 

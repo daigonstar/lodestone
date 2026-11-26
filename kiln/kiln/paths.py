@@ -15,7 +15,12 @@ def _xdg(var: str, fallback: str) -> Path:
 
 
 def config_dir() -> Path:
-    return _xdg("XDG_CONFIG_HOME", ".config")
+    d = _xdg("XDG_CONFIG_HOME", ".config")
+    try:
+        os.chmod(d, 0o700)  # holds the Nexus API key
+    except OSError:
+        pass
+    return d
 
 
 def cache_dir() -> Path:
@@ -48,6 +53,9 @@ class Settings:
 
     def save(self) -> None:
         tmp = self.file.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.data, indent=2))
-        os.chmod(tmp, 0o600)  # holds the Nexus API key
+        # Holds the Nexus API key: created readable only by you, never world-readable even for a moment.
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(self.data, indent=2))
+        os.chmod(tmp, 0o600)
         tmp.replace(self.file)

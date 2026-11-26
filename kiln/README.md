@@ -108,6 +108,17 @@ To add a game, write a small class in `kiln/games/` that sets the deploy folder 
 ## Requirements
 Arch: `pacman -S pyside6 python-requests libarchive qt6-webengine`
 
+## Install from Lodestone
+In [Lodestone](https://github.com/daigonstar/lodestone), open Plug-ins and press Install next to Kiln. Lodestone
+downloads the release from its own GitHub releases (tag `kiln-v<version>`), checks its checksum and unpacks it
+into its own folder. You still need the requirements above (Lodestone tells you if something is missing).
+
+## Releasing
+Kiln lives in the `kiln/` folder of the Lodestone repository. Raise `__version__` in `kiln/kiln/__init__.py`,
+commit, then `git tag kiln-v<version> && git push origin kiln-v<version>` (from the repository root). The
+"Kiln release" workflow builds `kiln-<version>-linux-any.zip` and `lodestone-plugin.json` with
+`kiln/scripts/build_release.py` and publishes them (the tag has to match `__version__`).
+
 ## Run
 ```bash
 cd ~/projects/kiln && python3 -m kiln

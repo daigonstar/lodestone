@@ -37,7 +37,7 @@ tolerated (older Kiln versions lack `mods`), so a companion can add fields witho
 
 ## Installing and updating (`plugin_sources.rs`)
 
-- **Official** plug-ins are a fixed list in the code (`official()`: id, repo, release tag prefix). A clean
+- **Official** plug-ins are a fixed list in the code (`official()`: id, repo, release tag prefix, file suffix). Official plug-ins live in the Lodestone repository (`comms/`, `kiln/`) and release from it with tags `comms-v<version>` and `kiln-v<version>`, so they review and merge with the app. A clean
   install knows nothing else.
 - **Third-party**: you type `owner/repo` on the Plug-ins page; it's stored only in your settings
   (`plugin_repos`), like a Comms server address. GitHub only, name checked (`parse_repo`).

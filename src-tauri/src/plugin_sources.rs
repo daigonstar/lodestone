@@ -34,7 +34,7 @@ pub struct Source {
 pub fn official() -> Vec<Source> {
     vec![
         Source { id: "comms".into(), repo: "daigonstar/lodestone".into(), tag_prefix: "comms-v", official: true, suffix: DEFAULT_SUFFIX },
-        Source { id: "kiln".into(), repo: "daigonstar/kiln".into(), tag_prefix: "v", official: true, suffix: KILN_SUFFIX },
+        Source { id: "kiln".into(), repo: "daigonstar/lodestone".into(), tag_prefix: "kiln-v", official: true, suffix: KILN_SUFFIX },
     ]
 }
 
@@ -52,7 +52,7 @@ pub fn user() -> Vec<Source> {
 }
 
 pub fn add_repo(input: &str) -> Result<String, String> {
-    let repo = parse_repo(input).ok_or("That isn't a GitHub repository. Use owner/repo, like daigonstar/kiln")?;
+    let repo = parse_repo(input).ok_or("That isn't a GitHub repository. Use owner/repo, like someone/their-plugin")?;
     if official().iter().any(|s| s.repo.eq_ignore_ascii_case(&repo)) {
         return Err("That repository is already one of Lodestone's own plug-ins".into());
     }
