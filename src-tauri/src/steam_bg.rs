@@ -25,12 +25,32 @@ use std::time::{Duration, Instant};
 pub const BUSY: &str = "steam-busy";
 
 pub fn steam_running() -> bool {
-    crate::host::procs().iter().any(|p| p.comm == "steam")
+    crate::host::procs().iter().any(|p| is_steam_client(&p.comm))
 }
 
-/// Steam starts every game through its "reaper" with `SteamLaunch AppId=N`.
+/// The Steam client's process name: "steam" on Linux, "steam.exe" on Windows (any case there).
+fn is_steam_client(comm: &str) -> bool {
+    if cfg!(windows) {
+        comm.eq_ignore_ascii_case("steam.exe")
+    } else {
+        comm == "steam"
+    }
+}
+
+/// Linux: Steam starts every game through its "reaper" with `SteamLaunch AppId=N`.
+/// Windows: only program paths are visible, so any program running from a Steam library's games
+/// folder (steamapps\common).
 fn game_running() -> bool {
-    launcher::process_table().iter().any(|p| p.contains("\0SteamLaunch\0"))
+    let procs = launcher::process_table();
+    if cfg!(windows) {
+        procs.iter().any(|p| is_steam_game_path(p))
+    } else {
+        procs.iter().any(|p| p.contains("\0SteamLaunch\0"))
+    }
+}
+
+fn is_steam_game_path(path: &str) -> bool {
+    path.to_ascii_lowercase().replace('/', "\\").contains("\\steamapps\\common\\")
 }
 
 pub fn enabled() -> bool {
@@ -672,6 +692,13 @@ mod progress_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spots_steam_games_by_folder_on_windows() {
+        assert!(is_steam_game_path("\0C:\\Program Files (x86)\\Steam\\steamapps\\common\\Hades\\Hades.exe\0"));
+        assert!(is_steam_game_path("\0D:/SteamLibrary/SteamApps/Common/Celeste/Celeste.exe\0"));
+        assert!(!is_steam_game_path("\0C:\\Program Files (x86)\\Steam\\steam.exe\0"));
+    }
 
     const LOG: &str = "[2026-11-21 07:09:59] AppID 3483 scheduler update : Priority Auto Update, not played for 99160700 seconds, update disabled for 0 seconds
 [2026-11-21 07:09:59] AppID 3483 state changed : Update Required,Update Queued,Update Running,Update Started,

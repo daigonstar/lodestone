@@ -143,19 +143,42 @@ pub fn proton_path() -> String {
 pub struct BinTool {
     pub name: &'static str,
     pub repo: &'static str,
+    /// The release file for Linux.
     pub asset: &'static str,
+    /// The release file for Windows: the first of these names the release has.
+    pub win_assets: &'static [&'static str],
 }
 
-pub const LEGENDARY: BinTool = BinTool { name: "legendary", repo: "derrod/legendary", asset: "legendary_linux_x64" };
-pub const GOGDL: BinTool = BinTool { name: "gogdl", repo: "Heroic-Games-Launcher/heroic-gogdl", asset: "gogdl_linux_x86_64" };
+pub const LEGENDARY: BinTool = BinTool { name: "legendary", repo: "derrod/legendary", asset: "legendary_linux_x64", win_assets: &["legendary.exe", "legendary_windows_x86_64.exe"] };
+pub const GOGDL: BinTool = BinTool { name: "gogdl", repo: "Heroic-Games-Launcher/heroic-gogdl", asset: "gogdl_linux_x86_64", win_assets: &["gogdl_windows_x86_64.exe", "gogdl.exe"] };
+
+/// What a program file for this system starts with: "MZ" on Windows; on Linux a compiled program
+/// (ELF) or a script with a #! line (legendary ships as a self-contained Python zipapp).
+fn is_program_for_this_os(bytes: &[u8]) -> bool {
+    if cfg!(windows) {
+        bytes.starts_with(b"MZ")
+    } else {
+        bytes.starts_with(b"\x7fELF") || bytes.starts_with(b"#!")
+    }
+}
+
+const OS_NAME: &str = if cfg!(windows) { "Windows" } else { "Linux" };
 
 impl BinTool {
     fn dir(&self) -> PathBuf {
         tools_dir().join(self.name)
     }
 
+    fn file_name(&self) -> String {
+        if cfg!(windows) {
+            format!("{}.exe", self.name)
+        } else {
+            self.name.to_string()
+        }
+    }
+
     pub fn path(&self) -> Option<PathBuf> {
-        let p = self.dir().join(self.name);
+        let p = self.dir().join(self.file_name());
         p.is_file().then_some(p)
     }
 
@@ -171,25 +194,29 @@ impl BinTool {
         if self.version().as_deref() == Some(tag.as_str()) {
             return Ok(tag);
         }
-        let asset = rel["assets"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|a| a["name"].as_str() == Some(self.asset))
-            .ok_or_else(|| format!("{} {tag} has no Linux build", self.name))?;
+        let wanted: Vec<&str> = if cfg!(windows) { self.win_assets.to_vec() } else { vec![self.asset] };
+        let assets: Vec<&serde_json::Value> = rel["assets"].as_array().into_iter().flatten().collect();
+        let asset = wanted
+            .iter()
+            .find_map(|w| assets.iter().find(|a| a["name"].as_str() == Some(*w)))
+            .ok_or_else(|| format!("{} {tag} has no {OS_NAME} build", self.name))?;
         let url = asset["browser_download_url"].as_str().ok_or("no download url")?;
         let bytes = net::client().get(url).send().await.map_err(net::err)?.error_for_status().map_err(net::err)?.bytes().await.map_err(net::err)?;
         net::verify_release_file(asset, &bytes)?;
-        // A compiled program, or a self-contained Python zipapp (legendary ships as one).
-        if !(bytes.starts_with(b"\x7fELF") || bytes.starts_with(b"#!")) {
-            return Err(format!("{} download isn't a Linux program", self.name));
+        if !is_program_for_this_os(&bytes) {
+            return Err(format!("{} download isn't a {OS_NAME} program", self.name));
         }
         let dir = self.dir();
         fs::create_dir_all(&dir).map_err(net::err)?;
         let tmp = dir.join(format!("{}.part", self.name));
         fs::write(&tmp, &bytes).map_err(net::err)?;
         crate::os::make_executable(&tmp).map_err(net::err)?;
-        fs::rename(&tmp, dir.join(self.name)).map_err(net::err)?;
+        let dest = dir.join(self.file_name());
+        // Windows won't rename over an existing file.
+        if cfg!(windows) && dest.exists() {
+            fs::remove_file(&dest).map_err(net::err)?;
+        }
+        fs::rename(&tmp, dest).map_err(net::err)?;
         fs::write(dir.join("version.txt"), &tag).map_err(net::err)?;
         Ok(tag)
     }

@@ -135,8 +135,18 @@ fn matches(d: &Detect, procs: &[String]) -> bool {
             let needle = format!("\0{a}\0");
             procs.iter().any(|p| p.contains(&needle))
         }
+        // Windows paths ignore case and take either slash, and stores write them differently from
+        // how Windows reports a running program (C:/Games vs c:\games): compare them the same way.
+        Detect::Contains(s) if cfg!(windows) => {
+            let needle = windows_path_key(s);
+            procs.iter().any(|p| windows_path_key(p).contains(&needle))
+        }
         Detect::Contains(s) => procs.iter().any(|p| p.contains(s.as_str())),
     }
+}
+
+fn windows_path_key(s: &str) -> String {
+    s.to_lowercase().replace('/', "\\")
 }
 
 /// Every process's command line, args separated (and wrapped) by NUL so exact-arg matching works.
@@ -163,6 +173,12 @@ pub type Sessions = HashMap<String, Session>;
 mod tests {
     use super::*;
     use crate::model::{Detect, Game, LaunchSpec};
+
+    #[test]
+    fn windows_paths_compare_without_case_or_slash_differences() {
+        assert_eq!(windows_path_key("C:/Games/Hades"), windows_path_key("c:\\GAMES\\hades"));
+        assert!(windows_path_key("\0C:\\Games\\Hades\\x64\\Hades.exe\0").contains(&windows_path_key("c:/games/hades")));
+    }
 
     #[cfg(unix)] // Linux behaviour (sh, Linux paths, symlinks)
 
