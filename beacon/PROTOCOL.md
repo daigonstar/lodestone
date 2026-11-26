@@ -102,8 +102,18 @@ new device. Nobody holds an account database: each server stores only public key
   server never sees the key, so it can't read the blob; the status call has no sign-in, so anyone who knows the
   new device's key could take the (still encrypted) blob first, which would make that device fall back to
   asking for a recovery phrase.
-- **Not done yet:** clients don't pin or warn when a username shows up with a different identity, and old
-  messages don't travel to a new device (see Project.md).
+- **Pairing can copy message history.** Before approving, the approving app (when the pairing has a QR key)
+  uploads its recent messages with `PUT /v1/pairing/history?device_key=<new device, URL-encoded>` (signed in;
+  body at most 6 MiB, already AES-256-GCM encrypted with the QR key: a nonce, then the ciphertext). It is only
+  accepted for a device that is waiting under the caller's account, and kept at most 10 minutes. Once approved,
+  the new device signs in and collects it with `GET /v1/pairing/history` (`application/octet-stream`, handed
+  over once, then deleted; refusing the device deletes it too). The plaintext is JSON: the last 300 messages of
+  each channel (with attachment keys) and the reactions on them. The new device adds them to its own store
+  without overwriting anything. Profiles are not copied; they arrive as usual. A pairing typed in by hand has
+  no QR key, so it copies nothing. Copying is best effort: if it fails the device is still approved.
+- **Not done yet:** clients don't pin or warn when a username shows up with a different identity, and history
+  older than the last 300 messages per channel, or sent after pairing, only reaches a new device through the
+  channels as usual (an encrypted server backup is a later step; see Project.md).
 
 ## Communities, channels and invites
 

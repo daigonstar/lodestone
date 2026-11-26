@@ -697,3 +697,41 @@ async fn pairing_can_hand_over_encrypted_data_once() {
     let (_, st) = call(&app, "POST", "/v1/pairing/status", None, json!({ "code": pcode, "device_key": b.public() })).await;
     assert!(st["blob"].is_null(), "handed over once");
 }
+
+#[tokio::test]
+async fn pairing_history_goes_only_to_the_waiting_device_and_only_once() {
+    let (app, code) = server();
+    let (a, b, mallory) = (Device::new(), Device::new(), Device::new());
+    a.register(&app, "alice", &code).await;
+    let ta = a.sign_in(&app).await;
+    let (_, c) = call(&app, "POST", "/v1/communities", Some(&ta), json!({ "name": "Hall" })).await;
+    let (_, inv) = call(&app, "POST", &format!("/v1/communities/{}/invites", c["id"].as_str().unwrap()), Some(&ta), json!({ "max_uses": 1, "expires_in": 3600 })).await;
+    assert_eq!(mallory.register(&app, "mallory", inv["code"].as_str().unwrap()).await.0, StatusCode::OK);
+    let tm = mallory.sign_in(&app).await;
+    let enc = |k: &str| -> String { k.bytes().map(|c| if c.is_ascii_alphanumeric() { (c as char).to_string() } else { format!("%{c:02X}") }).collect() };
+    let path = format!("/v1/pairing/history?device_key={}", enc(&b.public()));
+    // Nobody is waiting yet.
+    assert_eq!(put_raw(&app, &path, &ta, vec![1, 2, 3]).await, StatusCode::NOT_FOUND);
+    let (_, p) = call(&app, "POST", "/v1/pairing", Some(&ta), json!({})).await;
+    let pcode = p["code"].as_str().unwrap().to_string();
+    let sig = b.sign(&format!("lodestone-beacon/v1 pair {SERVER} {pcode} {}", b.public()));
+    call(&app, "POST", "/v1/pairing/claim", None, json!({ "code": pcode, "device_key": b.public(), "signature": sig })).await;
+    // Another account can't leave history for Alice's waiting device; too big and empty are refused.
+    assert_eq!(put_raw(&app, &path, &tm, vec![1, 2, 3]).await, StatusCode::NOT_FOUND);
+    assert_eq!(put_raw(&app, &path, &ta, vec![]).await, StatusCode::BAD_REQUEST);
+    assert_eq!(put_raw(&app, &path, &ta, vec![1, 2, 3]).await, StatusCode::OK);
+    assert_eq!(call(&app, "POST", "/v1/pairing/approve", Some(&ta), json!({ "device_key": b.public() })).await.0, StatusCode::OK);
+    call(&app, "POST", "/v1/pairing/status", None, json!({ "code": pcode, "device_key": b.public() })).await;
+    let tb = b.sign_in(&app).await;
+    let get = |tok: String| {
+        let app = app.clone();
+        async move {
+            let req = Request::builder().method("GET").uri("/v1/pairing/history").header("authorization", format!("Bearer {tok}")).body(Body::empty()).unwrap();
+            let res = crate::api::router(app).oneshot(req).await.unwrap();
+            (res.status(), res.into_body().collect().await.unwrap().to_bytes().to_vec())
+        }
+    };
+    assert_eq!(get(tm.clone()).await.0, StatusCode::NOT_FOUND, "only the waiting device can collect it");
+    assert_eq!(get(tb.clone()).await, (StatusCode::OK, vec![1, 2, 3]));
+    assert_eq!(get(tb).await.0, StatusCode::NOT_FOUND, "handed over once");
+}

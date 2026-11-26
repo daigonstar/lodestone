@@ -279,7 +279,7 @@ function renderGate(el) {
         pairPoll = setInterval(async () => {
           try {
             const s = await api("/api/pair/check", { server: r.server });
-            if (s.status === "approved") { clearInterval(pairPoll); gate.link = null; gate.step = "choose"; await loadState(); render(); toast(s.identity_imported ? "Linked. This PC now has your identity." : "Linked."); }
+            if (s.status === "approved") { clearInterval(pairPoll); gate.link = null; gate.step = "choose"; await loadState(); render(); toast((s.identity_imported ? "Linked. This PC now has your identity." : "Linked.") + (s.history_messages ? ` Copied ${s.history_messages} earlier messages.` : "")); }
             if (s.status === "refused") { clearInterval(pairPoll); const m = $("#g-status"); if (m) m.textContent = "The request was refused or the code expired."; }
           } catch (err) { const m = $("#g-status"); if (m) m.textContent = err.message; }
         }, 3000);
@@ -707,8 +707,11 @@ async function devicesDialog() {
     const dec = e.target.closest("[data-decide]");
     if (dec) {
       try {
-        await api("/api/pair/decide", { server: h.url, device_key: dec.dataset.key, approve: dec.dataset.decide === "yes" });
-        toast(dec.dataset.decide === "yes" ? "Device added. It joins your channels in a few seconds." : "Device refused");
+        const d = await api("/api/pair/decide", { server: h.url, device_key: dec.dataset.key, approve: dec.dataset.decide === "yes" });
+        toast(dec.dataset.decide !== "yes" ? "Device refused"
+          : d.history_messages ? `Device added with your last ${d.history_messages} messages. It joins your channels in a few seconds.`
+          : d.history_failed ? "Device added, but your message history couldn't be copied. It joins your channels in a few seconds."
+          : "Device added. It joins your channels in a few seconds.");
         clearInterval(pairPoll);
         $("#dlg").close();
       } catch (err) { toast(err.message, true); }

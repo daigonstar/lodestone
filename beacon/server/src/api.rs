@@ -26,6 +26,10 @@ pub fn router(app: Shared) -> Router {
         .route("/v1/recover", post(crate::auth::recover))
         .route("/v1/devices/remove", post(crate::pairing::remove_device))
         .route("/v1/pairing", post(crate::pairing::start).get(crate::pairing::waiting))
+        .route(
+            "/v1/pairing/history",
+            axum::routing::put(crate::pairing::put_history).get(crate::pairing::get_history).layer(axum::extract::DefaultBodyLimit::max(crate::pairing::MAX_HISTORY + 1024)),
+        )
         .route("/v1/pairing/claim", post(crate::pairing::claim))
         .route("/v1/pairing/status", post(crate::pairing::status))
         .route("/v1/pairing/approve", post(crate::pairing::approve))

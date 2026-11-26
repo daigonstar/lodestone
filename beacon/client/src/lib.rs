@@ -405,6 +405,29 @@ impl Client {
         Ok(())
     }
 
+    /// Before approving a waiting device: leave it your recent message history, encrypted with the pairing key `key`
+    /// (which only the QR code carries, so the server can't read it). Returns how many messages were sent.
+    pub async fn pair_send_history(&self, device_key: &str, key: &[u8; 32]) -> Result<usize> {
+        let h = self.store.export_history(300, 5 * 1024 * 1024)?;
+        let n = h["messages"].as_array().map_or(0, |m| m.len());
+        if n == 0 {
+            return Ok(0);
+        }
+        let sealed = identity::Identity::seal_bytes(h.to_string().as_bytes(), key);
+        let q: String = device_key.bytes().map(|b| if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' { (b as char).to_string() } else { format!("%{b:02X}") }).collect();
+        self.server.put_raw(&format!("/v1/pairing/history?device_key={q}"), sealed).await?;
+        Ok(n)
+    }
+
+    /// On the new device, once approved: collect the history the approving device left and add it. Returns how many
+    /// messages were added (0 when nothing was left, or it couldn't be opened).
+    pub async fn pair_fetch_history(&self, key: &[u8; 32]) -> Result<usize> {
+        let Ok((sealed, _)) = self.server.get_raw("/v1/pairing/history").await else { return Ok(0) };
+        let Some(plain) = identity::Identity::open_bytes(&sealed, key) else { return Ok(0) };
+        let Ok(h) = serde_json::from_slice::<Value>(&plain) else { return Ok(0) };
+        Ok(self.store.import_history(&h)?)
+    }
+
     /// On the new device: offer this device for a code. Returns (username, this device's fingerprint);
     /// then wait for `pair_check` to say it was approved.
     pub async fn pair_claim(&self, code: &str) -> Result<(String, String)> {

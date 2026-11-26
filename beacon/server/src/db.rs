@@ -107,6 +107,12 @@ CREATE TABLE IF NOT EXISTS pairing_blobs (
     device_key TEXT PRIMARY KEY REFERENCES devices(key) ON DELETE CASCADE,
     blob TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pairing_history (
+    device_key TEXT PRIMARY KEY,
+    account INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    data BLOB NOT NULL,
+    expires INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS recover_challenges (
     nonce TEXT PRIMARY KEY,
     identity_key TEXT NOT NULL,

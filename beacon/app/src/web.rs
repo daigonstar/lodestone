@@ -576,8 +576,17 @@ async fn pair_decide(State(app): State<Shared>, Json(r): Json<DeviceReq>) -> R {
     // Approving also hands over your identity, sealed with the key from the QR code (if this pairing had one).
     let key = if r.approve { app.pair_keys.lock().unwrap().remove(&c.server.url) } else { None };
     let handover = key.and_then(|k| app.identity.lock().unwrap().as_ref().map(|(id, _)| id.seal(&k)));
+    // ...and your recent messages, so the new device isn't empty. Failing to send them never blocks the approval.
+    let mut history = 0;
+    let mut history_failed = false;
+    if let Some(k) = key {
+        match c.pair_send_history(&r.device_key, &k).await {
+            Ok(n) => history = n,
+            Err(_) => history_failed = true,
+        }
+    }
     c.pair_decide(&r.device_key, r.approve, handover).await?;
-    Ok(Json(json!({ "ok": true })))
+    Ok(Json(json!({ "ok": true, "history_messages": history, "history_failed": history_failed })))
 }
 
 #[derive(Deserialize)]
@@ -622,8 +631,12 @@ async fn pair_check(State(app): State<Shared>, Json(r): Json<ServerQuery>) -> R 
     let (status, blob) = c.pair_check().await?;
     // Approved with your identity from the other device: keep it, unless this device already has one.
     let mut imported = false;
+    let mut history = 0;
     if status == "approved" {
         let key = app.pair_keys.lock().unwrap().remove(&c.server.url);
+        if let Some(key) = key {
+            history = c.pair_fetch_history(&key).await.unwrap_or(0);
+        }
         if let (Some(blob), Some(key)) = (blob, key) {
             let mut mine = app.identity.lock().unwrap();
             if mine.is_none() {
@@ -640,7 +653,7 @@ async fn pair_check(State(app): State<Shared>, Json(r): Json<ServerQuery>) -> R 
     if status != "waiting" {
         let _ = app.events.send(json!({ "type": "state" }).to_string());
     }
-    Ok(Json(json!({ "status": status, "identity_imported": imported })))
+    Ok(Json(json!({ "status": status, "identity_imported": imported, "history_messages": history })))
 }
 
 // ---------- identity ----------

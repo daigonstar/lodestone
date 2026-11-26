@@ -144,9 +144,18 @@ async fn encrypted_chat_end_to_end() {
     assert_eq!(desktop.pair_check().await.unwrap().0, "waiting");
     let waiting = alice.pair_waiting().await.unwrap();
     assert_eq!(waiting, vec![(desktop.device_key().to_string(), fp.clone())]);
+    // The QR code's key lets Alice's laptop leave the desktop her message history (the server only sees ciphertext).
+    let key = [7u8; 32];
+    let sent = alice.pair_send_history(desktop.device_key(), &key).await.unwrap();
+    assert!(sent >= 3, "Alice's history was sent");
     alice.pair_decide(desktop.device_key(), true, None).await.unwrap();
     assert_eq!(desktop.pair_check().await.unwrap().0, "approved");
     assert_eq!(desktop.username().as_deref(), Some("alice"));
+    // The desktop collects it once, with the right key, and sees Alice's older messages straight away.
+    let got = desktop.pair_fetch_history(&key).await.unwrap();
+    assert_eq!(got, sent);
+    assert!(bodies(&desktop, &general).contains(&"alice: welcome carol".to_string()));
+    assert_eq!(desktop.pair_fetch_history(&key).await.unwrap(), 0, "the server hands the history over once");
     // Alice's laptop (or any member) adds the new device to the channels.
     alice.sync().await.unwrap();
     desktop.sync().await.unwrap();
