@@ -34,7 +34,10 @@ shape of the plugin API are in `docs/plugin-api-notes.md`.
 | Kiln listed on the Plug-ins page with an on/off switch (off hides all Kiln tags and launching) | Done, builds and unit test pass on Linux; UI not clicked through yet |
 | Windows-aware Kiln lookup (replaces the Linux-only `.desktop` search on Windows: `kiln.exe` on PATH, `%LOCALAPPDATA%\Lodestone\Kiln`, `%LOCALAPPDATA%\Programs\Kiln`) | Done in code, not built or run on Windows |
 | Kiln itself running on Windows | **Not started**: Kiln is Linux-only (Proton prefixes, Steam's Linux folders, Qt). Needs a port before the Windows lookup finds anything |
-| One-click install/update from official GitHub releases (checksum-verified), shared by Comms and Kiln; users can add their own GitHub repos for third-party plug-ins | Done in code, unit-tested; page smoke-tested with a stubbed backend only, never against real releases. Kiln needs to publish a release (`…-linux-x86_64.flatpak`, app id `io.github.daigonstar.Kiln`) before it can install |
+| One-click install/update from official GitHub releases (checksum-verified), shared by Comms and Kiln; users can add their own GitHub repos for third-party plug-ins | Done in code, unit-tested; page smoke-tested with a stubbed backend only, never against real releases. Kiln has a release workflow (kiln PR, pending) but no release has been published, so nothing has been downloaded from GitHub yet |
+| Kiln installable from Lodestone: Kiln ships its Python source as `kiln-<version>-linux-any.zip`, Lodestone unpacks it to `~/.local/share/lodestone/plugins/kiln/<version>` and runs it with the system's Python | Done. Unzip, find and `--games` run tested through Lodestone's code with a locally built zip; GUI, Play and the real download not tested |
+| Kiln needs PySide6, QtWebEngine and requests from the system (not bundled) | Lodestone warns on the Kiln card when missing; bundling or a Flatpak not planned (Kiln needs the host's Steam and Proton) |
+| First Kiln release: push tag `v0.1.0` in the kiln repo once its PR is merged | **Waiting on Robb** |
 | Running third-party embedded plug-ins; release signing | Not started |
 | Kiln speaks the Lodestone bridge (`--lodestone-bridge`) and shows its page in Lodestone | Not started: decide whether it's wanted (needs a web UI) |
 

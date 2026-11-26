@@ -266,7 +266,7 @@ pub struct PluginInfo {
     /// What Lodestone does with a companion plug-in, in plain words (empty for embedded ones).
     pub uses: Vec<&'static str>,
     /// Something to know on this system (e.g. no build for it yet).
-    pub note: Option<&'static str>,
+    pub note: Option<String>,
 }
 
 /// The plug-ins Lodestone knows (only Comms so far).
@@ -302,7 +302,7 @@ pub fn list() -> Vec<PluginInfo> {
         running: false,
         version: None,
         permissions: vec![],
-        install_hint: "Kiln isn't installed. Lodestone can install it from its official releases on GitHub once Kiln publishes one; until then, get it from github.com/daigonstar/kiln and make sure `kiln` runs from a terminal.",
+        install_hint: "Kiln isn't installed. Lodestone can install it from its official releases on GitHub. It runs on your system's Python, so it needs PySide6 and requests installed (on Arch: pacman -S pyside6 python-requests qt6-webengine libarchive).",
         kind: "companion",
         enabled: enabled(KILN),
         uses: vec![
@@ -311,7 +311,7 @@ pub fn list() -> Vec<PluginInfo> {
             "Start Kiln on a game when you press Set up mods or Manage mods",
             "Start modded games through Kiln's Guarded Play (Settings → Mods), or without mods",
         ],
-        note: if cfg!(windows) { Some("Kiln only runs on Linux so far (it works with Proton and Steam's Linux folders). Lodestone will pick it up on Windows once Kiln has a Windows build.") } else { None },
+        note: if cfg!(windows) { Some("Kiln only runs on Linux so far (it works with Proton and Steam's Linux folders). Lodestone will pick it up on Windows once Kiln has a Windows build.".to_string()) } else { crate::kiln::missing_deps() },
     }]
 }
 

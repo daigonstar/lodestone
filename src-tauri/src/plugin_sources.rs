@@ -25,13 +25,16 @@ pub struct Source {
     /// Official plug-ins that share a repository tell their releases apart by tag prefix ("comms-v").
     pub tag_prefix: &'static str,
     pub official: bool,
+    /// The ending of this system's file in a release. Normally a Flatpak bundle on Linux and a zip on
+    /// Windows; Kiln (Python, which needs the host's Steam and Proton) ships a zip of its source on Linux.
+    pub suffix: &'static str,
 }
 
 /// The plug-ins Lodestone ships knowing about.
 pub fn official() -> Vec<Source> {
     vec![
-        Source { id: "comms".into(), repo: "daigonstar/lodestone".into(), tag_prefix: "comms-v", official: true },
-        Source { id: "kiln".into(), repo: "daigonstar/kiln".into(), tag_prefix: "v", official: true },
+        Source { id: "comms".into(), repo: "daigonstar/lodestone".into(), tag_prefix: "comms-v", official: true, suffix: DEFAULT_SUFFIX },
+        Source { id: "kiln".into(), repo: "daigonstar/kiln".into(), tag_prefix: "v", official: true, suffix: KILN_SUFFIX },
     ]
 }
 
@@ -45,7 +48,7 @@ pub fn parse_repo(s: &str) -> Option<String> {
 
 /// Repositories you added (third-party).
 pub fn user() -> Vec<Source> {
-    crate::settings::load().plugin_repos.iter().filter_map(|r| parse_repo(r)).map(|r| Source { id: r.clone(), repo: r, tag_prefix: "", official: false }).collect()
+    crate::settings::load().plugin_repos.iter().filter_map(|r| parse_repo(r)).map(|r| Source { id: r.clone(), repo: r, tag_prefix: "", official: false, suffix: DEFAULT_SUFFIX }).collect()
 }
 
 pub fn add_repo(input: &str) -> Result<String, String> {
@@ -93,9 +96,14 @@ pub struct Release {
 }
 
 #[cfg(not(windows))]
-const SUFFIX: &str = "-linux-x86_64.flatpak";
+const DEFAULT_SUFFIX: &str = "-linux-x86_64.flatpak";
 #[cfg(windows)]
-const SUFFIX: &str = "-windows-x86_64.zip";
+const DEFAULT_SUFFIX: &str = "-windows-x86_64.zip";
+/// Kiln: its Python source, run with the system's Python and PySide6 (no Windows build yet).
+#[cfg(not(windows))]
+const KILN_SUFFIX: &str = "-linux-any.zip";
+#[cfg(windows)]
+const KILN_SUFFIX: &str = "-windows-x86_64.zip";
 
 fn release_url(repo: &str) -> String {
     format!("https://api.github.com/repos/{repo}/releases?per_page=30")
@@ -112,14 +120,14 @@ fn clean_version(v: &str) -> Option<String> {
 
 /// Pick the newest usable release from GitHub's list (newest first): not a draft or pre-release, with the
 /// tag prefix, and a file for this system.
-pub fn pick(list: &Value, tag_prefix: &str) -> Option<(String, Value, Value)> {
+pub fn pick(list: &Value, tag_prefix: &str, suffix: &str) -> Option<(String, Value, Value)> {
     for rel in list.as_array()?.iter().filter(|r| r["draft"] != json!(true) && r["prerelease"] != json!(true)) {
         let tag = rel["tag_name"].as_str().unwrap_or_default();
         let Some(rest) = tag.strip_prefix(tag_prefix) else { continue };
         let rest = if tag_prefix.is_empty() { rest.strip_prefix('v').unwrap_or(rest) } else { rest };
         let Some(version) = clean_version(rest) else { continue };
         let assets = rel["assets"].as_array().cloned().unwrap_or_default();
-        if let Some(a) = assets.iter().find(|a| a["name"].as_str().is_some_and(|n| n.ends_with(SUFFIX))) {
+        if let Some(a) = assets.iter().find(|a| a["name"].as_str().is_some_and(|n| n.ends_with(suffix))) {
             return Some((version, a.clone(), json!(assets)));
         }
     }
@@ -128,7 +136,7 @@ pub fn pick(list: &Value, tag_prefix: &str) -> Option<(String, Value, Value)> {
 
 pub async fn latest(src: &Source) -> Result<Release, String> {
     let list = net::get_json(&release_url(&src.repo), &[("accept", "application/vnd.github+json")]).await?;
-    let (version, asset, assets) = pick(&list, src.tag_prefix).ok_or_else(|| format!("{} has no release for this system yet", src.repo))?;
+    let (version, asset, assets) = pick(&list, src.tag_prefix, src.suffix).ok_or_else(|| format!("{} has no release for this system yet", src.repo))?;
     // The optional description of the plug-in (small, and only read as text).
     let mut manifest = None;
     if let Some(m) = assets.as_array().into_iter().flatten().find(|a| a["name"].as_str() == Some("lodestone-plugin.json")) {
@@ -184,6 +192,11 @@ pub async fn check(src: &Source) -> Result<Value, String> {
     Ok(json!({ "id": src.id, "repo": src.repo, "official": src.official, "latest": rel.version, "installed": have, "update": update, "manifest": rel.manifest }))
 }
 
+#[cfg(test)]
+pub async fn install_for_test(src: &Source, version: &str, bytes: &[u8]) -> Result<(), String> {
+    install_file(src, version, bytes).await
+}
+
 /// Install (or update) a plug-in other than Comms, which has its own folder layout (comms_install).
 pub async fn install(src: &Source) -> Result<String, String> {
     let rel = latest(src).await?;
@@ -199,6 +212,9 @@ pub async fn install(src: &Source) -> Result<String, String> {
 
 #[cfg(not(windows))]
 async fn install_file(src: &Source, version: &str, bytes: &[u8]) -> Result<(), String> {
+    if src.suffix.ends_with(".zip") {
+        return unzip_version(&src.id, version, bytes);
+    }
     install_flatpak(&src.id, version, bytes).await
 }
 
@@ -228,18 +244,55 @@ pub async fn install_flatpak(label: &str, version: &str, bytes: &[u8]) -> Result
     Ok(())
 }
 
-/// Windows: %LOCALAPPDATA%\Lodestone\Plugins\<plug-in>\<version>, one folder per version.
 #[cfg(windows)]
 async fn install_file(src: &Source, version: &str, bytes: &[u8]) -> Result<(), String> {
-    let base = dirs::data_local_dir().unwrap_or_default().join("Lodestone").join("Plugins").join(safe_name(&src.id));
+    unzip_version(&src.id, version, bytes)
+}
+
+/// Where Lodestone puts a plug-in it unpacks (a zip): Windows %LOCALAPPDATA%\Lodestone\Plugins\<plug-in>,
+/// Linux ~/.local/share/lodestone/plugins/<plug-in> (the id is "owner__repo" for third-party ones). One
+/// folder per version inside, and `current.txt` names the one in use.
+pub fn unpacked_dir(id: &str) -> PathBuf {
+    #[cfg(windows)]
+    let base = dirs::data_local_dir().unwrap_or_default().join("Lodestone").join("Plugins");
+    #[cfg(not(windows))]
+    let base = crate::state::data_dir().join("plugins");
+    base.join(safe_name(id))
+}
+
+/// The folder of the version in use, if one is installed.
+pub fn current_unpacked(id: &str) -> Option<PathBuf> {
+    let base = unpacked_dir(id);
+    let v = fs::read_to_string(base.join("current.txt")).ok()?;
+    let dir = base.join(v.trim());
+    (!v.trim().is_empty() && !v.contains(['/', '\\']) && dir.is_dir()).then_some(dir)
+}
+
+fn unzip_version(id: &str, version: &str, bytes: &[u8]) -> Result<(), String> {
+    let base = unpacked_dir(id);
     let target = base.join(version);
     let _ = fs::remove_dir_all(&target);
-    fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    unzip_into(bytes, &target)?;
+    fs::write(base.join("current.txt"), version).map_err(|e| e.to_string())?;
+    // Older versions are removed once the new one is in place.
+    for e in fs::read_dir(&base).map_err(|e| e.to_string())?.flatten() {
+        if e.path().is_dir() && e.file_name() != version {
+            let _ = fs::remove_dir_all(e.path());
+        }
+    }
+    Ok(())
+}
+
+/// Unpack a zip into `target`, refusing any name that would land outside it.
+fn unzip_into(bytes: &[u8], target: &std::path::Path) -> Result<(), String> {
+    fs::create_dir_all(target).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|_| "That download isn't a zip".to_string())?;
     for i in 0..zip.len() {
         let mut f = zip.by_index(i).map_err(|e| e.to_string())?;
-        // Only names inside the target folder (no "..", no absolute paths).
-        let Some(rel) = f.enclosed_name() else { return Err("The zip has a file outside its folder".into()) };
+        let Some(rel) = f.enclosed_name() else {
+            let _ = fs::remove_dir_all(target);
+            return Err("The zip has a file outside its folder".into());
+        };
         let out = target.join(rel);
         if f.is_dir() {
             fs::create_dir_all(&out).map_err(|e| e.to_string())?;
@@ -250,12 +303,6 @@ async fn install_file(src: &Source, version: &str, bytes: &[u8]) -> Result<(), S
         }
         let mut w = fs::File::create(&out).map_err(|e| e.to_string())?;
         std::io::copy(&mut f, &mut w).map_err(|e| e.to_string())?;
-    }
-    fs::write(base.join("current.txt"), version).map_err(|e| e.to_string())?;
-    for e in fs::read_dir(&base).map_err(|e| e.to_string())?.flatten() {
-        if e.path().is_dir() && e.file_name() != version {
-            let _ = fs::remove_dir_all(e.path());
-        }
     }
     Ok(())
 }
@@ -284,6 +331,7 @@ mod tests {
     #[test]
     fn picks_the_newest_usable_release() {
         let asset = |n: &str| json!({ "name": n });
+        const SUFFIX: &str = DEFAULT_SUFFIX;
         let list = json!([
             { "tag_name": "comms-v0.4.0", "draft": true, "assets": [asset(&format!("x-0.4.0{SUFFIX}"))] },
             { "tag_name": "v9.9.9", "assets": [asset(&format!("lodestone{SUFFIX}"))] },
@@ -292,11 +340,41 @@ mod tests {
             { "tag_name": "comms-v0.1.0", "assets": [asset(&format!("x-0.1.0{SUFFIX}"))] },
             { "tag_name": "comms-v../../x", "assets": [asset(&format!("y{SUFFIX}"))] },
         ]);
-        let (v, a, _) = pick(&list, "comms-v").unwrap();
+        let (v, a, _) = pick(&list, "comms-v", SUFFIX).unwrap();
         assert_eq!((v.as_str(), a["name"].as_str().unwrap()), ("0.1.0", format!("x-0.1.0{SUFFIX}").as_str()));
         // No prefix (a third-party repo): the leading "v" is dropped.
-        assert_eq!(pick(&list, "").unwrap().0, "9.9.9");
-        assert!(pick(&list, "kiln-v").is_none());
+        assert_eq!(pick(&list, "", SUFFIX).unwrap().0, "9.9.9");
+        assert!(pick(&list, "kiln-v", SUFFIX).is_none());
+    }
+
+    fn make_zip(names: &[&str]) -> Vec<u8> {
+        use std::io::Write;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for n in names {
+            w.start_file(*n, zip::write::SimpleFileOptions::default()).unwrap();
+            w.write_all(b"x").unwrap();
+        }
+        w.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn unzips_inside_its_folder_only() {
+        let dir = std::env::temp_dir().join(format!("lodestone-unzip-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        unzip_into(&make_zip(&["kiln/__main__.py", "lodestone-plugin.json"]), &dir.join("ok")).unwrap();
+        assert!(dir.join("ok/kiln/__main__.py").is_file());
+        assert!(unzip_into(&make_zip(&["../escape.txt"]), &dir.join("bad")).is_err());
+        assert!(!dir.join("escape.txt").exists());
+        assert!(unzip_into(b"not a zip", &dir.join("bad2")).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kiln_ships_its_source_as_a_zip_on_linux() {
+        let k = find("kiln").unwrap();
+        assert_eq!(k.suffix.ends_with(".zip"), true);
+        #[cfg(not(windows))]
+        assert!(find("comms").unwrap().suffix.ends_with(".flatpak"));
     }
 
     #[test]

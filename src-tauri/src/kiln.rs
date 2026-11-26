@@ -24,9 +24,6 @@ pub struct KilnGame {
     pub mods: Option<usize>,
 }
 
-#[cfg(not(windows))]
-const KILN_FLATPAK: &str = "io.github.daigonstar.Kiln";
-
 /// How to run Kiln, or None when it isn't installed or you've turned the Kiln plug-in off
 /// (Plug-ins page). Everything in Lodestone that talks to Kiln goes through here, so switching the
 /// plug-in off hides all of it.
@@ -42,7 +39,7 @@ pub fn installed() -> bool {
     locate().is_some()
 }
 
-/// Find Kiln. Linux: `kiln` on the PATH, its Flatpak, else the command in its desktop entry
+/// Find Kiln. Linux: `kiln` on the PATH, the release Lodestone installed, else the command in its desktop entry
 /// (e.g. `env PYTHONPATH=… python3 -m kiln`). Windows: `kiln.exe` on the PATH, or in
 /// %LOCALAPPDATA%\Lodestone\Kiln or %LOCALAPPDATA%\Programs\Kiln. (Kiln has no Windows build yet, so
 /// on Windows this finds nothing until it does.)
@@ -53,9 +50,9 @@ fn locate() -> Option<Vec<String>> {
             return Some(vec![p.to_string_lossy().into_owned()]);
         }
         let local = dirs::data_local_dir()?;
-        // The release Lodestone installed (plugin_sources): Plugins\kiln\<version>\kiln.exe, `current.txt` names the version.
-        if let Ok(v) = std::fs::read_to_string(local.join("Lodestone").join("Plugins").join("kiln").join("current.txt")) {
-            let exe = local.join("Lodestone").join("Plugins").join("kiln").join(v.trim()).join("kiln.exe");
+        // The release Lodestone installed (plugin_sources): kiln.exe in the folder of the version in use.
+        if let Some(dir) = crate::plugin_sources::current_unpacked("kiln") {
+            let exe = dir.join("kiln.exe");
             if exe.is_file() {
                 return Some(vec![exe.to_string_lossy().into_owned()]);
             }
@@ -73,11 +70,10 @@ fn locate() -> Option<Vec<String>> {
         if let Some(p) = which("kiln") {
             return Some(vec![p.to_string_lossy().into_owned()]);
         }
-        // The Flatpak Lodestone installs from Kiln's releases (the app id Kiln's release will use).
-        let mut info = std::process::Command::new("flatpak");
-        info.args(["info", KILN_FLATPAK]);
-        if crate::host::wrap(info).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success()) {
-            return Some(vec!["flatpak".into(), "run".into(), KILN_FLATPAK.into()]);
+        // The release Lodestone installed (plugin_sources): Kiln's source in a folder of its own, run with
+        // the system's Python (and the PySide6 it needs).
+        if let Some(dir) = crate::plugin_sources::current_unpacked("kiln") {
+            return Some(vec!["env".into(), format!("PYTHONPATH={}", dir.to_string_lossy()), "python3".into(), "-m".into(), "kiln".into()]);
         }
         let h = home();
         for f in [h.join(".local/share/applications/kiln.desktop"), "/usr/share/applications/kiln.desktop".into()] {
@@ -88,6 +84,27 @@ fn locate() -> Option<Vec<String>> {
         }
         None
     }
+}
+
+static DEPS: Mutex<Option<(Instant, Option<String>)>> = Mutex::new(None);
+
+/// What Kiln needs that this PC lacks (it runs on the system's Python), in plain words; None when it's
+/// all there or Kiln isn't installed. Cached for a minute.
+pub fn missing_deps() -> Option<String> {
+    if cfg!(windows) || !installed() {
+        return None;
+    }
+    if let Some((t, v)) = DEPS.lock().unwrap().as_ref() {
+        if t.elapsed() < Duration::from_secs(60) {
+            return v.clone();
+        }
+    }
+    let mut c = std::process::Command::new("python3");
+    c.args(["-c", "import PySide6.QtWidgets, PySide6.QtWebEngineWidgets, requests"]);
+    let ok = crate::host::wrap(c).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+    let v = (!ok).then(|| "Kiln needs Python with PySide6 (including QtWebEngine) and requests. On Arch: sudo pacman -S pyside6 python-requests qt6-webengine libarchive".to_string());
+    *DEPS.lock().unwrap() = Some((Instant::now(), v.clone()));
+    v
 }
 
 /// The command from a desktop entry's `Exec=` line, without the `%f`-style placeholders.
@@ -176,6 +193,27 @@ mod tests {
         assert_eq!(super::desktop_exec(e), Some(vec!["env".into(), "PYTHONPATH=/opt/kiln".into(), "python3".into(), "-m".into(), "kiln".into()]));
         assert_eq!(super::desktop_exec("[Desktop Entry]\nName=Kiln\n"), None);
         assert_eq!(super::desktop_exec("Exec=%U\n"), None);
+    }
+
+    /// Linux: install a Kiln release zip from disk the way a download is installed, into a throwaway data
+    /// folder, then ask the installed Kiln for its games:
+    /// LODESTONE_TEST_KILN_ZIP=<zip> cargo test installs_a_kiln_zip -- --ignored --nocapture
+    #[cfg(not(windows))]
+    #[test]
+    #[ignore]
+    fn installs_a_kiln_zip() {
+        let zip = std::env::var("LODESTONE_TEST_KILN_ZIP").expect("set LODESTONE_TEST_KILN_ZIP");
+        let tmp = std::env::temp_dir().join(format!("lodestone-kiln-test-{}", std::process::id()));
+        std::env::set_var("XDG_DATA_HOME", &tmp);
+        std::env::set_var("PATH", "/usr/local/bin:/usr/bin:/bin");
+        let bytes = std::fs::read(zip).unwrap();
+        let src = crate::plugin_sources::find("kiln").unwrap();
+        tauri::async_runtime::block_on(crate::plugin_sources::install_for_test(&src, "0.1.0", &bytes)).unwrap();
+        println!("command: {:?}", super::locate());
+        let games = super::run_json(&["--games"]).expect("installed Kiln answers --games");
+        println!("{} games", games.as_array().map_or(0, |a| a.len()));
+        assert!(games.as_array().is_some_and(|a| a.len() > 30));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// `cargo test live_kiln -- --ignored --nocapture`

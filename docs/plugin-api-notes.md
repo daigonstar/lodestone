@@ -47,7 +47,10 @@ tolerated (older Kiln versions lack `mods`), so a companion can add fields witho
 - Optional `lodestone-plugin.json` in the release (≤16 KB): `name`, `description`, `kind`
   (`embedded` or `companion`), `permissions`. It's only shown to you before installing.
 - Checks happen only when the Plug-ins page is opened; installs only on a button press.
-- Linux installs the Flatpak for your user. Windows unpacks the zip to
+- Which file: each source names the ending of its file (`suffix`). Flatpak plug-ins use `-linux-x86_64.flatpak`;
+  Kiln, which needs the host's Steam and Proton, ships `-linux-any.zip` (its Python source) instead, run with
+  the system's Python. The zip goes to `~/.local/share/lodestone/plugins/<id>/<version>`.
+- Linux installs a Flatpak for your user. Windows unpacks the zip to
   `%LOCALAPPDATA%\Lodestone\Plugins\<id>\<version>` with `current.txt` naming the version in use (Comms
   keeps its older `Comms\` layout).
 - Not built yet: running third-party *embedded* plug-ins (the host in `plugins.rs` handles only Comms),

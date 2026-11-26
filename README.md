@@ -296,7 +296,7 @@ Lodestone works as usual and these options don't appear.
 
 Kiln is a *companion plug-in* (⚙ Settings → Manage plug-ins): you can turn it off there, and Lodestone then
 stops asking Kiln anything. Lodestone shares nothing with Kiln; it only runs Kiln's command line
-(`kiln --games`, `--status`, `--game`, `--play`, `--play-vanilla`). Kiln only runs on Linux so far, so on
+(`kiln --games`, `--status`, `--game`, `--play`, `--play-vanilla`). Kiln can be installed from the Plug-ins page (official release from its GitHub, checksum checked). It runs on your system's Python, so it needs PySide6 and requests installed (Arch: `pacman -S pyside6 python-requests qt6-webengine libarchive`); Lodestone tells you if they're missing. Kiln only runs on Linux so far, so on
 Windows the plug-in shows "not installed" until Kiln has a Windows build. This hasn't been tested on Windows.
 
 ## Run
