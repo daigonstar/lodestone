@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lodestone Beacon</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<svg class="sprite" aria-hidden="true">
+  <!-- Beacon icon set, "mystic" version. 24x24, 1.5 stroke in currentColor, angular chamfered shapes (like the facets of the app icon),
+       and one small filled spark  per icon in the accent colour. Use: <svg class="i"><use href="#i-mic"/></svg>
+       CSS: .i{fill:none;stroke:currentColor;stroke-width:1.5;stroke-linejoin:bevel;stroke-linecap:round}; set --spark for the accent -->
+  <symbol id="i-mic" viewBox="0 0 24 24"><path d="M9 6l1.5-3h3L15 6v6l-1.5 2.5h-3L9 12z"/><path d="M5.5 11l2 5.5h9l2-5.5M12 17v3.5"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M12 6.2l1 1.6-1 1.6-1-1.6z"/></symbol>
+  <symbol id="i-mic-off" viewBox="0 0 24 24"><path d="M9 7V6l1.5-3h3L15 6v5M14.5 13.2L13.5 14.5h-3L9 12v-1M5.5 11l2 5.5h5.5M16.5 15.2L18.5 11M12 17v3.5M4 4l16 16"/></symbol>
+  <symbol id="i-headphones" viewBox="0 0 24 24"><path d="M4 16v-4l3.5-7h9L20 12v4"/><path d="M3.5 14h3.5v6H5l-1.5-2zM20.5 14H17v6h2l1.5-2z"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M12 6.4l1.1 1.6L12 9.6 10.9 8z"/></symbol>
+  <symbol id="i-headphones-off" viewBox="0 0 24 24"><path d="M4 16v-4l3.5-7h5.2M20 12v4M16.5 5l1.5 3"/><path d="M3.5 14h3.5v6H5l-1.5-2zM20.5 14H17v6h2l1.5-2z"/><path d="M4 4l16 16"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M3 8l2-2h8l2 2v8l-2 2H5l-2-2z"/><path d="M15 11l6-3.5v9L15 13"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M9 9.2l1.4 2.3L9 13.8 7.6 11.5z"/></symbol>
+  <symbol id="i-camera-off" viewBox="0 0 24 24"><path d="M15 12V8l-2-2H8M3 8v8l2 2h8l1.5-1.5M15 11l6-3.5v9l-3.5-2M4 4l16 16"/></symbol>
+  <symbol id="i-screen" viewBox="0 0 24 24"><path d="M3 6l2-2h14l2 2v9l-2 2H5l-2-2z"/><path d="M8 20.5h8M12 17v3.5"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M12 6.6l2.4 3.4-2.4 3.4L9.6 10z"/></symbol>
+  <symbol id="i-stream" viewBox="0 0 24 24"><path d="M8 7.5L5.5 12 8 16.5M16 7.5L18.5 12 16 16.5M4.5 5L1.8 12l2.7 7M19.5 5l2.7 7-2.7 7"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M12 8.6l2 3.4-2 3.4-2-3.4z"/></symbol>
+  <symbol id="i-call-end" viewBox="0 0 24 24"><path d="M2.5 14.5L5 12c4.5-2.6 9.5-2.6 14 0l2.5 2.5-3 2.5-3-1.5v-2.3a9 9 0 0 0-5 0v2.3L5.5 17z"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M12 17.8l.9 1.4-.9 1.4-.9-1.4z"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12 3l2 3.2 3.7-.9.9 3.7L21.8 12l-3.2 2 .9 3.7-3.7.9L12 21l-2-3.2-3.7.9-.9-3.7L2.2 12l3.2-2-.9-3.7 3.7-.9z"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M12 9.2l2.8 2.8-2.8 2.8L9.2 12z"/></symbol>
+  <symbol id="i-hash" viewBox="0 0 24 24"><path d="M9.5 4L7 20M17 4l-2.5 16M4.5 9h16M3.5 15h16"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M12 10.8l1.2 1.2-1.2 1.2-1.2-1.2z"/></symbol>
+  <symbol id="i-volume" viewBox="0 0 24 24"><path d="M3.5 9.5H7l5-4.5v14l-5-4.5H3.5z"/><path d="M15.5 9l1.5 3-1.5 3M18.5 6l2 6-2 6"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M8.6 12l.8.8-.8.8-.8-.8z"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M3.5 11.5L20.5 4l-4.5 16-4-6.5z"/><path d="M12 13.5l8.5-9.5"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M8 15.6l1.2 1.2L8 18l-1.2-1.2z"/></symbol>
+  <symbol id="i-attach" viewBox="0 0 24 24"><path d="M19.5 11.5L12 19a5 5 0 0 1-7-7l8-8 3.3 3.3L10 15a1.7 1.7 0 0 1-2.4-2.4l6.3-6.3"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M19 3.5l.9 1.6 1.6.9-1.6.9-.9 1.6-.9-1.6-1.6-.9 1.6-.9z"/></symbol>
+  <symbol id="i-smile" viewBox="0 0 24 24"><path d="M12 3l6 2.5L21 12l-3 6.5L12 21l-6-2.5L3 12l3-6.5z"/><path d="M8.5 14l1.5 1.5h4l1.5-1.5"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M9 9.2l.8.8-.8.8-.8-.8zM15 9.2l.8.8-.8.8-.8-.8z"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 17v-6l3-5.5h6l3 5.5v6l1.5 2h-15z"/><path d="M10 21.5h4"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M12 2l.8 1.5-.8 1.5-.8-1.5z"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 4.5v15M4.5 12h15"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M12 9.8l2.2 2.2-2.2 2.2L9.8 12z"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3.5 11.5L12 3.5l8.5 8M5.5 10v9l1.5 1.5h10l1.5-1.5v-9"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M12 11.6l2 3-2 3-2-3z"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><path d="M8.5 5l3 1.5V10l-3 1.5-3-1.5V6.5zM3 19.5l1.5-4.5h8l1.5 4.5"/><path d="M15.5 6l2.5 1.2v3l-2.5 1.2M17 15l1.5 4.5"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M8.5 7.2l.8 1.3-.8 1.3-.8-1.3z"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10.5 7.5L12 6l3-2.5L19.5 8 17 11l-1.5 1.5M13.5 16.5L12 18l-3 2.5L4.5 16 7 13l1.5-1.5"/><path d="M9.5 14.5l5-5"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M12 11.2l.8.8-.8.8-.8-.8z"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><path d="M5 11l2-1.5h10L19 11v8l-2 1.5H7L5 19zM8 9.5V7l2-3.5h4L16 7v2.5"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M12 13.2l1.4 1.8-1.4 1.8-1.4-1.8z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M12 10.4l1.6 1.6-1.6 1.6-1.6-1.6z"/></symbol>
+  <symbol id="i-beacon" viewBox="0 0 24 24"><path d="M12 3.5l3.5 5.5L12 14.5 8.5 9z"/><path d="M12 14.5v4M8.5 21h7M5 7a8 8 0 0 0 0 7M19 7a8 8 0 0 1 0 7"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M12 6.3l1.3 2-1.3 2-1.3-2z"/></symbol>
+  <symbol id="i-crown" viewBox="0 0 24 24"><path d="M3.5 8l4.5 4 4-7 4 7 4.5-4-1.5 10h-14z"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M12 12.6l1.3 1.9-1.3 1.9-1.3-1.9z"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7.5 2.5v6L16 18l-4 3-4-3-3.5-6.5v-6z"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M12 8.6l1.4 2-1.4 2-1.4-2z"/></symbol>
+  <symbol id="i-gamepad" viewBox="0 0 24 24"><path d="M6.5 7.5h11l3.5 3.5-1.5 6-2.5 1-2.5-3h-7l-2.5 3-2.5-1-1.5-6z"/><path d="M8 10.5v3M6.5 12h3"/><path fill="var(--spark,#5fd4ff)" stroke="none" d="M16 11l1 1-1 1-1 1-1-1z"/></symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></symbol>
+</svg>
+
+  <div id="app" class="layout">
+    <nav class="communities" id="communities" aria-label="Communities"></nav>
+    <aside class="channels" id="channels" aria-label="Channels"></aside>
+    <main class="chat" id="chat"></main>
+    <aside class="members" id="members" aria-label="Members"></aside>
+    <section class="stage hidden" id="stage" aria-label="Screen shares"></section>
+  </div>
+
+  <dialog id="dlg">
+    <form method="dialog" id="dlg-form">
+      <h2 id="dlg-title"></h2>
+      <div id="dlg-body"></div>
+      <p class="err" id="dlg-err"></p>
+      <div class="row end">
+        <button type="button" class="ghost" id="dlg-cancel">Cancel</button>
+        <button type="submit" class="primary" id="dlg-ok">OK</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="settings" class="wide">
+    <div class="set-head"><h2 id="set-title">Community settings</h2><button type="button" class="ghost" id="set-close">Close</button></div>
+    <nav class="tabs" id="set-tabs"></nav>
+    <div id="set-body" class="set-body"></div>
+  </dialog>
+  <div id="status-menu" class="menu hidden" role="menu">
+    <button type="button" data-status="online"><span class="dot online"></span>Online</button>
+    <button type="button" data-status="away"><span class="dot away"></span>Away</button>
+    <button type="button" data-status="busy"><span class="dot busy"></span>Busy <small>do not disturb</small></button>
+    <button type="button" data-status="invisible"><span class="dot offline"></span>Invisible <small>appear offline</small></button>
+    <hr><button type="button" data-status-text>Set a status message…</button>
+    <button type="button" data-profile>Edit profile…</button>
+    <button type="button" data-appearance>Appearance…</button>
+    <button type="button" data-devices>Devices…</button>
+    <button type="button" data-sound>Sound…</button>
+  </div>
+  <div id="srv-menu" class="menu hidden" role="menu"></div>
+  <input type="file" id="attach-file" class="hidden">
+  <div id="lightbox" class="lightbox hidden" title="Click to close"><img id="lightbox-img" alt=""></div>
+  <input type="file" id="avatar-file" accept="image/png,image/jpeg,image/gif,image/webp" class="hidden">
+  <input type="file" id="banner-file" accept="image/png,image/jpeg,image/gif,image/webp" class="hidden">
+  <input type="file" id="icon-file" accept="image/png,image/jpeg,image/gif,image/webp" class="hidden">
+  <div id="toast" class="toast hidden" role="status"></div>
+  <div id="picker" class="picker hidden" role="dialog" aria-label="Emoji">
+    <input id="picker-search" placeholder="Search emoji" autocomplete="off" spellcheck="false">
+    <div id="picker-tabs" class="picker-tabs"></div>
+    <div id="picker-grid" class="picker-grid"></div>
+  </div>
+  <script src="emoji.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

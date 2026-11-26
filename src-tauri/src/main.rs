@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod achievements;
-mod comms_install;
+mod beacon_install;
 mod plugins;
 mod program_updates;
 mod downloads;
@@ -1386,9 +1386,9 @@ async fn emu_pick_folder(start: String) -> Result<Option<String>, String> {
     blocking(move || stores::emulation::pick_folder(&start)).await?
 }
 
-/// Lodestone Comms: installed? running? its page, and the permissions it asks for.
+/// Lodestone Beacon: installed? running? its page, and the permissions it asks for.
 #[tauri::command]
-async fn comms_status() -> Result<plugins::Status, String> {
+async fn beacon_status() -> Result<plugins::Status, String> {
     blocking(plugins::status).await
 }
 
@@ -1430,28 +1430,28 @@ fn ui_error(message: String) {
     }
 }
 
-/// Is there a Comms to install, or a newer version? (Asked when you open Plug-ins or Comms.)
+/// Is there a Beacon to install, or a newer version? (Asked when you open Plug-ins or Beacon.)
 #[tauri::command]
-async fn comms_check_update() -> Result<serde_json::Value, String> {
+async fn beacon_check_update() -> Result<serde_json::Value, String> {
     let running = blocking(plugins::status).await?.version;
-    comms_install::check(running).await
+    beacon_install::check(running).await
 }
 
-/// Install (or update to) the newest Comms from its official releases, after checking its checksum.
+/// Install (or update to) the newest Beacon from its official releases, after checking its checksum.
 #[tauri::command]
-async fn comms_install() -> Result<String, String> {
-    comms_install::install().await
+async fn beacon_install() -> Result<String, String> {
+    beacon_install::install().await
 }
 
-/// Start Lodestone Comms (if it isn't running) and wait for it to be ready.
+/// Start Lodestone Beacon (if it isn't running) and wait for it to be ready.
 #[tauri::command]
-async fn comms_start(app: AppHandle) -> Result<plugins::Status, String> {
+async fn beacon_start(app: AppHandle) -> Result<plugins::Status, String> {
     blocking(move || plugins::start(app)).await?
 }
 
-/// Approve the permissions Comms asked for (only known ones are stored).
+/// Approve the permissions Beacon asked for (only known ones are stored).
 #[tauri::command]
-fn comms_approve(permissions: Vec<String>) -> Result<plugins::Status, String> {
+fn beacon_approve(permissions: Vec<String>) -> Result<plugins::Status, String> {
     plugins::approve(permissions)
 }
 
@@ -1465,13 +1465,13 @@ async fn plugins_list() -> Result<Vec<plugins::PluginInfo>, String> {
 #[tauri::command]
 async fn plugin_stop(app: AppHandle, id: String) -> Result<(), String> {
     blocking(move || plugins::stop_plugin(&id)).await??;
-    let _ = app.emit("comms-stopped", ());
+    let _ = app.emit("beacon-stopped", ());
     Ok(())
 }
 
-/// Pass Lodestone's colours to Comms.
+/// Pass Lodestone's colours to Beacon.
 #[tauri::command]
-fn comms_theme(vars: serde_json::Value) {
+fn beacon_theme(vars: serde_json::Value) {
     plugins::send_theme(vars)
 }
 
@@ -1634,16 +1634,16 @@ fn main() {
             store_achievements,
             emu_menu_entry,
             emu_folders,
-            comms_status,
-            comms_check_update,
+            beacon_status,
+            beacon_check_update,
             ui_error,
             data_folder,
             program_updates,
             program_update,
-            comms_install,
-            comms_start,
-            comms_approve,
-            comms_theme,
+            beacon_install,
+            beacon_start,
+            beacon_approve,
+            beacon_theme,
             plugins_list,
             plugin_stop,
             rom_reveal,

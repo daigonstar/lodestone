@@ -1,0 +1,42 @@
+# Lodestone Beacon, the plug-in, as its own Flatpak with its own sandbox.
+# It needs the network (its servers, and its page on 127.0.0.1 for Lodestone) and sound (microphone and
+# speakers, for calls). It has no access to your files, Lodestone's data or the display: Lodestone shows
+# its page. Screens and cameras are only shared through the desktop's portals, which ask you each time.
+# Its data lives in ~/.var/app/io.github.daigonstar.Lodestone.Beacon/.
+app-id: io.github.daigonstar.Lodestone.Beacon
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: lodestone-beacon
+finish-args:
+  - --share=network
+  # Microphone and speakers for calls (PipeWire's PulseAudio service).
+  - --socket=pulseaudio
+modules:
+  - name: lodestone-beacon
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/lodestone-beacon/cargo
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      - cargo --offline build --release --locked -p lodestone-beacon -p lodestone-beacon-media
+      - install -Dm755 target/release/lodestone-beacon /app/bin/lodestone-beacon
+      - install -Dm755 target/release/lodestone-beacon-mediacheck /app/bin/lodestone-beacon-mediacheck
+      - install -Dm644 LICENSE /app/share/licenses/io.github.daigonstar.Lodestone.Beacon/LICENSE
+    sources:
+      # app-source-begin (build.sh uses this checkout)
+      - type: dir
+        path: ..
+        skip:
+          - target
+          - flatpak/.flatpak-builder
+          - flatpak/build-dir
+          - flatpak/repo
+      # app-source-end
+      - type: file
+        path: ../../LICENSE
+      - cargo-sources.json
