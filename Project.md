@@ -3,7 +3,7 @@
 What needs doing to get Lodestone to users, and where each item stands. Update this file whenever an
 item is finished or partly done.
 
-Last updated: 2026-11-26 (Windows-only build pass)
+Last updated: 2026-11-26 (Windows-only second pass)
 
 ## Current focus
 
@@ -68,6 +68,28 @@ Still Linux code in the Windows build (next pass):
 - Settings and first-run text that still mention Proton, Flatpak or `~/` paths in places.
 - `tauri.conf.json` asset scope lists only `$HOME` and Linux mount points.
 - Not run on Windows: only compiled.
+
+## Beacon rename and rebrand (feeds roadmap item 3)
+
+Decided by Robb on 2026-11-26: the Comms plug-in becomes **Lodestone Beacon**. In its words: **server** is
+the self-hosted machine/software, **community** is the group people join (was "server"/"space"),
+**channel** is unchanged. Test data can start fresh, so there is no migration. It is a full rebrand of the
+look too, moving away from Discord's look. Plan and inventory: `beacon/NAMING-PLAN.md`.
+
+| Item | Status |
+| --- | --- |
+| Plan, inventory, vocabulary approved, name picked | Done |
+| Text rename: Comms to Beacon (folder `beacon/`, crates, Flatpak id `io.github.daigonstar.Lodestone.Beacon`, tag prefix `beacon-v`, `BEACON_*` settings, `lodestone-beacon/v1` protocol strings, Lodestone's installer and UI) | Done in code, builds and server/client tests pass on Linux; Windows and Flatpak builds not run |
+| Vocabulary change: host to server, server/space to community (UI, API routes, database, docs) | Done, same checks |
+| App icon for Beacon (`beacon/branding/beacon-icon.svg`) | Drawn and approved by Robb. Not yet installed anywhere (no window or Flatpak icon files made yet) |
+| Matching icons for Lodestone and Kiln | Not started |
+| Redo the internal icons (camera, streaming, etc.) in one style | Done for Beacon: mystic line icon set in the interface (`beacon/branding/icons.svg`, inlined in `index.html`). Checked in a headless browser on Linux only; call bar not seen live. Lodestone's own icons still emoji |
+| Move the layout and look away from Discord | Layout A (top bar of communities, channel list left, centred chat, floating call pill, members pull-out, gem avatars) chosen by Robb and built in `beacon/app/ui`. Checked in a headless browser with a local server (chat, tabs, members, call pill with injected markup); the call stage was rendered with fake participants (speaking card gets a thin violet and cyan light travelling slowly round the outside of the card in place of the outline, nothing drawn over camera pictures, spin stops with reduced-motion; thin banner inside the call view with who is sharing and a Watch button) but a real call was not run |
+| Polish the welcome screen | Done in `beacon/app/ui`: slogan "Find your people. Keep it private." (Robb's pick), Beacon mark and glow, joined communities as cards on the home page, join and create cards, tips folded away, one-line test-build note. Checked only in a headless browser, not on Windows |
+| Community banners | Done: owners and admins can set a banner (PNG, JPEG, GIF or WebP, up to 512 KiB) in community settings; it shows on the community's home-page card, with a colour fallback. New server route `/v1/communities/{id}/banner` (tested), documented in PROTOCOL.md. Existing servers add the column on start-up |
+| Guided server setup | Done: "Set up your own server" opens a step-by-step page (this device or another device, who will use it, how to start it, an address check, admin account, first community). "Just me, to try it" has a **Start it for me** button that runs a Beacon server inside the app on 127.0.0.1:8080 only (data in Beacon's own folder `local-server`, voice off, comes back up when Beacon starts). Friends-over-the-internet and other-device paths show the Docker steps from the README with copy buttons; they were not run here. Tested end to end against the in-app server, including a restart |
+| PR #7 (plug-in installer) still uses `comms`, `comms-v` and the old Flatpak id | Needs merging with this rename before either lands |
+| Existing `comms-v*` draft releases on GitHub | Would be re-published as `beacon-v*` |
 
 ## Releases
 

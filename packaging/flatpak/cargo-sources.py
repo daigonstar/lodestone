@@ -7,7 +7,7 @@ plus the .cargo-checksum.json cargo expects there. The last source is a cargo co
 crates.io at that vendor folder.
 
 Run it again whenever Cargo.lock changes:  packaging/flatpak/cargo-sources.py
-Another lock file (Lodestone Comms):  cargo-sources.py <Cargo.lock> <output.json>
+Another lock file (Lodestone Beacon):  cargo-sources.py <Cargo.lock> <output.json>
 """
 import json
 import sys

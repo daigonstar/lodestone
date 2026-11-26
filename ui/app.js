@@ -402,7 +402,7 @@ function renderNav() {
     .map((s) => `<button data-view="sys:${esc(s.id)}" class="${state.view === "sys:" + s.id ? "active" : ""}" title="${esc(s.emulators.length ? "Plays with " + s.emulators.join(", ") : "No emulator installed for this system yet")}"><span class="dot" style="background:${s.emulators.length ? STORES.emulation.color : "#5b5f6a"}"></span>${esc(s.name)}<span class="count">${sysCount[s.id]}</span></button>`)
     .join("");
   // Plug-ins: the installed ones, then the management page.
-  const PLUGIN_VIEW = { comms: "comms" };
+  const PLUGIN_VIEW = { beacon: "beacon" };
   $("#nav-plugins").innerHTML = (state.plugins || []).filter((p) => p.installed).map((p) =>
     `<button data-view="${PLUGIN_VIEW[p.id]}" class="${state.view === PLUGIN_VIEW[p.id] ? "active" : ""}"><span class="dot" style="background:${p.running ? "#3ddc97" : "#5b5f6a"}"></span>${esc(p.name.replace(/^Lodestone /, ""))}</button>`).join("")
     + `<button data-view="plugins" class="${state.view === "plugins" ? "active" : ""}"><span class="dot" style="background:transparent;border:1px solid #5b5f6a"></span>Manage plug-ins</button>`;
@@ -612,7 +612,7 @@ function detailCard() {
 }
 function placeDetail() {
   const d = $("#detail");
-  const gridView = !["home", "minecraft", "downloads", "comms", "plugins"].includes(state.view) && !state.view.startsWith("shop:");
+  const gridView = !["home", "minecraft", "downloads", "beacon", "plugins"].includes(state.view) && !state.view.startsWith("shop:");
   const card = state.open && gridView ? detailCard() : null;
   if (!card) {
     if (state.open && gridView && state.selected) state.open = false;
@@ -900,16 +900,16 @@ function render() {
   const shopView = state.view.startsWith("shop:");
   const home = state.view === "home";
   const dlv = state.view === "downloads";
-  const commsView = state.view === "comms";
+  const beaconView = state.view === "beacon";
   const pluginsView = state.view === "plugins";
-  const mc = state.view === "minecraft" || shopView || home || dlv || commsView || pluginsView;
+  const mc = state.view === "minecraft" || shopView || home || dlv || beaconView || pluginsView;
   for (const el of ["#hero", ".grid-head", "#grid", "#setup", "#filters"]) $(el).classList.toggle("hidden", mc);
   $("#home").classList.toggle("hidden", !home);
   $("#dlv").classList.toggle("hidden", !dlv);
-  $("#comms").classList.toggle("hidden", !commsView);
+  $("#beacon").classList.toggle("hidden", !beaconView);
   $("#plugins").classList.toggle("hidden", !pluginsView);
-  // Opening Plug-ins looks up the latest Comms release (only then: never in the background).
-  if (pluginsView && render.prevView !== "plugins") checkCommsRelease();
+  // Opening Plug-ins looks up the latest Beacon release (only then: never in the background).
+  if (pluginsView && render.prevView !== "plugins") checkBeaconRelease();
   render.prevView = state.view;
   if (pluginsView) {
     for (const el of ["#empty", "#mini", "#mc", "#shop", "#downloads"]) $(el).classList.add("hidden");
@@ -917,11 +917,11 @@ function render() {
     renderPluginsPage();
     return;
   }
-  document.querySelector("main").classList.toggle("comms-open", commsView);
-  if (commsView) {
+  document.querySelector("main").classList.toggle("beacon-open", beaconView);
+  if (beaconView) {
     for (const el of ["#empty", "#mini", "#mc", "#shop", "#downloads"]) $(el).classList.add("hidden");
     shopHide();
-    openComms();
+    openBeacon();
     return;
   }
   $("#downloads").classList.toggle("hidden", dlv);
@@ -1654,62 +1654,62 @@ async function menuAction(act) {
   }
 }
 
-// ---------- Lodestone Comms (a plug-in: its own program, shown in a frame) ----------
-// The frame shows a page Comms serves on 127.0.0.1. It can't use Lodestone's commands; Comms only reaches
+// ---------- Lodestone Beacon (a plug-in: its own program, shown in a frame) ----------
+// The frame shows a page Beacon serves on 127.0.0.1. It can't use Lodestone's commands; Beacon only reaches
 // Lodestone through the bridge, for the permissions you approve here.
-async function openComms() {
-  const msg = $("#comms-msg"), frame = $("#comms-frame");
+async function openBeacon() {
+  const msg = $("#beacon-msg"), frame = $("#beacon-frame");
   if (frame.src && !frame.classList.contains("hidden")) return;
-  msg.innerHTML = '<p class="muted">Starting Lodestone Comms…</p>';
+  msg.innerHTML = '<p class="muted">Starting Lodestone Beacon…</p>';
   try {
-    let st = await invoke("comms_status");
+    let st = await invoke("beacon_status");
     if (!st.installed) {
-      msg.innerHTML = `<div class="comms-intro"><h2>Lodestone Comms</h2>
+      msg.innerHTML = `<div class="beacon-intro"><h2>Lodestone Beacon</h2>
         <p>Text chat with your friends on servers you host yourselves, end-to-end encrypted. It's a separate program with its own sandbox: it can't see your store sign-ins, and it only gets what you allow below.</p>
-        <p class="muted">Comms isn't installed yet. It's in early development.</p>
-        <p><button class="play" id="comms-install">Install Comms</button></p>
+        <p class="muted">Beacon isn't installed yet. It's in early development.</p>
+        <p><button class="play" id="beacon-install">Install Beacon</button></p>
         <p class="muted small">Downloaded from Lodestone's official releases on GitHub and checked against GitHub's published checksum before it's installed.</p></div>`;
-      $("#comms-install").onclick = async (e) => {
+      $("#beacon-install").onclick = async (e) => {
         const b = e.currentTarget;
         b.disabled = true;
         b.textContent = "Downloading and checking…";
-        try { const v = await invoke("comms_install"); toast(`Comms ${v} is installed.`); openComms(); refreshPlugins(); }
-        catch (err) { b.disabled = false; b.textContent = "Install Comms"; toast(String(err), true); }
+        try { const v = await invoke("beacon_install"); toast(`Beacon ${v} is installed.`); openBeacon(); refreshPlugins(); }
+        catch (err) { b.disabled = false; b.textContent = "Install Beacon"; toast(String(err), true); }
       };
       return;
     }
-    st = await invoke("comms_start");
-    if (st.needs_approval) return askCommsPermissions(st);
-    showComms(st);
+    st = await invoke("beacon_start");
+    if (st.needs_approval) return askBeaconPermissions(st);
+    showBeacon(st);
   } catch (e) { msg.innerHTML = `<p class="err-text">${esc(String(e))}</p>`; }
 }
-function askCommsPermissions(st) {
-  $("#comms-msg").innerHTML = `<div class="comms-intro"><h2>Allow Lodestone Comms?</h2>
-    <p>Comms ${esc(st.version || "")} runs as its own program and can't see your store sign-ins, keys or files. It asks Lodestone for:</p>
+function askBeaconPermissions(st) {
+  $("#beacon-msg").innerHTML = `<div class="beacon-intro"><h2>Allow Lodestone Beacon?</h2>
+    <p>Beacon ${esc(st.version || "")} runs as its own program and can't see your store sign-ins, keys or files. It asks Lodestone for:</p>
     <ul>${st.requested.map(([, d]) => `<li>${esc(d)}</li>`).join("")}</ul>
     <p class="muted">You can take this back in Settings → Plug-ins.</p>
-    <div class="row-btns"><button class="play" id="comms-allow">Allow</button><button class="ghost" data-view="home">Not now</button></div></div>`;
-  $("#comms-allow").onclick = async () => {
-    try { showComms(await invoke("comms_approve", { permissions: st.requested.map(([p]) => p) })); } catch (e) { toast(String(e), true); }
+    <div class="row-btns"><button class="play" id="beacon-allow">Allow</button><button class="ghost" data-view="home">Not now</button></div></div>`;
+  $("#beacon-allow").onclick = async () => {
+    try { showBeacon(await invoke("beacon_approve", { permissions: st.requested.map(([p]) => p) })); } catch (e) { toast(String(e), true); }
   };
 }
-function showComms(st) {
-  if (!st.ui) return ($("#comms-msg").innerHTML = '<p class="err-text">Lodestone Comms didn\'t start. Its log is lodestone-comms.log in the logs folder of ' + esc(state.dataDir || "Lodestone's data folder") + '.</p>');
-  $("#comms-msg").innerHTML = "";
-  const frame = $("#comms-frame");
+function showBeacon(st) {
+  if (!st.ui) return ($("#beacon-msg").innerHTML = '<p class="err-text">Lodestone Beacon didn\'t start. Its log is lodestone-beacon.log in the logs folder of ' + esc(state.dataDir || "Lodestone's data folder") + '.</p>');
+  $("#beacon-msg").innerHTML = "";
+  const frame = $("#beacon-frame");
   frame.classList.remove("hidden");
   if (frame.src !== st.ui) frame.src = st.ui;
-  // Lodestone's colours, so Comms matches.
+  // Lodestone's colours, so Beacon matches.
   const cs = getComputedStyle(document.documentElement);
   const vars = Object.fromEntries(["--bg", "--bg-2", "--bg-3", "--line", "--text", "--muted", "--accent", "--danger"].map((k) => [k, cs.getPropertyValue(k).trim()]));
-  invoke("comms_theme", { vars }).catch(() => {});
+  invoke("beacon_theme", { vars }).catch(() => {});
 }
 if (T) {
-  T.event.listen("comms-ready", () => refreshPlugins());
-  T.event.listen("comms-stopped", () => {
-    refreshPlugins(); const f = $("#comms-frame"); f.removeAttribute("src"); f.classList.add("hidden"); if (state.view === "comms") openComms(); });
-  // Comms asked to invite a friend: copy the invite (Lodestone opened their Steam chat) and say so.
-  T.event.listen("comms-open-chat", async (e) => {
+  T.event.listen("beacon-ready", () => refreshPlugins());
+  T.event.listen("beacon-stopped", () => {
+    refreshPlugins(); const f = $("#beacon-frame"); f.removeAttribute("src"); f.classList.add("hidden"); if (state.view === "beacon") openBeacon(); });
+  // Beacon asked to invite a friend: copy the invite (Lodestone opened their Steam chat) and say so.
+  T.event.listen("beacon-open-chat", async (e) => {
     const { store, id, text } = e.payload || {};
     try { await navigator.clipboard.writeText(text); } catch { return toast("Couldn't copy the invite to the clipboard", true); }
     toast(store === "steam" ? "Invite copied: paste it into the Steam chat that just opened." : "Invite copied: send it to your friend.");
@@ -1731,10 +1731,10 @@ function renderPluginsPage() {
     return `<div class="plugin-card" data-plugin="${esc(p.id)}">
       <div class="plugin-head"><div><h2>${esc(p.name)}</h2><p class="muted">${esc(p.description)}</p></div><span class="plugin-status ${p.running ? "on" : ""}">${status}</span></div>
       ${p.installed ? `<h4>Permissions</h4><ul class="perm-list">${perms}</ul>` : `<p class="muted">${esc(p.install_hint)}</p>`}
-      ${p.id === "comms" ? commsReleaseHTML(p) : ""}
+      ${p.id === "beacon" ? beaconReleaseHTML(p) : ""}
       <div class="row-btns">
-        ${p.installed ? `<button class="play" data-view="${p.id === "comms" ? "comms" : ""}">Open</button>` : ""}
-        ${p.id === "comms" && state.commsRelease?.latest && (!p.installed || state.commsRelease.update) ? `<button class="${p.installed ? "ghost" : "play"}" data-plugin-act="install">${p.installed ? "Update to" : "Install Comms"} ${esc(state.commsRelease.latest)}</button>` : ""}
+        ${p.installed ? `<button class="play" data-view="${p.id === "beacon" ? "beacon" : ""}">Open</button>` : ""}
+        ${p.id === "beacon" && state.beaconRelease?.latest && (!p.installed || state.beaconRelease.update) ? `<button class="${p.installed ? "ghost" : "play"}" data-plugin-act="install">${p.installed ? "Update to" : "Install Beacon"} ${esc(state.beaconRelease.latest)}</button>` : ""}
         ${p.running ? '<button class="ghost" data-plugin-act="stop">Stop</button>' : ""}
         ${anyGranted ? '<button class="ghost" data-plugin-act="revoke">Revoke permissions</button>' : ""}
       </div></div>`;
@@ -1749,14 +1749,14 @@ $("#plugins-list").addEventListener("click", async (e) => {
     if (b.dataset.pluginAct === "install") {
       b.disabled = true;
       b.textContent = "Downloading and checking…";
-      const v = await invoke("comms_install");
-      state.commsRelease = { ...state.commsRelease, installed: v, update: false };
-      const f = $("#comms-frame"); f.removeAttribute("src"); f.classList.add("hidden");
-      toast(`Comms ${v} is installed.`);
+      const v = await invoke("beacon_install");
+      state.beaconRelease = { ...state.beaconRelease, installed: v, update: false };
+      const f = $("#beacon-frame"); f.removeAttribute("src"); f.classList.add("hidden");
+      toast(`Beacon ${v} is installed.`);
     }
     if (b.dataset.pluginAct === "revoke") {
-      await invoke("comms_approve", { permissions: [] });
-      const f = $("#comms-frame"); f.removeAttribute("src"); f.classList.add("hidden");
+      await invoke("beacon_approve", { permissions: [] });
+      const f = $("#beacon-frame"); f.removeAttribute("src"); f.classList.add("hidden");
       toast("Permissions removed. The plug-in will ask again next time you open it.");
     }
   } catch (err) { toast(String(err), true); }
@@ -1764,18 +1764,18 @@ $("#plugins-list").addEventListener("click", async (e) => {
 });
 $("#open-plugins").onclick = () => { $("#dlg-settings").close(); state.view = "plugins"; ls.set("view", "plugins"); render(); refreshPlugins(); };
 
-// Comms releases: looked up when you open Plug-ins (or Comms while it isn't installed), never in the
+// Beacon releases: looked up when you open Plug-ins (or Beacon while it isn't installed), never in the
 // background. Installing or updating only happens when you press the button.
-async function checkCommsRelease() {
-  try { state.commsRelease = await invoke("comms_check_update"); } catch (e) { state.commsRelease = { error: String(e) }; }
+async function checkBeaconRelease() {
+  try { state.beaconRelease = await invoke("beacon_check_update"); } catch (e) { state.beaconRelease = { error: String(e) }; }
   if (state.view === "plugins") renderPluginsPage();
 }
-function commsReleaseHTML(p) {
-  const r = state.commsRelease;
-  if (!r) return '<p class="muted small">Checking for the latest Comms…</p>';
+function beaconReleaseHTML(p) {
+  const r = state.beaconRelease;
+  if (!r) return '<p class="muted small">Checking for the latest Beacon…</p>';
   if (r.error) return `<p class="muted small">${esc(r.error)}</p>`;
-  if (r.update) return `<p class="small">Comms ${esc(r.latest)} is out (you have ${esc(r.installed)}). Updating keeps your servers and messages.</p>`;
-  if (!p.installed) return `<p class="small">Latest: Comms ${esc(r.latest)}. It's downloaded from Lodestone's official GitHub releases and checked before it's installed.</p>`;
+  if (r.update) return `<p class="small">Beacon ${esc(r.latest)} is out (you have ${esc(r.installed)}). Updating keeps your communities and messages.</p>`;
+  if (!p.installed) return `<p class="small">Latest: Beacon ${esc(r.latest)}. It's downloaded from Lodestone's official GitHub releases and checked before it's installed.</p>`;
   return "";
 }
 
@@ -1889,7 +1889,7 @@ $("#f-region").onchange = (e) => { state.regionF = e.target.value; state.letter 
 $("#f-played").onchange = (e) => { state.playedF = e.target.value; state.letter = ""; renderGrid(); };
 $("#f-clear").onclick = () => { state.genre = state.series = state.compatF = state.letter = state.achF = state.regionF = state.playedF = ""; renderGrid(); };
 let searchTimer;
-// Close the search: clear it, and go back to where you searched from (Comms, say).
+// Close the search: clear it, and go back to where you searched from (Beacon, say).
 function closeSearch() {
   $("#search").value = "";
   state.search = "";
@@ -1902,9 +1902,9 @@ $("#search-close").onclick = closeSearch;
 $("#search").oninput = (e) => {
   state.search = e.target.value;
   $("#search-close").classList.toggle("hidden", !state.search && !state.searchFrom);
-  // Searching from a page without the game grid (Comms, Plug-ins…) shows the results in the library;
+  // Searching from a page without the game grid (Beacon, Plug-ins…) shows the results in the library;
   // closing the search comes back here.
-  if (state.search && ["comms", "plugins", "downloads", "home"].includes(state.view)) {
+  if (state.search && ["beacon", "plugins", "downloads", "home"].includes(state.view)) {
     state.searchFrom = state.view;
     state.view = "all"; ls.set("view", "all"); render();
   }
@@ -2258,7 +2258,7 @@ async function renderAchievements(g) {
 
 async function renderAbout(g) {
   const el = $("#about");
-  if (!g || ["home", "minecraft", "downloads", "comms", "plugins"].includes(state.view) || state.view.startsWith("shop:")) return el.classList.add("hidden");
+  if (!g || ["home", "minecraft", "downloads", "beacon", "plugins"].includes(state.view) || state.view.startsWith("shop:")) return el.classList.add("hidden");
   el.classList.remove("hidden");
   const id = g.id;
   const facts = (d) => {
