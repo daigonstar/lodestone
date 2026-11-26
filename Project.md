@@ -32,7 +32,7 @@ shape of the plugin API are in `docs/plugin-api-notes.md`.
 | Item | Status |
 | --- | --- |
 | Kiln listed on the Plug-ins page with an on/off switch (off hides all Kiln tags and launching) | Done, builds and unit test pass on Linux; UI not clicked through yet |
-| Windows-aware Kiln lookup (replaces the Linux-only `.desktop` search on Windows: `kiln.exe` on PATH, `%LOCALAPPDATA%\\Lodestone\\Kiln`, `%LOCALAPPDATA%\\Programs\\Kiln`) | Done in code, not built or run on Windows |
+| Windows-aware Kiln lookup (replaces the Linux-only `.desktop` search on Windows: `kiln.exe` on PATH, `%LOCALAPPDATA%\Lodestone\Kiln`, `%LOCALAPPDATA%\Programs\Kiln`) | Done in code, not built or run on Windows |
 | Kiln itself running on Windows | **Not started**: Kiln is Linux-only (Proton prefixes, Steam's Linux folders, Qt). Needs a port before the Windows lookup finds anything |
 | Install and update Kiln from Lodestone like Comms (GitHub releases, checksum) | Not started: Kiln has no releases yet |
 | Kiln speaks the Lodestone bridge (`--lodestone-bridge`) and shows its page in Lodestone | Not started: decide whether it's wanted (needs a web UI) |
