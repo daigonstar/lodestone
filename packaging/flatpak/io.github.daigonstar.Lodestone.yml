@@ -47,7 +47,7 @@ modules:
       # app-source-begin (build.sh swaps this for the local checkout)
       - type: git
         url: https://github.com/daigonstar/lodestone.git
-        tag: 0.2.0
-        commit: 7ee0868144854f16b41454e6202215625040d5af
+        tag: 0.2.1
+        commit: 1f883ea4a14b42026881d501ff4973ba21feaa89
       # app-source-end
       - cargo-sources.json
