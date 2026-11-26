@@ -232,6 +232,21 @@ distribution exception to the licence first. Worth a short legal opinion before 
 | 7. No surprise dependencies | Each Kotlin/Swift/Rust library for audio, Opus, VP8, QR needs a stated reason. Prefer ZXing-style scanning or the platform's own over libraries that call Google Play services. Keep a list. |
 | 8. Be honest | Store listing, privacy labels and README say what the code does and what's untested (for example "iOS screen sharing not available yet"). |
 
+## Spike results so far (2026-11-26)
+
+Run in the cloud session with the Android NDK r27c and Rust target `aarch64-linux-android`.
+
+- **The Beacon client crate builds for Android arm64** (`cargo build -p lodestone-beacon-client --target
+  aarch64-linux-android`, 51 seconds, no code changes). That covers MLS, device keys, SQLite, TLS and the
+  server calls. **It was only built, not run:** no phone or emulator here, so nothing is proven at run time.
+- **Licences:** all 361 crates in the workspace are free software (MIT, Apache-2.0, BSD, ISC, MPL-2.0,
+  Unicode); the only GPL ones are Beacon's own. Nothing there blocks F-Droid. The PR #10 additions
+  (`bip39`, `qrcode`) are not on `comms` yet and weren't checked.
+- **One thing to handle:** on Android, `rustls-platform-verifier` (certificate checks) needs a small Java
+  helper and a one-time setup call from the app. Its Java part ships inside the crate, but F-Droid has to
+  build it from source, so this goes on the list of things to check in the spike.
+- **Not done yet:** the Tauri Android shell with the UI, a run on a real phone, and the F-Droid metadata file.
+
 ## Phased path (Android first)
 
 Estimates are rough and assume one developer working with Claude, with Robb testing on a real Android

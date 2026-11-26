@@ -86,7 +86,7 @@ Recommendation: Tauri 2 mobile reusing the Rust core and web UI, native Kotlin/S
 | Plan and comparison | Done, waiting for Robb's choice. Nothing built |
 | Apple (US$99/yr) and Google Play (US$25) developer accounts | Not needed for Android first; decide later |
 | Decide push notifications (no push first, or a publisher relay that needs an AGENTS.md change) | Waiting on Robb |
-| Spike: Beacon client on Android and iOS | Not started |
+| Spike: Beacon client on Android | Client crate builds for Android arm64 (not run; no phone here), all dependency licences are free. Next: Tauri shell, F-Droid metadata, run on a real phone |
 | Phase 1: Android pairing and chat, history copy, report/block, account deletion | Not started |
 | Phase 2: F-Droid listing, notifications | Not started |
 
