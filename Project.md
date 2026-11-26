@@ -135,7 +135,7 @@ shape of the plugin API are in `docs/plugin-api-notes.md`.
 | Kiln installable from Lodestone: Kiln ships its Python source as `kiln-<version>-linux-any.zip`, Lodestone unpacks it to `~/.local/share/lodestone/plugins/kiln/<version>` and runs it with the system's Python | Done. Unzip, find and `--games` run tested through Lodestone's code with a locally built zip; GUI, Play and the real download not tested |
 | Kiln needs PySide6, QtWebEngine and requests from the system (not bundled) | Lodestone warns on the Kiln card when missing; bundling or a Flatpak not planned (Kiln needs the host's Steam and Proton) |
 | Kiln code moved into the Lodestone repo (`kiln/`) so it ships and merges with `comms`; its web addresses are in `network-hosts.txt` and `check-network.py` now scans it | Done. Kiln's Nexus key file is now created `600` from the start (was chmod after writing). Not a full audit of Kiln against AGENTS.md |
-| First Kiln release: tag `kiln-v0.1.0` on `comms` (matches `__version__` 0.1.0; `kiln-release.yml` publishes it) | Requested by Robb 2026-11-26; tagged once the release.yml tag-filter fix (PR into `comms`) is merged, because `release.yml` also ran on every tag. See Releases below for result |
+| First Kiln release: tag `kiln-v0.2.0` on `comms` (Robb chose 0.2.0 because the standalone app was 0.1.0; `__version__` bumped to match; `kiln-release.yml` publishes it) | Version bump in a PR into `comms` 2026-11-26. **Tag not pushed**: the cloud session's git access refuses tag pushes (403); Robb must push it |
 | Running third-party embedded plug-ins; release signing | Not started |
 | Kiln speaks the Lodestone bridge (`--lodestone-bridge`) and shows its page in Lodestone | Not started: decide whether it's wanted (needs a web UI) |
 
@@ -146,7 +146,7 @@ shape of the plugin API are in `docs/plugin-api-notes.md`.
 | GitHub releases (AppImage, `.deb`, binary tarball, Flatpak bundle) | Done, latest is 0.2.0 (2026-11-25) |
 | Security review fixes shipped in a release | Done, in 0.1.2 and later |
 | Unreleased changes on `main` | 7 commits since 0.2.0 |
-| New Lodestone version and `beacon-v<version>` release (Robb, 2026-11-26) | **Waiting on Robb's version numbers.** Lodestone 0.2.0 is already tagged; `0.3.0` was planned for when `comms` merges to `main`. Beacon's app crate says 0.2.0 (server and phone app 0.1.0) and no `beacon-v` tag exists; `scripts/release-beacon.sh` needs a Flatpak build and a Windows zip made on machines this cloud session doesn't have |
+| New releases (Robb, 2026-11-26): Lodestone **0.2.1**, Kiln **0.2.0**, Beacon **0.2.0** | Versions set: Lodestone 0.2.1 (`tauri.conf.json`, `Cargo.toml`, `Cargo.lock`, metainfo), Kiln 0.2.0, Beacon app is already 0.2.0. **Tags `0.2.1`, `kiln-v0.2.0`, `beacon-v0.2.0` not pushed** (tag pushes refused, 403). `beacon-v0.2.0` also needs `scripts/release-beacon.sh` (Flatpak and a Windows zip built on a machine with those tools) |
 | `release.yml` ran on every tag, including `kiln-v*` and `beacon-v*`, and would have attached Lodestone's files to plug-in releases | Fixed: plug-in tags are excluded (PR into `comms`) |
 
 ## AUR (paused)
