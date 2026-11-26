@@ -118,10 +118,10 @@ fn clean_version(v: &str) -> Option<String> {
     (!v.is_empty() && v.len() <= 40 && v.chars().all(|c| c.is_ascii_alphanumeric() || ".-".contains(c))).then(|| v.to_string())
 }
 
-/// Pick the newest usable release from GitHub's list (newest first): not a draft or pre-release, with the
-/// tag prefix, and a file for this system.
-pub fn pick(list: &Value, tag_prefix: &str, suffix: &str) -> Option<(String, Value, Value)> {
-    for rel in list.as_array()?.iter().filter(|r| r["draft"] != json!(true) && r["prerelease"] != json!(true)) {
+/// Pick the newest usable release from GitHub's list (newest first): not a draft, and not a pre-release unless
+/// `test_releases` (an opt-in on the Plug-ins page), with the tag prefix and a file for this system.
+pub fn pick(list: &Value, tag_prefix: &str, suffix: &str, test_releases: bool) -> Option<(String, Value, Value)> {
+    for rel in list.as_array()?.iter().filter(|r| r["draft"] != json!(true) && (test_releases || r["prerelease"] != json!(true))) {
         let tag = rel["tag_name"].as_str().unwrap_or_default();
         let Some(rest) = tag.strip_prefix(tag_prefix) else { continue };
         let rest = if tag_prefix.is_empty() { rest.strip_prefix('v').unwrap_or(rest) } else { rest };
@@ -136,7 +136,7 @@ pub fn pick(list: &Value, tag_prefix: &str, suffix: &str) -> Option<(String, Val
 
 pub async fn latest(src: &Source) -> Result<Release, String> {
     let list = net::get_json(&release_url(&src.repo), &[("accept", "application/vnd.github+json")]).await?;
-    let (version, asset, assets) = pick(&list, src.tag_prefix, src.suffix).ok_or_else(|| format!("{} has no release for this system yet", src.repo))?;
+    let (version, asset, assets) = pick(&list, src.tag_prefix, src.suffix, crate::settings::load().plugin_test_releases).ok_or_else(|| format!("{} has no release for this system yet", src.repo))?;
     // The optional description of the plug-in (small, and only read as text).
     let mut manifest = None;
     if let Some(m) = assets.as_array().into_iter().flatten().find(|a| a["name"].as_str() == Some("lodestone-plugin.json")) {
@@ -340,11 +340,14 @@ mod tests {
             { "tag_name": "beacon-v0.1.0", "assets": [asset(&format!("x-0.1.0{SUFFIX}"))] },
             { "tag_name": "beacon-v../../x", "assets": [asset(&format!("y{SUFFIX}"))] },
         ]);
-        let (v, a, _) = pick(&list, "beacon-v", SUFFIX).unwrap();
+        let (v, a, _) = pick(&list, "beacon-v", SUFFIX, false).unwrap();
         assert_eq!((v.as_str(), a["name"].as_str().unwrap()), ("0.1.0", format!("x-0.1.0{SUFFIX}").as_str()));
         // No prefix (a third-party repo): the leading "v" is dropped.
-        assert_eq!(pick(&list, "", SUFFIX).unwrap().0, "9.9.9");
-        assert!(pick(&list, "kiln-v", SUFFIX).is_none());
+        assert_eq!(pick(&list, "", SUFFIX, false).unwrap().0, "9.9.9");
+        assert!(pick(&list, "kiln-v", SUFFIX, false).is_none());
+        // With test releases switched on, the pre-release is offered; drafts never are.
+        let (v, _, _) = pick(&list, "beacon-v", SUFFIX, true).unwrap();
+        assert_eq!(v, "0.3.0");
     }
 
     fn make_zip(names: &[&str]) -> Vec<u8> {

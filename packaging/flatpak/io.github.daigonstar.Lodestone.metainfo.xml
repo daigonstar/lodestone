@@ -72,6 +72,14 @@
     <display_length compare="ge">768</display_length>
   </requires>
   <releases>
+    <release version="0.2.2" date="2026-11-26" type="development">
+      <description>
+        <p>Hotfix: testers can now get test builds of plug-ins.</p>
+        <ul>
+          <li>Plug-ins page: a switch, off by default, to also offer test builds (pre-releases) of plug-ins, still checked against GitHub's checksum</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.1" date="2026-11-26" type="development">
       <description>
         <p>Test release from the comms branch: plug-ins and the Windows build.</p>
