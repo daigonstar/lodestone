@@ -1750,7 +1750,7 @@ function renderPluginsPage() {
       </div></div>`;
   }).join("") || '<p class="muted">No plug-ins yet.</p>';
   const keep = document.querySelector("#plugin-repo-input")?.value || "";
-  $("#plugins-list").innerHTML += thirdPartyHTML();
+  $("#plugins-list").innerHTML += testReleasesHTML() + thirdPartyHTML();
   const inp = document.querySelector("#plugin-repo-input");
   if (inp) inp.value = keep;
 }
@@ -1759,6 +1759,13 @@ $("#plugins-list").addEventListener("click", async (e) => {
   if (!b) return;
   const id = b.dataset.pluginId || b.closest("[data-plugin]")?.dataset.plugin;
   try {
+    if (b.dataset.pluginAct === "test-releases") {
+      await invoke("plugin_set_test_releases", { on: b.checked });
+      state.pluginTest = b.checked;
+      toast(b.checked ? "Test builds are on. Looking for them…" : "Test builds are off.");
+      checkBeaconRelease();
+      return checkPluginReleases();
+    }
     if (b.dataset.pluginAct === "add-repo") {
       const repo = await invoke("plugin_repo_add", { repo: $("#plugin-repo-input").value });
       toast(`Added ${repo}. Looking for its latest release…`);
@@ -1807,6 +1814,7 @@ async function checkBeaconRelease() {
 async function checkPluginReleases() {
   state.pluginReleases = {};
   try { state.pluginRepos = await invoke("plugin_repos"); } catch { state.pluginRepos = []; }
+  try { state.pluginTest = await invoke("plugin_test_releases"); } catch { state.pluginTest = false; }
   renderPluginsPage();
   await Promise.all(["kiln", ...state.pluginRepos].map(async (id) => {
     try { state.pluginReleases[id] = await invoke("plugin_release_check", { id }); } catch (e) { state.pluginReleases[id] = { error: String(e) }; }
@@ -1827,6 +1835,11 @@ function installBtn(id, p) {
   const have = r.installed || (p && p.installed);
   if (have && !r.update) return "";
   return `<button class="${have ? "ghost" : "play"}" data-plugin-act="install-release" data-plugin-id="${esc(id)}">${have ? "Update to" : "Install"} ${esc(r.latest)}</button>`;
+}
+function testReleasesHTML() {
+  return `<h2 class="plugins-sub">Test builds</h2>
+    <label class="check-row"><input type="checkbox" data-plugin-act="test-releases" ${state.pluginTest ? "checked" : ""} /> Also offer test builds (pre-releases) of plug-ins</label>
+    <p class="muted small">Test builds are for people helping to test. They may be unfinished or broken, and nobody has checked them for you. Off by default; they are still downloaded only from the plug-in's own GitHub releases and checked against GitHub's checksum.</p>`;
 }
 function thirdPartyHTML() {
   const repos = state.pluginRepos || [];
