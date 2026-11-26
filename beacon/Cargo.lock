@@ -2850,6 +2850,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-tungstenite",
+ "webpki-root-certs",
 ]
 
 [[package]]

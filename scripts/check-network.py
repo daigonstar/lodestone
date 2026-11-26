@@ -22,6 +22,8 @@ SOURCES = [
     *(root / "src-tauri/src").rglob("*.rs"), *(root / "ui").glob("*.js"), *(root / "ui").glob("*.html"),
     # Lodestone Beacon (the plug-in, its client and the self-hosted server)
     *(root / "beacon").glob("*/src/**/*.rs"), *(root / "beacon/app/ui").glob("*.js"), *(root / "beacon/app/ui").glob("*.html"),
+    # Lodestone Beacon for Android (jsQR.js is a vendored QR reader, checked separately by reading it)
+    *(root / "beacon/mobile/src-tauri/src").glob("*.rs"), (root / "beacon/mobile/ui/app.js"), (root / "beacon/mobile/ui/index.html"),
 ]
 URL = re.compile(r"""\b(?:https?|wss?)://([A-Za-z0-9{}$._*-]+)""")
 

@@ -384,3 +384,29 @@ async fn forum_announcement_and_media_channels() {
     let m = &bob.messages(&media, 10).unwrap()[0];
     assert_eq!((m.body.as_str(), m.attachment.as_ref().unwrap()["mime"].as_str()), ("first clear", Some("image/png")));
 }
+
+#[tokio::test]
+async fn a_phone_approves_a_new_pc_by_scanning_its_qr_code() {
+    use lodestone_beacon_client::identity::Identity;
+    let tmp = tempfile::tempdir().unwrap();
+    let (url, setup) = start_server(tmp.path()).await;
+    let me = Identity::generate();
+    let phone = Client::open(&tmp.path().join("phone"), &url).unwrap();
+    phone.register("robb", &setup, Some(&me)).await.unwrap();
+
+    // The new PC makes its QR code: its device key, the signed proof, and a key to seal the identity with.
+    let pc = Client::open(&tmp.path().join("pc"), &url).unwrap();
+    let (ts, sig) = pc.adopt_offer();
+    let key = [5u8; 32];
+    assert_eq!(pc.adopt_check().await.unwrap().0, "waiting");
+
+    // The phone shows the fingerprint to compare, then approves and hands the identity over.
+    assert_eq!(lodestone_beacon_client::identity::fingerprint_of(pc.device_key()), pc.fingerprint());
+    phone.adopt(pc.device_key(), ts, &sig, Some(me.seal(&key))).await.unwrap();
+
+    let (status, blob) = pc.adopt_check().await.unwrap();
+    assert_eq!(status, "approved");
+    assert_eq!(pc.username().as_deref(), Some("robb"));
+    assert_eq!(Identity::open(&blob.unwrap(), &key).unwrap().public(), me.public());
+    assert_eq!(phone.devices().await.unwrap().len(), 2);
+}

@@ -32,3 +32,7 @@ bip39 = "2"
 [dev-dependencies]
 lodestone-beacon-server = { path = "../server" }
 tempfile = "3"
+
+# Android only: the public certificate authorities, built in (see server.rs).
+[target.'cfg(target_os = "android")'.dependencies]
+webpki-root-certs = "1"

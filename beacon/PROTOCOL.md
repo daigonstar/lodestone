@@ -111,6 +111,18 @@ new device. Nobody holds an account database: each server stores only public key
   each channel (with attachment keys) and the reactions on them. The new device adds them to its own store
   without overwriting anything. Profiles are not copied; they arrive as usual. A pairing typed in by hand has
   no QR key, so it copies nothing. Copying is best effort: if it fails the device is still approved.
+- **Adding a PC by scanning its QR code with your phone** (the other direction, for a new device with no camera
+  or no account yet). The new PC shows a QR code `beacon-pair:2|<server url>|<device_key>|<ts>|<signature>|<key>`:
+  its device key, the time it made the code, its own signature over `lodestone-beacon/v1 adopt <server url> <ts>
+  <device_key>` (proof that the key belongs to the device showing the code) and a random key for sealing the
+  identity. The phone, signed in on that server, shows the device's fingerprint; the person compares it with the
+  PC's screen and approves with `POST /v1/pairing/adopt` `{ device_key, ts, signature, blob? }`. The server checks
+  the signature (bound to this server), that the code is at most 10 minutes old, that the device isn't registered
+  and that the account has fewer than 10 devices, then adds the device and keeps `blob` (up to 1 KiB, the identity
+  sealed with the key from the QR code) for the PC to collect once. The PC polls `POST /v1/pairing/status` with
+  its `device_key` (and any `code`): when it is `approved` the answer also carries the `username`, so a PC that has
+  never had an account learns it. Anyone who can see the QR code can make their own phone adopt that PC, so the
+  PC's fingerprint must be compared and the code is short-lived.
 - **Not done yet:** clients don't pin or warn when a username shows up with a different identity, and history
   older than the last 300 messages per channel, or sent after pairing, only reaches a new device through the
   channels as usual (an encrypted server backup is a later step; see Project.md).

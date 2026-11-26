@@ -3,7 +3,7 @@
 What needs doing to get Lodestone to users, and where each item stands. Update this file whenever an
 item is finished or partly done.
 
-Last updated: 2026-11-26 (Windows second pass and plug-in guide merged into comms)
+Last updated: 2026-11-26 (Android test app and PRs merged into comms)
 
 ## Current focus
 
@@ -101,6 +101,24 @@ look too, moving away from Discord's look. Plan and inventory: `beacon/NAMING-PL
 | Copy history when pairing a device | Built (PR into `comms`), Robb's choice "copy at pairing, backup later": approving a QR-paired device first uploads the last 300 messages per channel (and their reactions) encrypted with the QR key, up to 6 MiB, kept 10 minutes, collected once by the new device; failure never blocks approval. Tests: server permissions and once-only, client end-to-end. Not tested on a real phone. **Not done:** encrypted server backup for older history, no copy for hand-typed (no-QR) pairing |
 | PR #7 (plug-in installer) still uses `comms`, `comms-v` and the old Flatpak id | Needs merging with this rename before either lands |
 | Existing `comms-v*` draft releases on GitHub | Would be re-published as `beacon-v*` |
+
+## Beacon mobile apps (Android and iOS)
+
+Robb wants Beacon on both stores, with the phone as a paired device and an authenticator for new PCs.
+Plan written 2026-11-26: `beacon/MOBILE-PLAN.md` (approaches compared, store rules, AGENTS.md conflicts, phases).
+Recommendation: Tauri 2 mobile reusing the Rust core and web UI, native Kotlin/Swift plug-ins where needed.
+**Decided by Robb 2026-11-26: Android first, free route (GitHub releases and F-Droid); UK users to start. iOS (US$99 a year, app removed if it lapses) and Google Play (US$25) are optional later.**
+
+| Item | Status |
+| --- | --- |
+| Plan and comparison | Done, waiting for Robb's choice. Nothing built |
+| Apple (US$99/yr) and Google Play (US$25) developer accounts | Not needed for Android first; decide later |
+| Decide push notifications (no push first, or a publisher relay that needs an AGENTS.md change) | Waiting on Robb |
+| Spike: Beacon client on Android | Done: client builds and packages for Android arm64 (see the first version below) |
+| First version of the Android app (`beacon/mobile/`): identity, add server, approve a PC by scanning its QR code | Built 2026-11-26 as an 11 MB test APK. New server route `/v1/pairing/adopt` and desktop "Sign in with my phone" screen, with tests. **Not run on a phone yet**; key not in the Keystore yet; no chat |
+| Robb tries the test APK on a phone | Waiting on Robb |
+| Phase 1: Android pairing and chat, history copy, report/block, account deletion | Not started |
+| Phase 2: F-Droid listing, notifications | Not started |
 
 ## Releases
 

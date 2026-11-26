@@ -115,7 +115,13 @@ pub async fn status(State(app): State<Shared>, Json(r): Json<StatusReq>) -> ApiR
     } else {
         None
     };
-    Ok(Json(json!({ "status": status, "blob": blob })))
+    // A device that was added by scanning its QR code (`adopt`) never saw a username; tell it once it's in.
+    let username: Option<String> = if registered {
+        app.db.with(|c| c.query_row("SELECT a.username FROM devices d JOIN accounts a ON a.id = d.account WHERE d.key = ?1", [&r.device_key], |r| r.get(0)).optional())?
+    } else {
+        None
+    };
+    Ok(Json(json!({ "status": status, "blob": blob, "username": username })))
 }
 
 /// `GET /v1/pairing`: devices waiting for your approval, with their fingerprints.
@@ -224,4 +230,50 @@ pub async fn get_history(State(app): State<Shared>, me: Auth) -> ApiResult<Respo
     let mut h = HeaderMap::new();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
     Ok((h, data).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct Adopt {
+    device_key: String,
+    /// When the new device made its QR code (seconds since 1970); a QR code is good for 10 minutes.
+    ts: i64,
+    /// The new device's signature over `lodestone-beacon/v1 adopt <server> <ts> <device_key>`: proof that the key in
+    /// the QR code belongs to a device that is showing it.
+    signature: String,
+    /// The identity (or other data) sealed with a key that only travels in the QR code. Up to 1 KiB.
+    #[serde(default)]
+    blob: Option<String>,
+}
+
+/// `POST /v1/pairing/adopt`: add a new device to your account because you scanned its QR code. The other way round
+/// from `pairing`: the new device (a PC with no camera, say) shows a QR code, and a signed-in device (your phone)
+/// scans it and approves. Your phone has already shown you the new device's fingerprint to compare.
+pub async fn adopt(State(app): State<Shared>, me: Auth, Json(r): Json<Adopt>) -> ApiResult<Json<Value>> {
+    if !app.limits.allow("pair-adopt", 30, Duration::from_secs(60)) {
+        return Err(ApiError(StatusCode::TOO_MANY_REQUESTS, "Too many attempts; try again in a minute".into()));
+    }
+    if (now() - r.ts).abs() > VALID_FOR {
+        return Err(ApiError::bad("That QR code has expired; make a new one on the other device"));
+    }
+    verify(&r.device_key, &format!("{PREFIX} adopt {} {} {}", app.cfg.public_url, r.ts, r.device_key), &r.signature)?;
+    if r.blob.as_ref().is_some_and(|b| b.len() > 1024) {
+        return Err(ApiError::bad("The hand-over data can be at most 1 KiB"));
+    }
+    app.db.with(|c| {
+        let tx = c.transaction()?;
+        if tx.query_row("SELECT 1 FROM devices WHERE key = ?1", [&r.device_key], |_| Ok(())).optional()?.is_some() {
+            return Ok(Err(ApiError::conflict("This device is already registered")));
+        }
+        let count: i64 = tx.query_row("SELECT COUNT(*) FROM devices WHERE account = ?1", [me.account], |r| r.get(0))?;
+        if count >= 10 {
+            return Ok(Err(ApiError::bad("An account can have at most 10 devices; remove one first")));
+        }
+        tx.execute("INSERT INTO devices (key, account, created) VALUES (?1, ?2, ?3)", params![r.device_key, me.account, now()])?;
+        if let Some(blob) = &r.blob {
+            tx.execute("INSERT OR REPLACE INTO pairing_blobs (device_key, blob) VALUES (?1, ?2)", params![r.device_key, blob])?;
+        }
+        tx.commit()?;
+        Ok(Ok(()))
+    })??;
+    Ok(Json(json!({ "ok": true, "fingerprint": fingerprint(&r.device_key), "username": me.username })))
 }

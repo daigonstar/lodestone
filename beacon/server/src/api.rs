@@ -34,6 +34,7 @@ pub fn router(app: Shared) -> Router {
         .route("/v1/pairing/status", post(crate::pairing::status))
         .route("/v1/pairing/approve", post(crate::pairing::approve))
         .route("/v1/pairing/refuse", post(crate::pairing::refuse))
+        .route("/v1/pairing/adopt", post(crate::pairing::adopt))
         .route("/v1/me", get(me))
         .route("/v1/me/status", axum::routing::put(crate::presence::set_status))
         .route("/v1/communities", post(create_community))
