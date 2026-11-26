@@ -26,6 +26,10 @@ pub fn router(app: Shared) -> Router {
         .route("/v1/recover", post(crate::auth::recover))
         .route("/v1/devices/remove", post(crate::pairing::remove_device))
         .route("/v1/pairing", post(crate::pairing::start).get(crate::pairing::waiting))
+        .route(
+            "/v1/pairing/history",
+            axum::routing::put(crate::pairing::put_history).get(crate::pairing::get_history).layer(axum::extract::DefaultBodyLimit::max(crate::pairing::MAX_HISTORY + 1024)),
+        )
         .route("/v1/pairing/claim", post(crate::pairing::claim))
         .route("/v1/pairing/status", post(crate::pairing::status))
         .route("/v1/pairing/approve", post(crate::pairing::approve))
@@ -125,11 +129,24 @@ pub(crate) fn require_admin(app: &Shared, community: &str, me: &Auth) -> ApiResu
     }
 }
 
-/// The community a channel belongs to, if you're a member of it.
-fn channel_community(app: &Shared, channel: &str, me: &Auth) -> ApiResult<String> {
+/// Whether an account may read a channel: any member for an ordinary channel, only the chosen people for a
+/// private one (owners and admins can manage a private channel, but read it only if they're on its list).
+pub(crate) fn can_read(c: &Connection, channel: &str, account: i64) -> rusqlite::Result<bool> {
+    c.query_row(
+        "SELECT NOT private OR EXISTS(SELECT 1 FROM channel_access a WHERE a.channel = channels.id AND a.account = ?2) FROM channels WHERE id = ?1",
+        params![channel, account],
+        |r| r.get(0),
+    )
+}
+
+/// The community a channel belongs to, if you're a member of it and may read the channel.
+pub(crate) fn channel_community(app: &Shared, channel: &str, me: &Auth) -> ApiResult<String> {
     let community: Option<String> = app.db.with(|c| c.query_row("SELECT community FROM channels WHERE id = ?1", [channel], |r| r.get(0)).optional())?;
     let community = community.ok_or_else(|| ApiError::not_found("No such channel"))?;
     require_member(app, &community, me).map_err(|_| ApiError::not_found("No such channel"))?;
+    if !app.db.with(|c| can_read(c, channel, me.account))? {
+        return Err(ApiError::not_found("No such channel"));
+    }
     Ok(community)
 }
 
@@ -163,6 +180,11 @@ struct NameReq {
     /// Make the new channel a child of this text channel.
     #[serde(default)]
     parent: Option<String>,
+    /// Only the people in `access` (and you) can read it.
+    #[serde(default)]
+    private: bool,
+    #[serde(default)]
+    access: Vec<String>,
 }
 
 async fn create_community(State(app): State<Shared>, me: Auth, Json(r): Json<NameReq>) -> ApiResult<Json<Value>> {
@@ -186,16 +208,27 @@ async fn get_community(State(app): State<Shared>, me: Auth, Path(community): Pat
     let out = app.db.with(|c| {
         let (name, description, has_icon, has_banner): (String, String, bool, bool) =
             c.query_row("SELECT name, description, icon IS NOT NULL, banner IS NOT NULL FROM communities WHERE id = ?1", [&community], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
-        let channels: Vec<Value> = c
-            .prepare("SELECT id, name, epoch, topic, kind, category, parent, post_rule FROM channels WHERE community = ?1 ORDER BY position, created, name")?
-            .query_map([&community], |r| {
-                let id: String = r.get(0)?;
-                let kind: String = r.get(4)?;
-                // Who's in a voice channel right now (usernames), for the channel list.
-                let in_call = if kind == "voice" { app.voice.usernames(&id) } else { Vec::new() };
-                Ok(json!({ "id": id, "name": r.get::<_, String>(1)?, "epoch": r.get::<_, i64>(2)?, "topic": r.get::<_, String>(3)?, "kind": kind, "in_call": in_call, "category": r.get::<_, Option<String>>(5)?, "parent": r.get::<_, Option<String>>(6)?, "post_rule": r.get::<_, String>(7)? }))
-            })?
+        let is_admin = role == "owner" || role == "admin";
+        let rows: Vec<(String, String, i64, String, String, Option<String>, Option<String>, String, bool)> = c
+            .prepare("SELECT id, name, epoch, topic, kind, category, parent, post_rule, private FROM channels WHERE community = ?1 ORDER BY position, created, name")?
+            .query_map([&community], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)))?
             .collect::<Result<_, _>>()?;
+        let mut channels: Vec<Value> = Vec::new();
+        for (id, name, epoch, topic, kind, category, parent, post_rule, private) in rows {
+            let readable = can_read(c, &id, me.account)?;
+            // A private channel is hidden from members who aren't on its list (admins still see it, to manage it).
+            if !readable && !is_admin {
+                continue;
+            }
+            // Who's in a voice channel right now (usernames), for the channel list.
+            let in_call = if kind == "voice" && readable { app.voice.usernames(&id) } else { Vec::new() };
+            let mut ch = json!({ "id": id, "name": name, "epoch": epoch, "topic": topic, "kind": kind, "in_call": in_call, "category": category, "parent": parent, "post_rule": post_rule, "private": private, "can_read": readable });
+            if private {
+                let access: Vec<String> = c.prepare("SELECT a.username FROM channel_access x JOIN accounts a ON a.id = x.account WHERE x.channel = ?1 ORDER BY a.username")?.query_map([&id], |r| r.get(0))?.collect::<Result<_, _>>()?;
+                ch["access"] = json!(access);
+            }
+            channels.push(ch);
+        }
         let categories: Vec<Value> = c
             .prepare("SELECT id, name FROM categories WHERE community = ?1 ORDER BY position, created, name")?
             .query_map([&community], |r| Ok(json!({ "id": r.get::<_, String>(0)?, "name": r.get::<_, String>(1)? })))?
@@ -230,14 +263,25 @@ async fn create_channel(State(app): State<Shared>, me: Auth, Path(community): Pa
     }
     let (category, parent) = (r.category.clone().map(Some), r.parent.clone().map(Some));
     crate::settings::check_placement(&app, &community, &id, category.as_ref(), parent.as_ref())?;
+    let private = r.private;
+    let access = if private { Some(crate::settings::resolve_access(&app, &community, &r.access, Some(me.account))?) } else { None };
     app.db.with(|c| {
-        c.execute(
-            "INSERT INTO channels (id, community, name, created, position, kind, category, parent) VALUES (?1, ?2, ?3, ?4, (SELECT COALESCE(MAX(position), -1) + 1 FROM channels WHERE community = ?2), ?5, ?6, ?7)",
-            params![id, community, name, now(), kind, if r.parent.is_some() { None } else { r.category.clone() }, r.parent.clone()],
-        )
+        let tx = c.transaction()?;
+        tx.execute(
+            "INSERT INTO channels (id, community, name, created, position, kind, category, parent, private) VALUES (?1, ?2, ?3, ?4, (SELECT COALESCE(MAX(position), -1) + 1 FROM channels WHERE community = ?2), ?5, ?6, ?7, ?8)",
+            params![id, community, name, now(), kind, if r.parent.is_some() { None } else { r.category.clone() }, r.parent.clone(), private],
+        )?;
+        for a in access.iter().flatten() {
+            tx.execute("INSERT OR IGNORE INTO channel_access (channel, account) VALUES (?1, ?2)", params![id, a])?;
+        }
+        tx.commit()
     })?;
-    app.live.to_community(&app, &community, json!({ "type": "channel_created", "community": community, "channel": id, "name": name, "kind": kind }));
-    Ok(Json(json!({ "id": id, "name": name, "epoch": 0, "kind": kind })))
+    app.live.to_channel(&app, &community, &id, json!({ "type": "channel_created", "community": community, "channel": id, "name": name, "kind": kind }));
+    if private {
+        // Admins who aren't on the list still see that it exists.
+        app.live.to_community(&app, &community, json!({ "type": "community_updated", "community": community }));
+    }
+    Ok(Json(json!({ "id": id, "name": name, "epoch": 0, "kind": kind, "private": private })))
 }
 
 // ---------- invites and members ----------
@@ -330,6 +374,7 @@ async fn remove_member(State(app): State<Shared>, me: Auth, Path((community, use
         }
     }
     app.db.with(|c| {
+        c.execute("DELETE FROM channel_access WHERE account = ?2 AND channel IN (SELECT id FROM channels WHERE community = ?1)", params![community, target])?;
         c.execute("DELETE FROM members WHERE community = ?1 AND account = ?2", params![community, target])?;
         if q.ban && !leaving {
             c.execute("INSERT OR IGNORE INTO bans (community, account) VALUES (?1, ?2)", params![community, target])?;
@@ -452,9 +497,10 @@ async fn send_message(State(app): State<Shared>, me: Auth, Path(channel): Path<S
         tx.commit()?;
         Ok(Ok(seq))
     })??;
-    app.live.to_community(
+    app.live.to_channel(
         &app,
         &community,
+        &channel,
         json!({ "type": "message", "channel": channel, "seq": seq, "kind": r.kind, "epoch": r.epoch, "sender": me.device, "sender_name": me.username, "body": r.body, "sent_at": sent_at }),
     );
     Ok(Json(json!({ "seq": seq, "sent_at": sent_at })))
@@ -505,11 +551,11 @@ async fn send_welcome(State(app): State<Shared>, me: Auth, Json(r): Json<Welcome
         let tx = c.transaction()?;
         let mut n = Vec::new();
         for d in &r.to {
-            let in_community = tx
-                .query_row("SELECT 1 FROM devices dv JOIN members m ON m.account = dv.account WHERE dv.key = ?1 AND m.community = ?2", params![d, community], |_| Ok(()))
-                .optional()?
-                .is_some();
-            if in_community {
+            let account: Option<i64> = tx
+                .query_row("SELECT dv.account FROM devices dv JOIN members m ON m.account = dv.account WHERE dv.key = ?1 AND m.community = ?2", params![d, community], |r| r.get(0))
+                .optional()?;
+            // Only devices of people who may read the channel (everyone in the community, unless it is private).
+            if account.filter(|a| can_read(&tx, &r.channel, *a).unwrap_or(false)).is_some() {
                 tx.execute("INSERT INTO welcomes (device_key, channel, body, created) VALUES (?1, ?2, ?3, ?4)", params![d, r.channel, body, now()])?;
                 n.push(d.clone());
             }

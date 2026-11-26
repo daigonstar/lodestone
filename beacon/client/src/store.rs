@@ -217,6 +217,67 @@ impl Store {
             .and_then(|a| serde_json::from_str(&a).ok())
     }
 
+    /// Your recent messages (and their reactions) for copying to a new device of yours: the last `per_channel`
+    /// messages of every channel, attachments with their keys. Stops adding once `max_bytes` is reached.
+    /// Profiles and MLS state are not included.
+    pub fn export_history(&self, per_channel: i64, max_bytes: usize) -> rusqlite::Result<serde_json::Value> {
+        let mut size = 0usize;
+        let mut messages = Vec::new();
+        let mut reactions = Vec::new();
+        self.with(|c| {
+            let channels: Vec<String> = c.prepare("SELECT id FROM channels ORDER BY id")?.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+            for ch in channels {
+                let rows: Vec<(i64, String, String, String, i64, Option<String>)> = c
+                    .prepare("SELECT seq, sender, sender_device, body, sent_at, attachment FROM messages WHERE channel = ?1 ORDER BY seq DESC LIMIT ?2")?
+                    .query_map(params![ch, per_channel], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?
+                    .collect::<Result<_, _>>()?;
+                let Some(oldest) = rows.last().map(|r| r.0) else { continue };
+                for (seq, sender, device, body, sent_at, att) in rows {
+                    size += body.len() + att.as_ref().map_or(0, |a| a.len()) + 160;
+                    if size > max_bytes {
+                        break;
+                    }
+                    messages.push(serde_json::json!({ "c": ch, "s": seq, "u": sender, "d": device, "b": body, "t": sent_at, "a": att.and_then(|a| serde_json::from_str::<serde_json::Value>(&a).ok()) }));
+                }
+                let rs: Vec<(i64, String, String)> = c
+                    .prepare("SELECT target, emoji, user FROM reactions WHERE channel = ?1 AND target >= ?2")?
+                    .query_map(params![ch, oldest], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                    .collect::<Result<_, _>>()?;
+                for (t, e, u) in rs {
+                    size += e.len() + u.len() + 60;
+                    if size > max_bytes {
+                        break;
+                    }
+                    reactions.push(serde_json::json!({ "c": ch, "t": t, "e": e, "u": u }));
+                }
+            }
+            Ok(())
+        })?;
+        Ok(serde_json::json!({ "v": 1, "messages": messages, "reactions": reactions }))
+    }
+
+    /// Add history from `export_history`. Messages you already have are left alone. Returns how many were added.
+    pub fn import_history(&self, h: &serde_json::Value) -> rusqlite::Result<usize> {
+        if h["v"] != 1 {
+            return Ok(0);
+        }
+        self.with(|c| {
+            let tx = c.transaction()?;
+            let mut added = 0;
+            for m in h["messages"].as_array().into_iter().flatten() {
+                let (Some(ch), Some(seq), Some(u), Some(d), Some(b), Some(t)) = (m["c"].as_str(), m["s"].as_i64(), m["u"].as_str(), m["d"].as_str(), m["b"].as_str(), m["t"].as_i64()) else { continue };
+                let att = if m["a"].is_null() { None } else { Some(m["a"].to_string()) };
+                added += tx.execute("INSERT OR IGNORE INTO messages (channel, seq, sender, sender_device, body, sent_at, attachment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)", params![ch, seq, u, d, b, t, att])?;
+            }
+            for r in h["reactions"].as_array().into_iter().flatten() {
+                let (Some(ch), Some(t), Some(e), Some(u)) = (r["c"].as_str(), r["t"].as_i64(), r["e"].as_str(), r["u"].as_str()) else { continue };
+                tx.execute("INSERT OR IGNORE INTO reactions (channel, target, emoji, user) VALUES (?1, ?2, ?3, ?4)", params![ch, t, e, u])?;
+            }
+            tx.commit()?;
+            Ok(added)
+        })
+    }
+
     pub fn messages(&self, channel: &str, limit: i64) -> rusqlite::Result<Vec<Message>> {
         self.with(|c| {
             let mut v: Vec<Message> = c

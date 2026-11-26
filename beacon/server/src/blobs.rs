@@ -21,9 +21,7 @@ fn valid_id(id: &str) -> bool {
 
 /// `POST /v1/channels/{channel}/blobs` with the encrypted file as the body.
 pub async fn upload(State(app): State<Shared>, me: Auth, Path(channel): Path<String>, body: Bytes) -> ApiResult<Json<Value>> {
-    let community: Option<String> = app.db.with(|c| c.query_row("SELECT community FROM channels WHERE id = ?1", [&channel], |r| r.get(0)).optional())?;
-    let community = community.ok_or_else(|| ApiError::not_found("No such channel"))?;
-    require_member(&app, &community, &me).map_err(|_| ApiError::not_found("No such channel"))?;
+    let community = crate::api::channel_community(&app, &channel, &me)?;
     if body.is_empty() || body.len() as u64 > app.cfg.max_file {
         return Err(ApiError::bad(format!("Files can be at most {} MB", app.cfg.max_file / 1024 / 1024)));
     }
@@ -56,9 +54,13 @@ pub async fn download(State(app): State<Shared>, me: Auth, Path(id): Path<String
     if !valid_id(&id) {
         return Err(ApiError::not_found("No such file"));
     }
-    let community: Option<String> = app.db.with(|c| c.query_row("SELECT community FROM blobs WHERE id = ?1", [&id], |r| r.get(0)).optional())?;
-    let community = community.ok_or_else(|| ApiError::not_found("No such file"))?;
+    let row: Option<(String, String)> = app.db.with(|c| c.query_row("SELECT community, channel FROM blobs WHERE id = ?1", [&id], |r| Ok((r.get(0)?, r.get(1)?))).optional())?;
+    let (community, channel) = row.ok_or_else(|| ApiError::not_found("No such file"))?;
     require_member(&app, &community, &me).map_err(|_| ApiError::not_found("No such file"))?;
+    // Files in a private channel are for the people on its list only.
+    if !app.db.with(|c| crate::api::can_read(c, &channel, me.account)).unwrap_or(false) {
+        return Err(ApiError::not_found("No such file"));
+    }
     let bytes = std::fs::read(app.cfg.blob_dir.join(&id)).map_err(|_| ApiError::not_found("No such file"))?;
     let mut h = HeaderMap::new();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));

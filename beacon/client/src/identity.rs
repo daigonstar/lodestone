@@ -71,6 +71,22 @@ impl Identity {
         b64(&[nonce.as_slice(), &ct].concat())
     }
 
+    /// Encrypt bytes with a pairing key: a random nonce, then the AES-256-GCM ciphertext.
+    pub fn seal_bytes(data: &[u8], key: &[u8; 32]) -> Vec<u8> {
+        let mut nonce = [0u8; 12];
+        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        let ct = Aes256Gcm::new(key.into()).encrypt(Nonce::from_slice(&nonce), data).unwrap_or_default();
+        [nonce.as_slice(), &ct].concat()
+    }
+
+    pub fn open_bytes(sealed: &[u8], key: &[u8; 32]) -> Option<Vec<u8>> {
+        if sealed.len() < 13 {
+            return None;
+        }
+        let (nonce, ct) = sealed.split_at(12);
+        Aes256Gcm::new(key.into()).decrypt(Nonce::from_slice(nonce), ct).ok()
+    }
+
     pub fn open(sealed: &str, key: &[u8; 32]) -> Option<Self> {
         let raw = unb64(sealed)?;
         if raw.len() < 13 {

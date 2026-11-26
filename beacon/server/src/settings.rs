@@ -175,6 +175,28 @@ pub struct ChannelPatch {
     parent: Option<Option<String>>,
     /// "everyone" or "admins": who can post.
     post_rule: Option<String>,
+    /// Make the channel private (only `access` can read it) or public again.
+    private: Option<bool>,
+    /// Usernames who can read a private channel.
+    access: Option<Vec<String>>,
+}
+
+/// Turn usernames into account ids; they must all be members of the community. `always` is added.
+pub(crate) fn resolve_access(app: &Shared, community: &str, names: &[String], always: Option<i64>) -> ApiResult<Vec<i64>> {
+    if names.len() > 500 {
+        return Err(ApiError::bad("At most 500 people can be on a private channel"));
+    }
+    let mut out: Vec<i64> = always.into_iter().collect();
+    for n in names {
+        let id: Option<i64> = app.db.with(|c| {
+            c.query_row("SELECT a.id FROM accounts a JOIN members m ON m.account = a.id WHERE m.community = ?1 AND a.username = ?2", params![community, n.trim().to_ascii_lowercase()], |r| r.get(0)).optional()
+        })?;
+        let id = id.ok_or_else(|| ApiError::bad(format!("{} isn't in this community", n.trim())))?;
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    Ok(out)
 }
 
 pub async fn update_channel(State(app): State<Shared>, me: Auth, Path(channel): Path<String>, Json(r): Json<ChannelPatch>) -> ApiResult<Json<Value>> {
@@ -187,7 +209,34 @@ pub async fn update_channel(State(app): State<Shared>, me: Auth, Path(channel): 
         }
     }
     check_placement(&app, &community, &channel, r.category.as_ref(), r.parent.as_ref())?;
+    let was_private: bool = app.db.with(|c| c.query_row("SELECT private FROM channels WHERE id = ?1", [&channel], |r| r.get(0)))?;
+    let private = r.private.unwrap_or(was_private);
+    // Turning a channel private needs a list of the people who can read it (never empty). Owners and admins
+    // can change the list, including adding themselves, without being on it.
+    let access = match (&r.access, private) {
+        (Some(names), true) => {
+            let list = resolve_access(&app, &community, names, None)?;
+            if list.is_empty() {
+                return Err(ApiError::bad("A private channel needs at least one person"));
+            }
+            Some(list)
+        }
+        (None, true) if !was_private => return Err(ApiError::bad("Choose who can read a private channel")),
+        _ => None,
+    };
     app.db.with(|c| {
+        if r.private.is_some() {
+            c.execute("UPDATE channels SET private = ?2 WHERE id = ?1", params![channel, private])?;
+            if !private {
+                c.execute("DELETE FROM channel_access WHERE channel = ?1", [&channel])?;
+            }
+        }
+        if let Some(list) = &access {
+            c.execute("DELETE FROM channel_access WHERE channel = ?1", [&channel])?;
+            for a in list {
+                c.execute("INSERT OR IGNORE INTO channel_access (channel, account) VALUES (?1, ?2)", params![channel, a])?;
+            }
+        }
         if let Some(n) = &name {
             c.execute("UPDATE channels SET name = ?2 WHERE id = ?1", params![channel, n])?;
         }
@@ -252,6 +301,7 @@ pub async fn delete_channel(State(app): State<Shared>, me: Auth, Path(channel): 
     app.db.with(|c| {
         // Its children move up to the top level rather than disappearing.
         c.execute("UPDATE channels SET parent = NULL WHERE parent = ?1", [&channel])?;
+        c.execute("DELETE FROM channel_access WHERE channel = ?1", [&channel])?;
         c.execute("DELETE FROM channels WHERE id = ?1", [&channel])
     })?;
     crate::blobs::sweep(&app);

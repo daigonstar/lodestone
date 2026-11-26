@@ -144,9 +144,18 @@ async fn encrypted_chat_end_to_end() {
     assert_eq!(desktop.pair_check().await.unwrap().0, "waiting");
     let waiting = alice.pair_waiting().await.unwrap();
     assert_eq!(waiting, vec![(desktop.device_key().to_string(), fp.clone())]);
+    // The QR code's key lets Alice's laptop leave the desktop her message history (the server only sees ciphertext).
+    let key = [7u8; 32];
+    let sent = alice.pair_send_history(desktop.device_key(), &key).await.unwrap();
+    assert!(sent >= 3, "Alice's history was sent");
     alice.pair_decide(desktop.device_key(), true, None).await.unwrap();
     assert_eq!(desktop.pair_check().await.unwrap().0, "approved");
     assert_eq!(desktop.username().as_deref(), Some("alice"));
+    // The desktop collects it once, with the right key, and sees Alice's older messages straight away.
+    let got = desktop.pair_fetch_history(&key).await.unwrap();
+    assert_eq!(got, sent);
+    assert!(bodies(&desktop, &general).contains(&"alice: welcome carol".to_string()));
+    assert_eq!(desktop.pair_fetch_history(&key).await.unwrap(), 0, "the server hands the history over once");
     // Alice's laptop (or any member) adds the new device to the channels.
     alice.sync().await.unwrap();
     desktop.sync().await.unwrap();
@@ -260,4 +269,66 @@ async fn one_identity_across_servers_and_recovery_on_a_new_pc() {
     let (status, blob) = phone.pair_check().await.unwrap();
     assert_eq!(status, "approved");
     assert_eq!(Identity::open(&blob.unwrap(), &key).unwrap().public(), me.public());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn private_channels_only_reach_the_people_on_their_list() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (url, setup) = start_server(tmp.path()).await;
+    let alice = Client::open(&tmp.path().join("alice"), &url).unwrap();
+    alice.register("alice", &setup, None).await.unwrap();
+    let community = alice.create_community("Guild").await.unwrap();
+    let invite = alice.create_invite(&community, 5, 3600).await.unwrap();
+    let code = invite["code"].as_str().unwrap().to_string();
+    let bob = Client::open(&tmp.path().join("bob"), &url).unwrap();
+    bob.register("bob", &code, None).await.unwrap();
+    let carol = Client::open(&tmp.path().join("carol"), &url).unwrap();
+    carol.register("carol", &code, None).await.unwrap();
+    for c in [&alice, &bob, &carol, &alice] {
+        c.sync().await.unwrap();
+    }
+
+    // Alice makes a private channel for herself and Bob.
+    let secret = alice.create_private_channel(&community, "officers", "text", &["bob".to_string()]).await.unwrap();
+    alice.sync().await.unwrap();
+    bob.sync().await.unwrap();
+    carol.sync().await.unwrap();
+    alice.send_text(&secret, "plans for friday").await.unwrap();
+    bob.sync().await.unwrap();
+    assert_eq!(bodies(&bob, &secret), vec!["alice: plans for friday"]);
+
+    // Carol doesn't see it at all: not in her community listing, no group, and the server refuses her.
+    let listing = carol.server.get(&format!("/v1/communities/{community}")).await.unwrap();
+    assert!(listing["channels"].as_array().unwrap().iter().all(|c| c["id"] != secret.as_str()));
+    carol.sync().await.unwrap();
+    assert!(carol.channels().unwrap().iter().all(|c| c.0 != secret));
+    assert!(carol.server.get(&format!("/v1/channels/{secret}/messages")).await.is_err());
+
+    // Alice adds Carol to the list: she's added to the group and reads from then on, not before.
+    alice.server.call("PATCH", &format!("/v1/channels/{secret}"), Some(serde_json::json!({ "access": ["alice", "bob", "carol"] }))).await.unwrap();
+    alice.sync().await.unwrap();
+    carol.sync().await.unwrap();
+    assert!(carol.channels().unwrap().iter().any(|c| c.0 == secret), "Carol was welcomed");
+    alice.send_text(&secret, "welcome carol").await.unwrap();
+    carol.sync().await.unwrap();
+    assert_eq!(bodies(&carol, &secret), vec!["alice: welcome carol"]);
+
+    // Alice takes Bob off the list: he loses the channel and can't read what's said next.
+    alice.server.call("PATCH", &format!("/v1/channels/{secret}"), Some(serde_json::json!({ "access": ["alice", "carol"] }))).await.unwrap();
+    alice.sync().await.unwrap();
+    carol.sync().await.unwrap();
+    alice.send_text(&secret, "bob is out").await.unwrap();
+    carol.sync().await.unwrap();
+    assert_eq!(bodies(&carol, &secret).last().unwrap(), "alice: bob is out");
+    bob.sync().await.unwrap();
+    assert!(!bodies(&bob, &secret).iter().any(|b| b.contains("bob is out")));
+    assert!(bob.server.get(&format!("/v1/channels/{secret}/messages")).await.is_err());
+
+    // Making it public again brings Bob back in.
+    alice.server.call("PATCH", &format!("/v1/channels/{secret}"), Some(serde_json::json!({ "private": false }))).await.unwrap();
+    alice.sync().await.unwrap();
+    bob.sync().await.unwrap();
+    alice.send_text(&secret, "everyone now").await.unwrap();
+    bob.sync().await.unwrap();
+    assert_eq!(bodies(&bob, &secret).last().unwrap(), "alice: everyone now");
 }

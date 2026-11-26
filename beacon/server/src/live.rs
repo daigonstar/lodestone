@@ -93,6 +93,32 @@ impl Hub {
         }
     }
 
+    /// Send an event to the members who can read a channel (everyone in the community, unless it is private).
+    pub fn to_channel(&self, app: &Shared, community: &str, channel: &str, event: Value) {
+        let members: Vec<i64> = app
+            .db
+            .with(|c| {
+                c.prepare("SELECT m.account FROM members m WHERE m.community = ?1")?
+                    .query_map([community], |r| r.get::<_, i64>(0))?
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .filter_map(|a| match crate::api::can_read(c, channel, a) {
+                        Ok(true) => Some(Ok(a)),
+                        Ok(false) => None,
+                        Err(e) => Some(Err(e)),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let text = event.to_string();
+        let map = self.by_account.lock().unwrap();
+        for m in members {
+            for c in map.get(&m).into_iter().flatten() {
+                let _ = c.tx.send(text.clone());
+            }
+        }
+    }
+
     /// Send an event to one device, wherever it's connected.
     pub fn to_device(&self, device: &str, event: Value) {
         let text = event.to_string();

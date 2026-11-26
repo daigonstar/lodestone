@@ -189,7 +189,7 @@ fn resolve(addr: &str) -> Option<SocketAddr> {
 /// Tell a community's members that a call changed (someone joined, left, muted, shared, or turned their
 /// camera on or off), so their lists update at once.
 fn voice_changed(app: &Shared, community: &str, channel: &str) {
-    app.live.to_community(app, community, json!({ "type": "voice", "community": community, "channel": channel }));
+    app.live.to_channel(app, community, channel, json!({ "type": "voice", "community": community, "channel": channel }));
 }
 
 const AUDIO: u8 = 0;
@@ -375,6 +375,9 @@ fn voice_channel(app: &Shared, channel: &str, me: &Auth) -> ApiResult<String> {
     let row: Option<(String, String)> = app.db.with(|c| c.query_row("SELECT community, kind FROM channels WHERE id = ?1", [channel], |r| Ok((r.get(0)?, r.get(1)?))).optional())?;
     let (community, kind) = row.ok_or_else(|| ApiError::not_found("No such channel"))?;
     crate::api::require_member(app, &community, me).map_err(|_| ApiError::not_found("No such channel"))?;
+    if !app.db.with(|c| crate::api::can_read(c, channel, me.account))? {
+        return Err(ApiError::not_found("No such channel"));
+    }
     if kind != "voice" {
         return Err(ApiError::bad("That isn't a voice channel"));
     }
