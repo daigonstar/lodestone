@@ -30,6 +30,15 @@ pub fn command() -> Option<Vec<String>> {
     if let Some(p) = which("kiln") {
         return Some(vec![p.to_string_lossy().into_owned()]);
     }
+    // Linux: the command from Kiln's desktop entry. Windows has no such entry; Kiln becomes a plug-in.
+    #[cfg(windows)]
+    return None;
+    #[cfg(not(windows))]
+    desktop_entry_command()
+}
+
+#[cfg(not(windows))]
+fn desktop_entry_command() -> Option<Vec<String>> {
     let h = home();
     for f in [h.join(".local/share/applications/kiln.desktop"), "/usr/share/applications/kiln.desktop".into()] {
         let Ok(txt) = std::fs::read_to_string(&f) else { continue };

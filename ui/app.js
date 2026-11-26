@@ -25,7 +25,10 @@ invoke("data_folder").then((d) => { state.dataDir = d; document.querySelectorAll
 // Problems in this page go to logs/ui.log on this PC (for bug reports; never sent anywhere).
 window.addEventListener("error", (e) => { try { window.__TAURI__.core.invoke("ui_error", { message: `${e.message} at ${e.filename}:${e.lineno}:${e.colno}` }); } catch {} });
 window.addEventListener("unhandledrejection", (e) => { try { window.__TAURI__.core.invoke("ui_error", { message: `unhandled: ${e.reason && (e.reason.stack || e.reason)}` }); } catch {} });
-if (WIN) document.body.classList.add("win");
+if (WIN) {
+  document.body.classList.add("win");
+  document.querySelectorAll("[data-win-placeholder]").forEach((el) => (el.placeholder = el.dataset.winPlaceholder));
+}
 
 
 const $ = (s) => document.querySelector(s);
@@ -1280,6 +1283,7 @@ $("#ws-list").onclick = (e) => {
 
 // ---------- settings ----------
 async function renderProton() {
+  if (WIN) return; // Windows games run natively: no Proton
   const p = await invoke("proton_info");
   document.querySelectorAll(".umu-status").forEach((el) => (el.textContent = p.umu ? `Proton runner ready (umu-launcher ${p.umu})` : "Proton runner not set up yet"));
   document.querySelectorAll(".umu-setup").forEach((el) => { el.textContent = p.umu ? "Update" : "Set up Proton"; el.disabled = false; });
@@ -1317,6 +1321,7 @@ const onStoreOrderClick = (e) => {
 document.querySelectorAll(".store-order").forEach((el) => (el.onclick = onStoreOrderClick));
 $("#steam-bg").onchange = async (e) => { await invoke("set_steam_background", { on: e.target.checked }); state.steamBg = e.target.checked; };
 async function renderMangohud() {
+  if (WIN) return; // MangoHud is for Linux
   const m = await invoke("mangohud_info");
   $("#mh-status").textContent = m.installed === "system" ? "MangoHud is installed on your system" : m.installed ? `MangoHud ${m.installed} is set up` : "MangoHud isn't set up yet";
   $("#mh-setup").textContent = m.installed === "system" ? "Installed" : m.installed ? "Update" : "Set up MangoHud";

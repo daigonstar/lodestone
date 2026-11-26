@@ -23,12 +23,12 @@ pub struct Update {
 
 /// Every package Lodestone manages: (package id, name).
 pub fn managed() -> Vec<(&'static str, &'static str)> {
+    #[allow(unused_mut)]
     let mut v = crate::stores::emulation::managed_packages();
-    if cfg!(windows) {
-        for a in crate::stores::winapps::apps() {
-            if let Some(id) = crate::stores::winapps::winget_id(a.id) {
-                v.push((id, a.name));
-            }
+    #[cfg(windows)]
+    for a in crate::stores::winapps::apps() {
+        if let Some(id) = crate::stores::winapps::winget_id(a.id) {
+            v.push((id, a.name));
         }
     }
     v
@@ -56,6 +56,7 @@ fn parse_winget(out: &str, managed: &[(&'static str, &'static str)]) -> Vec<Upda
     found
 }
 
+#[cfg(not(windows))]
 /// Flatpak's list of available updates ("application<TAB>version" per line).
 fn parse_flatpak(out: &str, managed: &[(&'static str, &'static str)]) -> Vec<Update> {
     out.lines()
@@ -71,24 +72,38 @@ fn parse_flatpak(out: &str, managed: &[(&'static str, &'static str)]) -> Vec<Upd
 /// What can be updated now.
 pub fn check() -> Result<Vec<Update>, String> {
     let managed = managed();
-    let mut cmd = if cfg!(windows) {
+    #[cfg(windows)]
+    let mut cmd = {
         let mut c = Command::new("winget");
         c.args(["upgrade", "--source", "winget", "--accept-source-agreements", "--disable-interactivity"]);
         c
-    } else {
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
         let mut c = Command::new("flatpak");
         c.args(["remote-ls", "--updates", "--app", "--columns=application,version"]);
         crate::host::wrap(c)
     };
     let out = cmd.stdin(Stdio::null()).stderr(Stdio::null()).output().map_err(|e| format!("Couldn't check for updates: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout);
-    Ok(if cfg!(windows) { parse_winget(&text, &managed) } else { parse_flatpak(&text, &managed) })
+    #[cfg(windows)]
+    return Ok(parse_winget(&text, &managed));
+    #[cfg(not(windows))]
+    Ok(parse_flatpak(&text, &managed))
 }
 
 /// The command that updates one package Lodestone manages.
 pub fn update_spec(id: &str) -> Result<(LaunchSpec, &'static str), String> {
     let (id, name) = managed().into_iter().find(|(m, _)| *m == id).ok_or("Lodestone doesn't manage that program")?;
-    let spec = if cfg!(windows) { crate::winget::upgrade_spec(id) } else { LaunchSpec::new("flatpak", &["update", "-y", "--noninteractive", id]) };
+    #[cfg(windows)]
+    let spec = {
+        if !crate::winget::valid_id(id) {
+            return Err("Not a winget package ID".into());
+        }
+        crate::winget::upgrade_spec(id)
+    };
+    #[cfg(not(windows))]
+    let spec = LaunchSpec::new("flatpak", &["update", "-y", "--noninteractive", id]);
     Ok((spec, name))
 }
 
@@ -105,6 +120,7 @@ mod tests {
         assert_eq!((u[1].id.as_str(), u[1].latest.as_deref()), ("EpicGames.EpicGamesLauncher", Some("1.3.210.0")));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn reads_flatpaks_update_list() {
         let u = super::parse_flatpak("org.ppsspp.PPSSPP\t1.20.4\norg.other.App\t2.0\n", M);
