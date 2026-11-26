@@ -79,14 +79,16 @@ look too, moving away from Discord's look. Plan and inventory: `beacon/NAMING-PL
 Robb wants Beacon on both stores, with the phone as a paired device and an authenticator for new PCs.
 Plan written 2026-11-26: `beacon/MOBILE-PLAN.md` (approaches compared, store rules, AGENTS.md conflicts, phases).
 Recommendation: Tauri 2 mobile reusing the Rust core and web UI, native Kotlin/Swift plug-ins where needed.
+**Decided by Robb 2026-11-26: Android first, free route (GitHub releases and F-Droid); UK users to start. iOS (US$99 a year, app removed if it lapses) and Google Play (US$25) are optional later.**
 
 | Item | Status |
 | --- | --- |
 | Plan and comparison | Done, waiting for Robb's choice. Nothing built |
-| Robb creates Apple (US$99/yr) and Google Play (US$25) developer accounts | Not started, Robb must do it; on the critical path |
+| Apple (US$99/yr) and Google Play (US$25) developer accounts | Not needed for Android first; decide later |
 | Decide push notifications (no push first, or a publisher relay that needs an AGENTS.md change) | Waiting on Robb |
 | Spike: Beacon client on Android and iOS | Not started |
-| Phase 1: pairing and chat, history copy, report/block, account deletion | Not started |
+| Phase 1: Android pairing and chat, history copy, report/block, account deletion | Not started |
+| Phase 2: F-Droid listing, notifications | Not started |
 
 ## Releases
 

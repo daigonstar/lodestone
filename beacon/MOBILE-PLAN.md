@@ -1,13 +1,16 @@
 # Lodestone Beacon on phones: plan
 
-Status: **proposal, nothing built.** Written 2026-11-26 for Robb to choose from. It was written by reading the
+Status: **proposal, nothing built.** Written 2026-11-26 for Robb to choose from. **Update, same day: Robb
+(UK-based users to start) chose to go Android first, free route (GitHub releases and F-Droid). iOS and Google
+Play are optional later steps, because Apple costs US$99 a year and the app is pulled from the store if it
+lapses.** It was written by reading the
 `comms` branch (client, server, media, app, `PROTOCOL.md`) and PR #10 (identity and QR pairing). Nothing here
 was run on a phone, and the store rules are from my knowledge of them plus a quick search: **check each
 store's current page when you sign up**, they change. Where I'm unsure I say so.
 
 ## The goal
 
-A Beacon app for Android (Google Play) and iOS (App Store). The phone is:
+A Beacon app for Android first (GitHub releases and F-Droid, free; Google Play optional), then iOS (App Store, US$99 a year) if there is demand. The phone is:
 
 1. A full Beacon device: text chat, files, reactions, later voice, cameras and screen sharing.
 2. An authenticator: it holds your identity and approves a new PC by scanning the QR code that PC shows.
@@ -229,51 +232,50 @@ distribution exception to the licence first. Worth a short legal opinion before 
 | 7. No surprise dependencies | Each Kotlin/Swift/Rust library for audio, Opus, VP8, QR needs a stated reason. Prefer ZXing-style scanning or the platform's own over libraries that call Google Play services. Keep a list. |
 | 8. Be honest | Store listing, privacy labels and README say what the code does and what's untested (for example "iOS screen sharing not available yet"). |
 
-## Phased path
+## Phased path (Android first)
 
-Estimates are rough and assume one developer working with Claude on a sensible weekly rhythm, with Robb
-testing on real phones; stores' review time is on top.
+Estimates are rough and assume one developer working with Claude, with Robb testing on a real Android
+phone. Store review time is on top where a store is involved.
 
-**Phase 0: decisions and groundwork (week 1 to 2)**
-- Robb: choose approach (below), start Apple and Google sign-ups, say yes or no to the push relay question
-  and the licence note.
-- Spike: client crate on Android and iOS, MLS with a PC, UI in the Tauri shell.
-- Split the app layer into a shared library crate plus the desktop adapter (needed for everything).
+**Phase 0: groundwork (week 1 to 2)**
+- Robb confirms the approach. No accounts or payments needed.
+- Spike: client crate on Android, MLS with a PC, UI in the Tauri mobile shell, scan a QR.
+- Split the app layer into a shared library crate plus the desktop adapter.
 - Settle the reverse-QR pairing before PR #10 merges.
 
-**Phase 1: pairing and chat (week 3 to 8)** (what you asked for first)
-- Create or restore an identity (24 words), approve a PC by scanning its QR, link a phone to a PC.
+**Phase 1: pairing and chat on Android (week 3 to 8)**
+- Create or restore an identity (24 words), approve a PC by scanning its QR, link the phone to a PC.
 - Join communities, read and send text, files, reactions, profiles. Phone layout.
-- History copy at pairing.
-- Keystore/Keychain, backups off.
-- Block, report, delete account, community guidelines, contact info.
-- Android first (APK in GitHub releases, Google closed test starts: the 14 days clock), iOS to TestFlight.
+- History copy at pairing. Keystore storage, backups off.
+- Block, report, delete account, community guidelines, contact info (needed for stores later, good practice now).
+- Signed APK on GitHub releases (from the `release.yml` workflow, same checksum approach as Lodestone).
 
-**Phase 2: store release of chat (week 8 to 12)**
-- Review server for Apple and Google reviewers, privacy policy, privacy labels, data safety, export
-  paperwork, listing text and screenshots (the Beacon icon and artwork already exist).
-- Submit to both stores. Expect at least one rejection round on Apple.
-- Notifications option 1 and Android UnifiedPush.
+**Phase 2: F-Droid and notifications (week 8 to 12)**
+- F-Droid listing: it builds from source, so it needs a reproducible build and no non-free libraries
+  (another reason to avoid Firebase and Play services). Submitting needs a GitLab account and a merge
+  request to their metadata repository, no fee.
+- Notifications: optional foreground service and UnifiedPush.
 
-**Phase 3: voice (week 12 to 18)**
-- Listen and talk in voice channels, with background audio. Watch cameras and screen shares.
+**Phase 3: voice on Android (week 12 to 18)**
+- Listen and talk in voice channels, background audio. Watch cameras and screen shares.
 
-**Phase 4: sending video (week 18 onwards)**
-- Camera on, Android screen share, then iOS screen share (ReplayKit) if it proves worth it.
+**Phase 4: sending video on Android (week 18 onwards)**
+- Camera on, then screen share (MediaProjection).
 
-**Later, separately decided:** push relay, H.264, Wear/tablet layouts.
+**Optional, only when Robb decides to pay:**
+- **Google Play** (US$25 once): closed-test period for a personal account, review server, privacy forms.
+- **iOS** (US$99 a year, the app is removed if it lapses): TestFlight, App Store review, ReplayKit for
+  screen share, push relay decision.
 
 ## What I need from Robb
 
-1. **Approach:** A (Tauri 2 mobile, recommended), B (native), or C (other toolkit).
-2. **Start the developer accounts** (Apple US$99 a year, Google US$25 once), as individual or organisation.
-   I can't create them. Tell me the seller name you want shown publicly.
-3. **Push:** accept "no push first, UnifiedPush on Android" for now, or want to amend AGENTS.md for a
-   publisher push relay?
-4. **A Mac or macOS CI:** do you have a Mac, or should the iOS build run in GitHub Actions (free on public
-   repositories; signing keys would live in GitHub secrets)?
-5. **Licence:** ask for a short legal opinion on App Store distribution, or accept the note above and
-   revisit if outside contributors appear.
-6. Which phones can you test on (Android version, iPhone model)?
+Decided: **Android first, free route.**
 
-Nothing will be built until you choose.
+1. **Confirm the approach:** Tauri 2 mobile (recommended), native Kotlin, or another toolkit. Since iOS is
+   now later, native Kotlin for Android is cheaper than before, but Tauri keeps the iOS door open and reuses
+   the UI.
+2. **Push:** accept "no push first, UnifiedPush on Android" for now?
+3. **Which Android phone** (version, model) can you test on?
+4. **Later, not now:** Google Play (US$25) and Apple (US$99 a year), and the licence opinion for the App Store.
+
+Nothing will be built until you confirm the approach.
