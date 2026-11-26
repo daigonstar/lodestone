@@ -294,6 +294,11 @@ a game through Kiln's Guarded Play, which checks that mods are deployed and load
 (⚙ Settings → Mods; the ▾ next to Play also offers *Play without mods*). Without Kiln, everything else in
 Lodestone works as usual and these options don't appear.
 
+Kiln is a *companion plug-in* (⚙ Settings → Manage plug-ins): you can turn it off there, and Lodestone then
+stops asking Kiln anything. Lodestone shares nothing with Kiln; it only runs Kiln's command line
+(`kiln --games`, `--status`, `--game`, `--play`, `--play-vanilla`). Kiln only runs on Linux so far, so on
+Windows the plug-in shows "not installed" until Kiln has a Windows build. This hasn't been tested on Windows.
+
 ## Run
 
 ```bash

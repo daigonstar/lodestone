@@ -50,6 +50,9 @@ pub struct Settings {
     /// Bridge permissions you approved for each plug-in ("comms" -> ["friends:read", ...]).
     #[serde(default)]
     pub plugin_permissions: std::collections::HashMap<String, Vec<String>>,
+    /// Plug-ins you switched off (Plug-ins page). A plug-in that isn't listed is on.
+    #[serde(default)]
+    pub plugins_disabled: Vec<String>,
 }
 
 fn yes() -> bool {

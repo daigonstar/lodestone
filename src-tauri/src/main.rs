@@ -1469,6 +1469,12 @@ async fn plugin_stop(app: AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Switch a companion plug-in (Kiln) on or off.
+#[tauri::command]
+fn plugin_set_enabled(id: String, enabled: bool) -> Result<(), String> {
+    plugins::set_enabled(&id, enabled)
+}
+
 /// Pass Lodestone's colours to Comms.
 #[tauri::command]
 fn comms_theme(vars: serde_json::Value) {
@@ -1646,6 +1652,7 @@ fn main() {
             comms_theme,
             plugins_list,
             plugin_stop,
+            plugin_set_enabled,
             rom_reveal,
             emu_open,
             emu_set_folder,

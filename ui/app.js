@@ -403,7 +403,7 @@ function renderNav() {
     .join("");
   // Plug-ins: the installed ones, then the management page.
   const PLUGIN_VIEW = { comms: "comms" };
-  $("#nav-plugins").innerHTML = (state.plugins || []).filter((p) => p.installed).map((p) =>
+  $("#nav-plugins").innerHTML = (state.plugins || []).filter((p) => p.installed && PLUGIN_VIEW[p.id]).map((p) =>
     `<button data-view="${PLUGIN_VIEW[p.id]}" class="${state.view === PLUGIN_VIEW[p.id] ? "active" : ""}"><span class="dot" style="background:${p.running ? "#3ddc97" : "#5b5f6a"}"></span>${esc(p.name.replace(/^Lodestone /, ""))}</button>`).join("")
     + `<button data-view="plugins" class="${state.view === "plugins" ? "active" : ""}"><span class="dot" style="background:transparent;border:1px solid #5b5f6a"></span>Manage plug-ins</button>`;
 }
@@ -1723,15 +1723,21 @@ async function refreshPlugins() {
 function renderPluginsPage() {
   const list = state.plugins || [];
   $("#plugins-list").innerHTML = list.map((p) => {
-    const status = !p.installed ? "Not installed" : p.running ? `Running${p.version ? " · version " + esc(p.version) : ""}` : "Installed · not running";
+    const companion = p.kind === "companion";
+    const status = !p.installed ? "Not installed" : companion ? (p.enabled ? "Installed · on" : "Installed · off") : p.running ? `Running${p.version ? " · version " + esc(p.version) : ""}` : "Installed · not running";
     const perms = p.permissions.map(([id, words, granted]) => `<li><span class="perm ${granted ? "on" : ""}">${granted ? "Allowed" : "Not allowed"}</span> ${esc(words)}</li>`).join("");
     const anyGranted = p.permissions.some(([, , g]) => g);
+    const body = !p.installed ? `<p class="muted">${esc(p.install_hint)}</p>`
+      : companion ? `<h4>What Lodestone does with ${esc(p.name)}</h4><ul class="perm-list">${p.uses.map((u) => `<li>${esc(u)}</li>`).join("")}</ul><p class="muted">Nothing from Lodestone (sign-ins, keys, files) is shared with it.</p>`
+      : `<h4>Permissions</h4><ul class="perm-list">${perms}</ul>`;
     return `<div class="plugin-card" data-plugin="${esc(p.id)}">
       <div class="plugin-head"><div><h2>${esc(p.name)}</h2><p class="muted">${esc(p.description)}</p></div><span class="plugin-status ${p.running ? "on" : ""}">${status}</span></div>
-      ${p.installed ? `<h4>Permissions</h4><ul class="perm-list">${perms}</ul>` : `<p class="muted">${esc(p.install_hint)}</p>`}
+      ${p.note ? `<p class="warn-text">${esc(p.note)}</p>` : ""}
+      ${body}
       ${p.id === "comms" ? commsReleaseHTML(p) : ""}
       <div class="row-btns">
-        ${p.installed ? `<button class="play" data-view="${p.id === "comms" ? "comms" : ""}">Open</button>` : ""}
+        ${p.installed && !companion ? `<button class="play" data-view="${p.id === "comms" ? "comms" : ""}">Open</button>` : ""}
+        ${companion && p.installed ? `<button class="${p.enabled ? "ghost" : "play"}" data-plugin-act="${p.enabled ? "disable" : "enable"}">${p.enabled ? "Turn off" : "Turn on"}</button>` : ""}
         ${p.id === "comms" && state.commsRelease?.latest && (!p.installed || state.commsRelease.update) ? `<button class="${p.installed ? "ghost" : "play"}" data-plugin-act="install">${p.installed ? "Update to" : "Install Comms"} ${esc(state.commsRelease.latest)}</button>` : ""}
         ${p.running ? '<button class="ghost" data-plugin-act="stop">Stop</button>' : ""}
         ${anyGranted ? '<button class="ghost" data-plugin-act="revoke">Revoke permissions</button>' : ""}
@@ -1744,6 +1750,11 @@ $("#plugins-list").addEventListener("click", async (e) => {
   const id = b.closest("[data-plugin]").dataset.plugin;
   try {
     if (b.dataset.pluginAct === "stop") await invoke("plugin_stop", { id });
+    if (b.dataset.pluginAct === "enable" || b.dataset.pluginAct === "disable") {
+      await invoke("plugin_set_enabled", { id, enabled: b.dataset.pluginAct === "enable" });
+      toast(b.dataset.pluginAct === "enable" ? "Kiln is on. Reloading your library…" : "Kiln is off. Lodestone won't tag or launch games through it.");
+      load(true);
+    }
     if (b.dataset.pluginAct === "install") {
       b.disabled = true;
       b.textContent = "Downloading and checking…";

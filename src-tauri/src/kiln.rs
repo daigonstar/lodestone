@@ -24,22 +24,62 @@ pub struct KilnGame {
     pub mods: Option<usize>,
 }
 
-/// How to run Kiln: `kiln` on PATH, else the command from its desktop entry
-/// (e.g. `env PYTHONPATH=… python3 -m kiln`).
+/// How to run Kiln, or None when it isn't installed or you've turned the Kiln plug-in off
+/// (Plug-ins page). Everything in Lodestone that talks to Kiln goes through here, so switching the
+/// plug-in off hides all of it.
 pub fn command() -> Option<Vec<String>> {
-    if let Some(p) = which("kiln") {
-        return Some(vec![p.to_string_lossy().into_owned()]);
+    if !crate::plugins::enabled(crate::plugins::KILN) {
+        return None;
     }
-    let h = home();
-    for f in [h.join(".local/share/applications/kiln.desktop"), "/usr/share/applications/kiln.desktop".into()] {
-        let Ok(txt) = std::fs::read_to_string(&f) else { continue };
-        let Some(exec) = txt.lines().find_map(|l| l.strip_prefix("Exec=")) else { continue };
-        let parts: Vec<String> = exec.split_whitespace().filter(|w| !w.starts_with('%')).map(|w| w.trim_matches('"').to_string()).collect();
-        if !parts.is_empty() {
-            return Some(parts);
+    locate()
+}
+
+/// Is Kiln installed here, whether or not the plug-in is switched on?
+pub fn installed() -> bool {
+    locate().is_some()
+}
+
+/// Find Kiln. Linux: `kiln` on the PATH, else the command in its desktop entry
+/// (e.g. `env PYTHONPATH=… python3 -m kiln`). Windows: `kiln.exe` on the PATH, or in
+/// %LOCALAPPDATA%\Lodestone\Kiln or %LOCALAPPDATA%\Programs\Kiln. (Kiln has no Windows build yet, so
+/// on Windows this finds nothing until it does.)
+fn locate() -> Option<Vec<String>> {
+    #[cfg(windows)]
+    {
+        if let Some(p) = which("kiln.exe") {
+            return Some(vec![p.to_string_lossy().into_owned()]);
         }
+        let local = dirs::data_local_dir()?;
+        for dir in [local.join("Lodestone").join("Kiln"), local.join("Programs").join("Kiln")] {
+            let exe = dir.join("kiln.exe");
+            if exe.is_file() {
+                return Some(vec![exe.to_string_lossy().into_owned()]);
+            }
+        }
+        None
     }
-    None
+    #[cfg(not(windows))]
+    {
+        if let Some(p) = which("kiln") {
+            return Some(vec![p.to_string_lossy().into_owned()]);
+        }
+        let h = home();
+        for f in [h.join(".local/share/applications/kiln.desktop"), "/usr/share/applications/kiln.desktop".into()] {
+            let Ok(txt) = std::fs::read_to_string(&f) else { continue };
+            if let Some(cmd) = desktop_exec(&txt) {
+                return Some(cmd);
+            }
+        }
+        None
+    }
+}
+
+/// The command from a desktop entry's `Exec=` line, without the `%f`-style placeholders.
+#[cfg_attr(windows, allow(dead_code))]
+fn desktop_exec(entry: &str) -> Option<Vec<String>> {
+    let exec = entry.lines().find_map(|l| l.strip_prefix("Exec="))?;
+    let parts: Vec<String> = exec.split_whitespace().filter(|w| !w.starts_with('%')).map(|w| w.trim_matches('"').to_string()).collect();
+    (!parts.is_empty()).then_some(parts)
 }
 
 fn spec(args: &[&str]) -> Option<LaunchSpec> {
@@ -76,6 +116,11 @@ pub fn games() -> Vec<KilnGame> {
     list
 }
 
+/// Forget the cached game list (after the Kiln plug-in is switched on or off).
+pub fn forget() {
+    *GAMES.lock().unwrap() = None;
+}
+
 /// Steam app id -> Kiln game.
 pub fn by_appid() -> HashMap<u32, KilnGame> {
     let mut m = HashMap::new();
@@ -109,6 +154,14 @@ pub fn play_vanilla(id: &str) -> Option<LaunchSpec> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn desktop_exec_drops_placeholders() {
+        let e = "[Desktop Entry]\nName=Kiln\nExec=env PYTHONPATH=/opt/kiln python3 -m kiln %U\n";
+        assert_eq!(super::desktop_exec(e), Some(vec!["env".into(), "PYTHONPATH=/opt/kiln".into(), "python3".into(), "-m".into(), "kiln".into()]));
+        assert_eq!(super::desktop_exec("[Desktop Entry]\nName=Kiln\n"), None);
+        assert_eq!(super::desktop_exec("Exec=%U\n"), None);
+    }
+
     /// `cargo test live_kiln -- --ignored --nocapture`
     #[test]
     #[ignore]
