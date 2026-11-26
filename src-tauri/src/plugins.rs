@@ -1,6 +1,6 @@
-//! Plug-ins: separate programs that show their interface inside Lodestone (see comms/PLUGIN.md).
+//! Plug-ins: separate programs that show their interface inside Lodestone (see beacon/PLUGIN.md).
 //! There are two kinds:
-//! - embedded (Lodestone Comms): its own program whose page shows inside Lodestone, over the bridge below.
+//! - embedded (Lodestone Beacon): its own program whose page shows inside Lodestone, over the bridge below.
 //! - companion (Kiln): a separate app with its own window that Lodestone talks to through its
 //!   command line. Lodestone gives a companion nothing (no bridge, no permissions); the plug-in only
 //!   decides whether Lodestone uses the app (tags, Play modded, "Set up mods"). See docs/plugin-api-notes.md.
@@ -9,7 +9,9 @@
 //! talks to it only over its standard input and output, and answers only the requests you approved.
 //! It never hands a plug-in sign-in data, keys, cookies, file paths, or the ability to run programs.
 
-use crate::{host, settings};
+#[cfg(not(windows))]
+use crate::host;
+use crate::settings;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -18,16 +20,17 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
-pub const COMMS: &str = "comms";
+pub const BEACON: &str = "beacon";
 pub const KILN: &str = "kiln";
-const COMMS_FLATPAK: &str = "io.github.daigonstar.Lodestone.Comms";
+#[cfg(not(windows))]
+const BEACON_FLATPAK: &str = "io.github.daigonstar.Lodestone.Beacon";
 
 /// What each permission means, in the words Lodestone shows when asking.
 pub fn describe(p: &str) -> Option<&'static str> {
     match p {
         "friends:read" => Some("See your Steam and Epic friends list: names, avatars and whether they're online"),
         "chat:open" => Some("Open a friend's Steam chat with an invite ready to paste (it never sends anything itself)"),
-        "game:read" => Some("See the name of the game you're playing from Lodestone, to show your friends in Comms (end-to-end encrypted)"),
+        "game:read" => Some("See the name of the game you're playing from Lodestone, to show your friends in Beacon (end-to-end encrypted)"),
         _ => None,
     }
 }
@@ -41,7 +44,7 @@ struct Running {
     hello: Option<Value>,
 }
 
-static COMMS_PROC: Mutex<Option<Running>> = Mutex::new(None);
+static BEACON_PROC: Mutex<Option<Running>> = Mutex::new(None);
 
 #[derive(Serialize)]
 pub struct Status {
@@ -54,37 +57,38 @@ pub struct Status {
     pub needs_approval: bool,
 }
 
-/// How to start Comms: its Flatpak, or a `lodestone-comms` program on the PATH. On Windows, the Comms
-/// Lodestone installed (comms_install).
-fn comms_command() -> Option<Command> {
-    #[cfg(windows)]
-    {
-        let exe = crate::comms_install::windows_exe()?;
-        let mut c = Command::new(exe);
-        c.arg("--lodestone-bridge");
-        return Some(c);
-    }
-    #[allow(unreachable_code)]
+/// How to start Beacon: its Flatpak, or a `lodestone-beacon` program on the PATH. On Windows, the Beacon
+/// Lodestone installed (beacon_install).
+#[cfg(windows)]
+fn beacon_command() -> Option<Command> {
+    let exe = crate::beacon_install::windows_exe()?;
+    let mut c = Command::new(exe);
+    c.arg("--lodestone-bridge");
+    Some(c)
+}
+
+#[cfg(not(windows))]
+fn beacon_command() -> Option<Command> {
     let mut info = Command::new("flatpak");
-    info.args(["info", COMMS_FLATPAK]);
+    info.args(["info", BEACON_FLATPAK]);
     let has_flatpak = host::wrap(info).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
     if has_flatpak {
         let mut c = Command::new("flatpak");
-        c.args(["run", COMMS_FLATPAK, "--lodestone-bridge"]);
+        c.args(["run", BEACON_FLATPAK, "--lodestone-bridge"]);
         return Some(host::wrap(c));
     }
-    let bin = host::which("lodestone-comms")?;
+    let bin = host::which("lodestone-beacon")?;
     let mut c = Command::new(bin);
     c.arg("--lodestone-bridge");
     Some(host::wrap(c))
 }
 
 fn approved() -> Vec<String> {
-    settings::load().plugin_permissions.get(COMMS).cloned().unwrap_or_default()
+    settings::load().plugin_permissions.get(BEACON).cloned().unwrap_or_default()
 }
 
 pub fn status() -> Status {
-    let mut guard = COMMS_PROC.lock().unwrap();
+    let mut guard = BEACON_PROC.lock().unwrap();
     // Forget a plug-in that has exited.
     if guard.as_mut().is_some_and(|r| r.child.try_wait().ok().flatten().is_some()) {
         *guard = None;
@@ -95,7 +99,7 @@ pub fn status() -> Status {
     let requested: Vec<String> = hello.as_ref().and_then(|h| h["permissions"].as_array().cloned()).unwrap_or_default().into_iter().filter_map(|p| p.as_str().map(String::from)).collect();
     let ok = approved();
     Status {
-        installed: running || comms_command().is_some(),
+        installed: running || beacon_command().is_some(),
         running,
         ui: hello.as_ref().and_then(|h| h["ui"].as_str()).filter(|u| u.starts_with("http://127.0.0.1:")).map(String::from),
         version: hello.as_ref().and_then(|h| h["version"].as_str()).map(String::from),
@@ -104,22 +108,22 @@ pub fn status() -> Status {
     }
 }
 
-/// Start Comms if it isn't running and wait (up to 15 s) for its hello.
+/// Start Beacon if it isn't running and wait (up to 15 s) for its hello.
 pub fn start(app: AppHandle) -> Result<Status, String> {
     {
-        let guard = COMMS_PROC.lock().unwrap();
+        let guard = BEACON_PROC.lock().unwrap();
         if guard.is_some() {
             drop(guard);
             return Ok(status());
         }
     }
-    let mut cmd = comms_command().ok_or("Lodestone Comms isn't installed")?;
-    let log = crate::launcher::log_path("lodestone-comms");
+    let mut cmd = beacon_command().ok_or("Lodestone Beacon isn't installed")?;
+    let log = crate::launcher::log_path("lodestone-beacon");
     let err = std::fs::File::create(&log).map(Stdio::from).unwrap_or(Stdio::null());
-    let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(err).spawn().map_err(|e| format!("Couldn't start Lodestone Comms: {e}"))?;
+    let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(err).spawn().map_err(|e| format!("Couldn't start Lodestone Beacon: {e}"))?;
     let stdin: Input = Arc::new(Mutex::new(Some(child.stdin.take().ok_or("no stdin")?)));
     let stdout = child.stdout.take().ok_or("no stdout")?;
-    *COMMS_PROC.lock().unwrap() = Some(Running { child, stdin: stdin.clone(), hello: None });
+    *BEACON_PROC.lock().unwrap() = Some(Running { child, stdin: stdin.clone(), hello: None });
     std::thread::spawn(move || read_loop(app, stdout, stdin));
     let t = Instant::now();
     while t.elapsed() < Duration::from_secs(15) {
@@ -129,20 +133,20 @@ pub fn start(app: AppHandle) -> Result<Status, String> {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    Err("Lodestone Comms didn't start in time".into())
+    Err("Lodestone Beacon didn't start in time".into())
 }
 
 pub fn approve(perms: Vec<String>) -> Result<Status, String> {
     let mut s = settings::load();
     let list: Vec<String> = perms.into_iter().filter(|p| describe(p).is_some()).collect();
-    s.plugin_permissions.insert(COMMS.into(), list);
+    s.plugin_permissions.insert(BEACON.into(), list);
     settings::save(&s)?;
     Ok(status())
 }
 
 /// Send Lodestone's colours to the plug-in so it looks native.
 pub fn send_theme(vars: Value) {
-    let stdin = COMMS_PROC.lock().unwrap().as_ref().map(|r| r.stdin.clone());
+    let stdin = BEACON_PROC.lock().unwrap().as_ref().map(|r| r.stdin.clone());
     if let Some(s) = stdin {
         write_line(&s, &json!({ "type": "event", "name": "theme", "data": vars }));
     }
@@ -161,10 +165,10 @@ fn read_loop(app: AppHandle, stdout: std::process::ChildStdout, stdin: Input) {
         let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
         match msg["type"].as_str() {
             Some("hello") => {
-                if let Some(r) = COMMS_PROC.lock().unwrap().as_mut() {
+                if let Some(r) = BEACON_PROC.lock().unwrap().as_mut() {
                     r.hello = Some(msg);
                 }
-                let _ = app.emit("comms-ready", ());
+                let _ = app.emit("beacon-ready", ());
             }
             Some("request") => {
                 let id = msg["id"].clone();
@@ -177,8 +181,8 @@ fn read_loop(app: AppHandle, stdout: std::process::ChildStdout, stdin: Input) {
             _ => {}
         }
     }
-    *COMMS_PROC.lock().unwrap() = None;
-    let _ = app.emit("comms-stopped", ());
+    *BEACON_PROC.lock().unwrap() = None;
+    let _ = app.emit("beacon-stopped", ());
 }
 
 /// Answer one bridge request, only if you approved its permission.
@@ -217,7 +221,7 @@ fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Value, String
             }
             // Lodestone's window copies the text and says so; for Steam, Lodestone opens the chat itself
             // (a fixed steam:// link with the checked ID).
-            let _ = app.emit("comms-open-chat", json!({ "store": store, "id": id, "text": text }));
+            let _ = app.emit("beacon-open-chat", json!({ "store": store, "id": id, "text": text }));
             if store == "steam" {
                 let url = format!("steam://friends/message/{id}");
                 let _ = crate::launcher::spawn(&crate::os::open_spec(&url), crate::launcher::log_path("xdg-open"));
@@ -233,7 +237,7 @@ pub fn enabled(id: &str) -> bool {
     !settings::load().plugins_disabled.iter().any(|p| p == id)
 }
 
-/// Switch a companion plug-in on or off. (Comms is started and stopped from its own page.)
+/// Switch a companion plug-in on or off. (Beacon is started and stopped from its own page.)
 pub fn set_enabled(id: &str, on: bool) -> Result<(), String> {
     if id != KILN {
         return Err("This plug-in has no on/off switch".into());
@@ -269,7 +273,7 @@ pub struct PluginInfo {
     pub note: Option<String>,
 }
 
-/// The plug-ins Lodestone knows (only Comms so far).
+/// The plug-ins Lodestone knows (only Beacon so far).
 pub fn list() -> Vec<PluginInfo> {
     let s = status();
     let granted = approved();
@@ -281,14 +285,14 @@ pub fn list() -> Vec<PluginInfo> {
     }
     let kiln_here = crate::kiln::installed();
     vec![PluginInfo {
-        id: COMMS,
-        name: "Lodestone Comms",
-        description: "End-to-end encrypted chat with your friends, on servers you host yourselves.",
+        id: BEACON,
+        name: "Lodestone Beacon",
+        description: "End-to-end encrypted chat with your friends, on servers you or your friends run yourselves.",
         installed: s.installed,
         running: s.running,
         version: s.version,
         permissions: perms.iter().map(|p| (p.clone(), describe(p).unwrap_or("Unknown permission").to_string(), granted.contains(p))).collect(),
-        install_hint: "Comms isn't installed. Lodestone can install it from its official releases on GitHub (it's in early development).",
+        install_hint: "Beacon isn't installed. Lodestone can install it from its official releases on GitHub (it's in early development).",
         kind: "embedded",
         enabled: true,
         uses: vec![],
@@ -318,7 +322,7 @@ pub fn list() -> Vec<PluginInfo> {
 /// Stop a running plug-in (it starts again when you open it).
 pub fn stop_plugin(id: &str) -> Result<(), String> {
     match id {
-        COMMS => stop(),
+        BEACON => stop(),
         // Kiln has its own window; Lodestone only runs it for a moment at a time.
         KILN => {}
         _ => return Err("Unknown plug-in".into()),
@@ -326,10 +330,10 @@ pub fn stop_plugin(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Stop Comms (when you ask, or when Lodestone quits): closing its input makes it exit by itself; it's
+/// Stop Beacon (when you ask, or when Lodestone quits): closing its input makes it exit by itself; it's
 /// killed only if it hasn't after two seconds.
 pub fn stop() {
-    let running = COMMS_PROC.lock().unwrap().take();
+    let running = BEACON_PROC.lock().unwrap().take();
     if let Some(mut r) = running {
         drop(r.stdin.lock().unwrap().take());
         let _ = r.child.wait_timeout_or_kill();

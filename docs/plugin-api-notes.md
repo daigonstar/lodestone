@@ -1,13 +1,13 @@
 # Notes for the plug-in author write-up
 
 Working notes on the plug-in API as it stands on the `comms` branch (not a finished guide; roadmap item 2
-turns this into one). The formal draft of the bridge is `comms/PLUGIN.md`.
+turns this into one). The formal draft of the bridge is `beacon/PLUGIN.md`.
 
 ## Two kinds of plug-in
 
-| | Embedded (Comms) | Companion (Kiln) |
+| | Embedded (Beacon) | Companion (Kiln) |
 |---|---|---|
-| What it is | Its own program (Flatpak on Linux, zip in `%LOCALAPPDATA%\Lodestone\Comms` on Windows) | An app the user installs themselves, with its own window |
+| What it is | Its own program (Flatpak on Linux, zip in `%LOCALAPPDATA%\Lodestone\Beacon` on Windows) | An app the user installs themselves, with its own window |
 | How Lodestone starts it | `<program> --lodestone-bridge`, stdin/stdout joined to Lodestone | Only for one call at a time, with arguments (`kiln --games`, `--play <id>` ...) |
 | Channel | JSON lines: `hello`, `request`/`response`, `event` | The program's command line; JSON on stdout for read-only calls |
 | Interface | A page on `127.0.0.1` shown in a frame in Lodestone | The app's own window |
@@ -24,7 +24,7 @@ turns this into one). The formal draft of the bridge is `comms/PLUGIN.md`.
   plug-in is off or Kiln isn't found, so every feature (tags, Modded view, Play modded, Set up mods)
   disappears together. `installed()` ignores the switch.
 - `src-tauri/src/comms_install.rs`: installing an embedded plug-in from official releases
-  (tag `comms-v<version>`, checksum required).
+  (tag `beacon-v<version>`, checksum required).
 - `ui/app.js` `renderPluginsPage()`: draws a card per plug-in from `PluginInfo`; sidebar entries only for
   plug-ins that have a page (`PLUGIN_VIEW`).
 
@@ -37,10 +37,10 @@ tolerated (older Kiln versions lack `mods`), so a companion can add fields witho
 
 ## Installing and updating (`plugin_sources.rs`)
 
-- **Official** plug-ins are a fixed list in the code (`official()`: id, repo, release tag prefix, file suffix). Official plug-ins live in the Lodestone repository (`comms/`, `kiln/`) and release from it with tags `comms-v<version>` and `kiln-v<version>`, so they review and merge with the app. A clean
+- **Official** plug-ins are a fixed list in the code (`official()`: id, repo, release tag prefix, file suffix). Official plug-ins live in the Lodestone repository (`comms/`, `kiln/`) and release from it with tags `beacon-v<version>` and `kiln-v<version>`, so they review and merge with the app. A clean
   install knows nothing else.
 - **Third-party**: you type `owner/repo` on the Plug-ins page; it's stored only in your settings
-  (`plugin_repos`), like a Comms server address. GitHub only, name checked (`parse_repo`).
+  (`plugin_repos`), like a Beacon server address. GitHub only, name checked (`parse_repo`).
 - A release is usable when it isn't a draft or pre-release, has the tag prefix, and has a file ending
   `-linux-x86_64.flatpak` (Linux) or `-windows-x86_64.zip` (Windows). The file must be downloaded from
   `https://github.com/<repo>/releases/download/` and carry GitHub's `sha256:` digest, which is checked.
@@ -51,9 +51,9 @@ tolerated (older Kiln versions lack `mods`), so a companion can add fields witho
   Kiln, which needs the host's Steam and Proton, ships `-linux-any.zip` (its Python source) instead, run with
   the system's Python. The zip goes to `~/.local/share/lodestone/plugins/<id>/<version>`.
 - Linux installs a Flatpak for your user. Windows unpacks the zip to
-  `%LOCALAPPDATA%\Lodestone\Plugins\<id>\<version>` with `current.txt` naming the version in use (Comms
-  keeps its older `Comms\` layout).
-- Not built yet: running third-party *embedded* plug-ins (the host in `plugins.rs` handles only Comms),
+  `%LOCALAPPDATA%\Lodestone\Plugins\<id>\<version>` with `current.txt` naming the version in use (Beacon
+  keeps its older `Beacon\` layout).
+- Not built yet: running third-party *embedded* plug-ins (the host in `plugins.rs` handles only Beacon),
   and release signing. Third-party plug-ins other than Flatpaks are not sandboxed.
 
 ## Windows

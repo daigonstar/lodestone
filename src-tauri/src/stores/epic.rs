@@ -115,6 +115,13 @@ pub fn prefix(app: &str) -> PathBuf {
 }
 
 /// legendary resolves the game's exe and launch args (and online auth) and hands the command to umu.
+#[cfg(windows)]
+fn launch_spec(app: &str) -> Option<LaunchSpec> {
+    // Windows: legendary starts the game itself, natively.
+    cmd(&["launch", app]).ok()
+}
+
+#[cfg(not(windows))]
 fn launch_spec(app: &str) -> Option<LaunchSpec> {
     let umu = tools::umu_path()?;
     let mut s = cmd(&["launch", app, "--no-wine", "--wrapper", &umu.to_string_lossy()]).ok()?;
@@ -156,7 +163,7 @@ pub fn scan() -> Vec<Game> {
             Some(Game {
                 id: format!("epic:{app}"),
                 store: "epic".into(),
-                via: "Lodestone · Proton".into(),
+                via: if cfg!(windows) { "Lodestone".into() } else { "Lodestone · Proton".into() },
                 title: g["app_title"].as_str().or(meta["title"].as_str()).unwrap_or(app).to_string(),
                 installed: i.is_some(),
                 cover: key_image(meta, &["DieselGameBoxTall", "OfferImageTall", "Thumbnail"]),
@@ -166,7 +173,8 @@ pub fn scan() -> Vec<Game> {
                 detect: path.and_then(|p| std::path::Path::new(p).file_name()).map(|n| Detect::Contains(n.to_string_lossy().into_owned())),
                 can_install: i.is_none(),
                 can_uninstall: i.is_some(),
-                prefix: Some(path_str(&prefix(app))),
+                // Windows games run natively there: no Wine prefix.
+                prefix: (!cfg!(windows)).then(|| path_str(&prefix(app))),
                 update: update.then(|| "available".into()),
                 update_via: update.then(|| "lodestone".into()),
                 genres: dbmeta.get(app).map(|m| m.genres.clone()).unwrap_or_default(),

@@ -19,6 +19,7 @@ pub fn install_spec(id: &str) -> LaunchSpec {
 }
 
 /// The command that updates one package to its newest version.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn upgrade_spec(id: &str) -> LaunchSpec {
     LaunchSpec::new(
         "winget",

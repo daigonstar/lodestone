@@ -13,3 +13,6 @@ packaging/aur/*/pkg/
 packaging/aur/*/*.tar.gz
 packaging/aur/*/*.pkg.tar.*
 kiln/dist/
+
+# The Android project of the phone app is source, unlike the desktop app's generated files
+!beacon/mobile/src-tauri/gen/

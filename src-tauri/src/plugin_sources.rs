@@ -4,7 +4,7 @@
 //! - **Official** plug-ins are a fixed list inside Lodestone (`official()`), so a clean install knows
 //!   nothing else.
 //! - **Third-party** plug-ins come from repositories you add yourself (stored only in your own settings,
-//!   like a Comms server address). They are always labelled third-party.
+//!   like a Beacon server address). They are always labelled third-party.
 //!
 //! A release is used only if its file for this system is named `…-linux-x86_64.flatpak` (Linux) or
 //! `…-windows-x86_64.zip` (Windows), is downloaded from that same repository's releases, and carries the
@@ -19,10 +19,10 @@ use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Source {
-    /// Official: the plug-in id ("comms", "kiln"). Third-party: "owner/repo".
+    /// Official: the plug-in id ("beacon", "kiln"). Third-party: "owner/repo".
     pub id: String,
     pub repo: String,
-    /// Official plug-ins that share a repository tell their releases apart by tag prefix ("comms-v").
+    /// Official plug-ins that share a repository tell their releases apart by tag prefix ("beacon-v").
     pub tag_prefix: &'static str,
     pub official: bool,
     /// The ending of this system's file in a release. Normally a Flatpak bundle on Linux and a zip on
@@ -33,7 +33,7 @@ pub struct Source {
 /// The plug-ins Lodestone ships knowing about.
 pub fn official() -> Vec<Source> {
     vec![
-        Source { id: "comms".into(), repo: "daigonstar/lodestone".into(), tag_prefix: "comms-v", official: true, suffix: DEFAULT_SUFFIX },
+        Source { id: "beacon".into(), repo: "daigonstar/lodestone".into(), tag_prefix: "beacon-v", official: true, suffix: DEFAULT_SUFFIX },
         Source { id: "kiln".into(), repo: "daigonstar/lodestone".into(), tag_prefix: "kiln-v", official: true, suffix: KILN_SUFFIX },
     ]
 }
@@ -197,7 +197,7 @@ pub async fn install_for_test(src: &Source, version: &str, bytes: &[u8]) -> Resu
     install_file(src, version, bytes).await
 }
 
-/// Install (or update) a plug-in other than Comms, which has its own folder layout (comms_install).
+/// Install (or update) a plug-in other than Beacon, which has its own folder layout (beacon_install).
 pub async fn install(src: &Source) -> Result<String, String> {
     let rel = latest(src).await?;
     let bytes = fetch_verified(src, &rel).await?;
@@ -333,14 +333,14 @@ mod tests {
         let asset = |n: &str| json!({ "name": n });
         const SUFFIX: &str = DEFAULT_SUFFIX;
         let list = json!([
-            { "tag_name": "comms-v0.4.0", "draft": true, "assets": [asset(&format!("x-0.4.0{SUFFIX}"))] },
+            { "tag_name": "beacon-v0.4.0", "draft": true, "assets": [asset(&format!("x-0.4.0{SUFFIX}"))] },
             { "tag_name": "v9.9.9", "assets": [asset(&format!("lodestone{SUFFIX}"))] },
-            { "tag_name": "comms-v0.3.0", "prerelease": true, "assets": [asset(&format!("x-0.3.0{SUFFIX}"))] },
-            { "tag_name": "comms-v0.2.0", "assets": [asset("notes.txt")] },
-            { "tag_name": "comms-v0.1.0", "assets": [asset(&format!("x-0.1.0{SUFFIX}"))] },
-            { "tag_name": "comms-v../../x", "assets": [asset(&format!("y{SUFFIX}"))] },
+            { "tag_name": "beacon-v0.3.0", "prerelease": true, "assets": [asset(&format!("x-0.3.0{SUFFIX}"))] },
+            { "tag_name": "beacon-v0.2.0", "assets": [asset("notes.txt")] },
+            { "tag_name": "beacon-v0.1.0", "assets": [asset(&format!("x-0.1.0{SUFFIX}"))] },
+            { "tag_name": "beacon-v../../x", "assets": [asset(&format!("y{SUFFIX}"))] },
         ]);
-        let (v, a, _) = pick(&list, "comms-v", SUFFIX).unwrap();
+        let (v, a, _) = pick(&list, "beacon-v", SUFFIX).unwrap();
         assert_eq!((v.as_str(), a["name"].as_str().unwrap()), ("0.1.0", format!("x-0.1.0{SUFFIX}").as_str()));
         // No prefix (a third-party repo): the leading "v" is dropped.
         assert_eq!(pick(&list, "", SUFFIX).unwrap().0, "9.9.9");
@@ -374,12 +374,12 @@ mod tests {
         let k = find("kiln").unwrap();
         assert_eq!(k.suffix.ends_with(".zip"), true);
         #[cfg(not(windows))]
-        assert!(find("comms").unwrap().suffix.ends_with(".flatpak"));
+        assert!(find("beacon").unwrap().suffix.ends_with(".flatpak"));
     }
 
     #[test]
     fn only_listed_plugins_can_be_installed() {
-        assert!(find("comms").is_some());
+        assert!(find("beacon").is_some());
         assert!(find("somebody/else").is_none());
     }
 }

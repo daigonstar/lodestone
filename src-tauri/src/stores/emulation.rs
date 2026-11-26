@@ -8,8 +8,6 @@
 //! - Names and covers: ES-DE's `gamelist.xml` and `downloaded_media/<system>/covers`, when present.
 //! - Playing: the first launch command whose emulator is installed (Flatpak, a program on the PATH, or
 //!   an AppImage in ~/Applications). Lodestone only runs ROMs you already have; it never downloads games.
-// Parts of this file are Linux-only (Proton prefixes, Flatpak); on Windows they're simply unused.
-#![cfg_attr(windows, allow(dead_code, unused_imports))]
 
 use crate::model::{home, path_str, Detect, Game, LaunchSpec};
 use std::collections::{HashMap, HashSet};
@@ -227,14 +225,21 @@ pub fn roots() -> Vec<PathBuf> {
             cands.push(d.join("Emulation").join("Emulation"));
         }
     }
-    // Other drives: /run/media/<user>/<drive>/..., /media/<user>/<drive>/..., /mnt/<drive>/...
-    let mut drives: Vec<PathBuf> = Vec::new();
-    for base in ["/run/media", "/media"] {
-        for u in fs::read_dir(base).into_iter().flatten().flatten() {
-            drives.extend(fs::read_dir(u.path()).into_iter().flatten().flatten().map(|d| d.path()));
+    // Linux: other drives: /run/media/<user>/<drive>/..., /media/<user>/<drive>/..., /mnt/<drive>/...
+    #[cfg(not(windows))]
+    let drives: Vec<PathBuf> = {
+        let mut drives: Vec<PathBuf> = Vec::new();
+        for base in ["/run/media", "/media"] {
+            for u in fs::read_dir(base).into_iter().flatten().flatten() {
+                drives.extend(fs::read_dir(u.path()).into_iter().flatten().flatten().map(|d| d.path()));
+            }
         }
-    }
-    drives.extend(fs::read_dir("/mnt").into_iter().flatten().flatten().map(|d| d.path()));
+        drives.extend(fs::read_dir("/mnt").into_iter().flatten().flatten().map(|d| d.path()));
+        drives
+    };
+    // Windows: the drive tops were checked above.
+    #[cfg(windows)]
+    let drives: Vec<PathBuf> = Vec::new();
     for d in drives {
         for name in ["Emulation", "retrodeck"] {
             cands.push(d.join(name));
@@ -270,8 +275,23 @@ pub fn create_layout(dir: &str) -> Result<(PathBuf, usize), String> {
     Ok((roms, made))
 }
 
-/// Ask the desktop for a folder (zenity or kdialog, whichever is installed). None if cancelled or
-/// neither is there.
+/// Ask the desktop for a folder. Windows: the system's own folder dialog (through PowerShell).
+/// Linux: zenity or kdialog, whichever is installed. None if cancelled.
+#[cfg(windows)]
+pub fn pick_folder(start: &str) -> Result<Option<String>, String> {
+    let start = expand(start).filter(|p| p.is_dir()).unwrap_or_else(home);
+    // The start folder goes in through the environment, never into the script text.
+    let script = "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = 'Choose your Emulation or ROMs folder'; $d.SelectedPath = $env:LODESTONE_PICK_START; if ($d.ShowDialog() -eq 'OK') { [Console]::Out.Write($d.SelectedPath) }";
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args(["-NoProfile", "-STA", "-NonInteractive", "-Command", script]).env("LODESTONE_PICK_START", &start);
+    crate::os::detach_console(&mut cmd);
+    let out = cmd.stdin(std::process::Stdio::null()).output().map_err(|e| e.to_string())?;
+    let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok((out.status.success() && !p.is_empty()).then_some(p))
+}
+
+/// Linux: zenity or kdialog, whichever is installed.
+#[cfg(not(windows))]
 pub fn pick_folder(start: &str) -> Result<Option<String>, String> {
     let start = expand(start).filter(|p| p.is_dir()).unwrap_or_else(home);
     let cmd = if crate::host::which("zenity").is_some() {
@@ -485,6 +505,7 @@ pub struct Emulator {
     pub cores: Option<PathBuf>,
 }
 
+#[cfg(not(windows))]
 /// Installed Flatpak apps (checked on the host when Lodestone is a Flatpak), cached for a minute.
 fn flatpak_apps() -> HashSet<String> {
     static C: Mutex<Option<(Instant, HashSet<String>)>> = Mutex::new(None);
@@ -505,11 +526,13 @@ fn flatpak_apps() -> HashSet<String> {
     apps
 }
 
+#[cfg(not(windows))]
 /// Where the Flatpak RetroArch keeps its cores (and where Lodestone puts the ones it downloads).
 pub fn flatpak_cores_dir() -> PathBuf {
     home().join(".var/app/org.libretro.RetroArch/config/retroarch/cores")
 }
 
+#[cfg(not(windows))]
 fn retroarch_cores(flatpak: bool) -> Option<PathBuf> {
     let h = home();
     if flatpak {
@@ -658,8 +681,10 @@ fn build_launch(command: &str, rom: &Path, sys_dir: &Path, emus: &HashMap<&'stat
 const CORES_URL: &str = "https://buildbot.libretro.com/nightly/linux/x86_64/latest";
 #[cfg(windows)]
 const CORES_URL: &str = "https://buildbot.libretro.com/nightly/windows/x86_64/latest";
+#[cfg(not(windows))]
 const FLATHUB_REPO: &str = "https://dl.flathub.org/repo/flathub.flatpakrepo";
 
+#[cfg(not(windows))]
 /// Install what a system's chosen way of playing needs: the emulator from Flathub (a background job
 /// in Downloads, then its core) or just the RetroArch core. Returns "installing" (watch Downloads),
 /// "done", or "already".
@@ -668,8 +693,10 @@ fn flatpak_id(e: &Emulator) -> Option<&str> {
     (e.program == "flatpak").then(|| e.pre_args.get(1).map(String::as_str)).flatten()
 }
 
+#[cfg(not(windows))]
 const MENU_MARK: &str = "# Hidden from the app menu by Lodestone. Delete this file to show it again.";
 
+#[cfg(not(windows))]
 /// The menu entries Flatpak exported for an app (user and system installs).
 fn exported_entries(app_id: &str) -> Vec<PathBuf> {
     let dirs = [home().join(".local/share/flatpak/exports/share/applications"), PathBuf::from("/var/lib/flatpak/exports/share/applications")];
@@ -687,10 +714,12 @@ fn exported_entries(app_id: &str) -> Vec<PathBuf> {
     out
 }
 
+#[cfg(not(windows))]
 fn menu_override(entry: &Path) -> PathBuf {
     home().join(".local/share/applications").join(entry.file_name().unwrap_or_default())
 }
 
+#[cfg(not(windows))]
 /// An exported menu entry with NoDisplay=true added to its [Desktop Entry] section.
 fn hidden_entry(original: &str) -> String {
     let mut out = format!("{MENU_MARK}\n");
@@ -715,10 +744,12 @@ fn hidden_entry(original: &str) -> String {
     out
 }
 
+#[cfg(not(windows))]
 fn menu_hidden(app_id: &str) -> bool {
     exported_entries(app_id).iter().any(|e| fs::read_to_string(menu_override(e)).is_ok_and(|t| t.starts_with(MENU_MARK)))
 }
 
+#[cfg(not(windows))]
 /// Show or hide an emulator in the desktop's app menu. Hiding puts a copy of Flatpak's menu entry with
 /// NoDisplay=true in ~/.local/share/applications (which wins over Flatpak's); showing removes that copy.
 /// Files Lodestone didn't write are never touched.
@@ -751,6 +782,7 @@ pub fn set_menu_entry(app_id: &str, show: bool) -> Result<(), String> {
 }
 
 /// Show or hide the emulator a system plays with in the app menu.
+#[cfg(not(windows))]
 pub fn set_system_menu_entry(system: &str, index: usize, show: bool) -> Result<(), String> {
     let sys = systems().into_iter().find(|s| s.id == system).ok_or("Unknown system")?;
     let opt = sys.options.into_iter().find(|o| o.index == index).ok_or("Unknown emulator choice")?;
@@ -839,7 +871,7 @@ pub async fn download_core(core: &str) -> Result<(), String> {
             }
         });
     }
-    #[allow(unreachable_code)]
+    #[cfg(not(windows))]
     download_core_to(core, &flatpak_cores_dir()).await
 }
 
@@ -971,7 +1003,10 @@ fn options_for(info: &SystemInfo, emus: &HashMap<&'static str, Emulator>) -> Vec
                 installed: emu.is_some() && core_ok,
                 // RetroArch cores come from libretro's server, so only for the Flatpak or a missing RetroArch.
                 can_install: (emu.is_none() && flatpak) || (emu.is_some() && !core_ok && core.as_deref().is_some_and(valid_core) && fetches_cores),
+                #[cfg(not(windows))]
                 in_menu: emu.and_then(flatpak_id).map(|id| !menu_hidden(id)),
+                #[cfg(windows)]
+                in_menu: None,
                 core,
             })
         })
@@ -1152,6 +1187,7 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn hides_menu_entries_with_nodisplay() {
         let src = "[Desktop Entry]\nName=RetroArch\nNoDisplay=false\nExec=flatpak run org.libretro.RetroArch\n\n[Desktop Action x]\nNoDisplay=false\n";
