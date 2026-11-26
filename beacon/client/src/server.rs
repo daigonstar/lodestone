@@ -34,7 +34,14 @@ pub fn unb64(s: &str) -> Option<Vec<u8>> {
 
 impl Server {
     pub fn new(url: &str) -> Self {
-        let http = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).build().expect("HTTP client");
+        let builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30));
+        // Android: the certificate check that other systems use needs Java helper code inside the app; here the
+        // well-known public certificate authorities (Mozilla's list) are built in instead. Servers need a certificate
+        // from a public authority (Let's Encrypt, as Caddy gets automatically). Certificates you installed on the
+        // phone yourself aren't used.
+        #[cfg(target_os = "android")]
+        let builder = builder.tls_certs_only(webpki_root_certs::TLS_SERVER_ROOT_CERTS.iter().filter_map(|c| reqwest::Certificate::from_der(c).ok()));
+        let http = builder.build().expect("HTTP client");
         Self { url: url.trim_end_matches('/').to_string(), http, token: Default::default() }
     }
 
@@ -58,8 +65,17 @@ impl Server {
         let proto = format!("lodestone-beacon.v1, {token}");
         req.headers_mut().insert("Sec-WebSocket-Protocol", proto.parse().map_err(|_| "bad token".to_string())?);
         let connector = if self.url.starts_with("https://") {
-            use rustls_platform_verifier::ConfigVerifierExt;
-            let config = rustls::ClientConfig::with_platform_verifier().map_err(|e| e.to_string())?;
+            #[cfg(not(target_os = "android"))]
+            let config = {
+                use rustls_platform_verifier::ConfigVerifierExt;
+                rustls::ClientConfig::with_platform_verifier().map_err(|e| e.to_string())?
+            };
+            #[cfg(target_os = "android")]
+            let config = {
+                let mut roots = rustls::RootCertStore::empty();
+                roots.add_parsable_certificates(webpki_root_certs::TLS_SERVER_ROOT_CERTS.iter().cloned());
+                rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth()
+            };
             Some(tokio_tungstenite::Connector::Rustls(std::sync::Arc::new(config)))
         } else {
             Some(tokio_tungstenite::Connector::Plain)

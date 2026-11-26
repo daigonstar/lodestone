@@ -249,9 +249,20 @@ function renderGate(el) {
     ${tab === "new" ? `<form id="g-form" class="stack"><label>Choose your username<input name="username" maxlength="32" autocomplete="off" spellcheck="false" required placeholder="2 to 32: a-z 0-9 _ . -"></label><p class="err" id="g-err"></p><button class="primary">Create my identity</button></form>` : ""}
     ${tab === "restore" ? `<form id="g-form" class="stack"><label>Your 24 recovery words<textarea name="phrase" rows="3" required autocomplete="off" spellcheck="false"></textarea></label><label>Your username<input name="username" maxlength="32" autocomplete="off" spellcheck="false" required placeholder="The name you use on your servers"></label><p class="err" id="g-err"></p><button class="primary">Restore</button></form>` : ""}
     ${tab === "link" ? (gate.link ? `<div class="stack"><p>Waiting for approval. On your other device, approve the request only if it shows:</p><p><code class="big">${esc(gate.link.fingerprint)}</code></p><p class="muted" id="g-status">Waiting…</p></div>`
-      : `<form id="g-form" class="stack"><p class="muted">On your other device open your name → <b>Devices…</b> → <b>Add a device</b>, and copy the pairing text it shows (or scan its QR code with the phone app, once there is one). Paste it here.</p><label>Pairing text<input name="link" autocomplete="off" spellcheck="false" required placeholder="beacon-pair:1|…"></label><p class="err" id="g-err"></p><button class="primary">Link this PC</button></form>`) : ""}
+      : `<form id="g-form" class="stack"><p class="muted">On your other device open your name → <b>Devices…</b> → <b>Add a device</b>, and copy the pairing text it shows (or scan its QR code with the phone app, once there is one). Paste it here.</p><label>Pairing text<input name="link" autocomplete="off" spellcheck="false" required placeholder="beacon-pair:1|…"></label><p class="err" id="g-err"></p><button class="primary">Link this PC</button></form>
+      <form id="g-phone" class="stack"><p class="muted">Or use your phone: the Beacon phone app scans a QR code shown here and approves this PC, handing over your identity.</p><label>Server's domain<input name="server" autocomplete="off" spellcheck="false" placeholder="beacon.yourdomain.com"></label><p class="err" id="g-perr"></p><button type="submit" class="ghost">Show a QR code for my phone</button></form><div id="g-phone-box"></div>`) : ""}
   </div>`;
   el.onclick = (e) => { const b = e.target.closest("[data-g]"); if (b) { gate.step = b.dataset.g; gate.link = null; clearInterval(pairPoll); renderGate(el); } };
+  const pf = $("#g-phone");
+  if (pf) pf.onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await phoneOffer(String(new FormData(pf).get("server") || ""), $("#g-phone-box"), async (s) => {
+        gate.step = "choose"; await loadState(); render();
+        toast(s.identity_imported ? "Signed in. This PC now has your identity." : "Signed in.");
+      });
+    } catch (err) { $("#g-perr").textContent = err.message; }
+  };
   const form = $("#g-form");
   if (!form) return;
   const show = (msg) => { $("#g-err").textContent = msg; };
@@ -756,12 +767,46 @@ async function startPairing(h) {
     } catch {}
   }, 3000);
 }
+// Show a QR code for the Beacon phone app to scan. The phone approves this PC (after comparing the fingerprint) and
+// hands over your identity, sealed with a key that only travels in the QR code. `onApproved` runs once it has.
+async function phoneOffer(server, box, onApproved) {
+  if (!server.trim()) throw new Error("Enter the server's domain first");
+  const o = await api("/api/pair/offer", { server });
+  box.innerHTML = `<div class="pair-code"><div class="pair-qr"><img id="phone-qr" alt="QR code for the Beacon phone app" width="180" height="180"></div>
+    <p>In the Beacon phone app choose <b>Approve a PC</b> and scan this. Approve only if the phone shows<br><code class="big">${esc(o.fingerprint)}</code></p>
+    <p class="muted" id="phone-status">Waiting for your phone… The code works for 10 minutes.</p>
+    <div class="row"><input readonly id="phone-text" value="${esc(o.link)}"><button type="button" class="ghost" id="phone-copy">Copy text</button></div>
+    <p class="muted">If the phone's camera can't read the code, copy this text to the phone (it works the same way, for 10 minutes).</p></div>`;
+  qrInto("#phone-qr", o.link);
+  clearInterval(pairPoll);
+  pairPoll = setInterval(async () => {
+    const m = $("#phone-status");
+    if (Date.now() / 1000 > o.expires) { clearInterval(pairPoll); if (m) m.textContent = "This QR code has expired. Make a new one."; return; }
+    try {
+      const s = await api("/api/pair/offer-check", { server: o.server });
+      if (s.status === "approved") { clearInterval(pairPoll); onApproved(s); }
+    } catch (err) { if (m) m.textContent = err.message; }
+  }, 2000);
+}
+document.addEventListener("click", (e) => {
+  if (e.target.closest("#phone-open")) phoneDialog();
+  if (e.target.closest("#phone-copy")) { const i = $("#phone-text"); i.select(); navigator.clipboard?.writeText(i.value).then(() => toast("Text copied"), () => toast("Press Ctrl+C to copy")); }
+});
+function phoneDialog() {
+  ask("Sign in with my phone", `<p class="muted">Open the Beacon phone app, choose <b>Approve a PC</b> and scan the QR code that appears here.</p>
+    <label>Server's domain<input name="server" placeholder="beacon.yourdomain.com" autocomplete="off" spellcheck="false" required></label><div id="phone-box"></div>`, "Show QR code", async (f) => {
+      await phoneOffer(String(f.get("server") || ""), $("#phone-box"), () => { $("#dlg").close(); toast("Signed in. Your channels appear as your phone adds this PC."); loadState(); });
+      return false;
+    });
+  $("#dlg").addEventListener("close", () => clearInterval(pairPoll), { once: true });
+}
 function pairDialog() {
   ask("Sign in with another device", `<p class="muted">On a device where you're already signed in, open your name → <b>Devices…</b> → <b>Add a device</b>, then paste the pairing text it shows.</p>
     <label>Pairing text<input name="link" placeholder="beacon-pair:1|…" autocomplete="off" spellcheck="false"></label>
     <p class="muted">Or enter the server and code by hand:</p>
     <label>Server's domain<input name="server" placeholder="beacon.yourdomain.com" autocomplete="off" spellcheck="false"></label>
-    <label>Code<input name="code" autocomplete="off" spellcheck="false"></label>`, "Continue", async (f) => {
+    <label>Code<input name="code" autocomplete="off" spellcheck="false"></label>
+    <p><button type="button" class="ghost" id="phone-open">Use my phone's QR scanner instead…</button></p>`, "Continue", async (f) => {
       const link = String(f.get("link") || "").trim();
       if (!link && !(f.get("server") && f.get("code"))) throw new Error("Paste the pairing text, or enter the server and code");
       const r = await api("/api/pair/claim", link ? { link } : { server: String(f.get("server")), code: String(f.get("code")) });

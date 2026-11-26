@@ -697,3 +697,33 @@ async fn pairing_can_hand_over_encrypted_data_once() {
     let (_, st) = call(&app, "POST", "/v1/pairing/status", None, json!({ "code": pcode, "device_key": b.public() })).await;
     assert!(st["blob"].is_null(), "handed over once");
 }
+
+#[tokio::test]
+async fn a_signed_in_device_can_adopt_a_new_device_from_its_qr_code() {
+    let (app, code) = server();
+    let (phone, pc, stranger) = (Device::new(), Device::new(), Device::new());
+    phone.register(&app, "alice", &code).await;
+    let tp = phone.sign_in(&app).await;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let adopt = |d: &Device, ts: i64| json!({ "device_key": d.public(), "ts": ts, "signature": d.sign(&format!("lodestone-beacon/v1 adopt {SERVER} {ts} {}", d.public())), "blob": "sealed" });
+    // Needs a signed-in device, a fresh QR code and the new device's own signature.
+    assert_eq!(call(&app, "POST", "/v1/pairing/adopt", None, adopt(&pc, now)).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(call(&app, "POST", "/v1/pairing/adopt", Some(&tp), adopt(&pc, now - 3600)).await.0, StatusCode::BAD_REQUEST, "expired");
+    let mut forged = adopt(&pc, now);
+    forged["device_key"] = json!(stranger.public());
+    assert_eq!(call(&app, "POST", "/v1/pairing/adopt", Some(&tp), forged).await.0, StatusCode::UNAUTHORIZED, "someone else's key");
+    let mut other_server = adopt(&pc, now);
+    other_server["signature"] = json!(pc.sign(&format!("lodestone-beacon/v1 adopt https://elsewhere.example {now} {}", pc.public())));
+    assert_eq!(call(&app, "POST", "/v1/pairing/adopt", Some(&tp), other_server).await.0, StatusCode::UNAUTHORIZED, "bound to this server");
+    // Before it is adopted the PC isn't approved; after, it is, learns its username and gets the blob once.
+    let status = || json!({ "code": "-", "device_key": pc.public() });
+    assert_eq!(call(&app, "POST", "/v1/pairing/status", None, status()).await.1["status"], "refused");
+    let (s, r) = call(&app, "POST", "/v1/pairing/adopt", Some(&tp), adopt(&pc, now)).await;
+    assert_eq!((s, r["username"].as_str()), (StatusCode::OK, Some("alice")), "{r}");
+    let (_, st) = call(&app, "POST", "/v1/pairing/status", None, status()).await;
+    assert_eq!((st["status"].as_str(), st["username"].as_str(), st["blob"].as_str()), (Some("approved"), Some("alice"), Some("sealed")));
+    assert!(call(&app, "POST", "/v1/pairing/status", None, status()).await.1["blob"].is_null(), "handed over once");
+    assert_eq!(call(&app, "POST", "/v1/pairing/adopt", Some(&tp), adopt(&pc, now)).await.0, StatusCode::CONFLICT, "only once");
+    // The new device can now sign in as alice.
+    pc.sign_in(&app).await;
+}

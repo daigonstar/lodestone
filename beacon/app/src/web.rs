@@ -42,6 +42,8 @@ pub fn router(app: Shared) -> Router {
         .route("/api/pair/decide", post(pair_decide))
         .route("/api/pair/claim", post(pair_claim))
         .route("/api/pair/check", post(pair_check))
+        .route("/api/pair/offer", post(pair_offer))
+        .route("/api/pair/offer-check", post(pair_offer_check))
         .route("/api/profiles", get(profiles))
         .route("/api/profile", post(set_profile).layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)))
         .route("/api/avatar", get(avatar))
@@ -617,27 +619,57 @@ async fn pair_claim(State(app): State<Shared>, Json(r): Json<PairClaim>) -> R {
     Ok(Json(json!({ "server": server, "username": username, "fingerprint": fingerprint })))
 }
 
+/// Keep the identity a signed-in device handed over (sealed with the key from the QR code), unless this PC already
+/// has one. Returns whether it was imported.
+fn import_identity(app: &Shared, c: &lodestone_beacon_client::Client, blob: Option<String>) -> bool {
+    let key = app.pair_keys.lock().unwrap().remove(&c.server.url);
+    let (Some(blob), Some(key)) = (blob, key) else { return false };
+    let mut mine = app.identity.lock().unwrap();
+    if mine.is_some() {
+        return false;
+    }
+    let Some(id) = lodestone_beacon_client::identity::Identity::open(&blob, &key) else { return false };
+    let name = c.username().unwrap_or_default();
+    if id.save(&crate::data_dir().join("identity.json"), &name).is_err() {
+        return false;
+    }
+    *mine = Some((id, name));
+    true
+}
+
 async fn pair_check(State(app): State<Shared>, Json(r): Json<ServerQuery>) -> R {
     let c = app.servers.get(&r.server).ok_or_else(|| Fail("Unknown server".into()))?;
     let (status, blob) = c.pair_check().await?;
     // Approved with your identity from the other device: keep it, unless this device already has one.
-    let mut imported = false;
-    if status == "approved" {
-        let key = app.pair_keys.lock().unwrap().remove(&c.server.url);
-        if let (Some(blob), Some(key)) = (blob, key) {
-            let mut mine = app.identity.lock().unwrap();
-            if mine.is_none() {
-                if let Some(id) = lodestone_beacon_client::identity::Identity::open(&blob, &key) {
-                    let name = c.username().unwrap_or_default();
-                    if id.save(&crate::data_dir().join("identity.json"), &name).is_ok() {
-                        *mine = Some((id, name));
-                        imported = true;
-                    }
-                }
-            }
-        }
-    }
+    let imported = status == "approved" && import_identity(&app, &c, blob);
     if status != "waiting" {
+        let _ = app.events.send(json!({ "type": "state" }).to_string());
+    }
+    Ok(Json(json!({ "status": status, "identity_imported": imported })))
+}
+
+/// On a new PC: make a QR code for the phone app to scan (`beacon-pair:2|server|device key|time|signature|key`).
+/// The phone approves, and hands over your identity sealed with the key in the code (the server never sees it).
+async fn pair_offer(State(app): State<Shared>, Json(r): Json<ServerQuery>) -> R {
+    let server = lodestone_beacon_client::discover::discover(&r.server).await.map_err(Fail)?;
+    let c = app.servers.open(&server).map_err(Fail)?;
+    if c.username().is_some() {
+        return Err(Fail("This PC already has an account on that server".into()));
+    }
+    let (ts, sig) = c.adopt_offer();
+    let mut key = [0u8; 32];
+    getrandom::getrandom(&mut key).map_err(|e| Fail(e.to_string()))?;
+    app.pair_keys.lock().unwrap().insert(server.clone(), key);
+    let link = format!("beacon-pair:2|{server}|{}|{ts}|{sig}|{}", c.device_key(), lodestone_beacon_client::server::b64(&key));
+    Ok(Json(json!({ "server": server, "link": link, "fingerprint": c.fingerprint(), "expires": ts + 600 })))
+}
+
+/// On the new PC, while its QR code is showing: has the phone approved it yet?
+async fn pair_offer_check(State(app): State<Shared>, Json(r): Json<ServerQuery>) -> R {
+    let c = app.servers.get(&r.server).ok_or_else(|| Fail("Unknown server".into()))?;
+    let (status, blob) = c.adopt_check().await?;
+    let imported = status == "approved" && import_identity(&app, &c, blob);
+    if status == "approved" {
         let _ = app.events.send(json!({ "type": "state" }).to_string());
     }
     Ok(Json(json!({ "status": status, "identity_imported": imported })))

@@ -432,6 +432,37 @@ impl Client {
         Ok((status, r["blob"].as_str().map(String::from)))
     }
 
+    /// On a new device with no account yet (a PC): make the signed, time-stamped proof that goes in its QR code, so
+    /// that a signed-in device (a phone) that scans the code can add this device. Returns (time, signature).
+    pub fn adopt_offer(&self) -> (i64, String) {
+        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        (ts, self.sign(&format!("lodestone-beacon/v1 adopt {} {ts} {}", self.server.url, self.device)))
+    }
+
+    /// On a signed-in device (the phone): add the device whose QR code was scanned. `handover` is encrypted data for
+    /// it (see `identity::Identity::seal`). Returns the new device's fingerprint.
+    pub async fn adopt(&self, device_key: &str, ts: i64, signature: &str, handover: Option<String>) -> Result<String> {
+        let mut body = json!({ "device_key": device_key, "ts": ts, "signature": signature });
+        if let Some(blob) = handover {
+            body["blob"] = json!(blob);
+        }
+        let r = self.server.post("/v1/pairing/adopt", body).await?;
+        Ok(r["fingerprint"].as_str().unwrap_or_default().to_string())
+    }
+
+    /// On the new device, after showing its QR code: "waiting" or "approved" (now signed in and ready), with the
+    /// hand-over data if there was any.
+    pub async fn adopt_check(&self) -> Result<(String, Option<String>)> {
+        let r = self.server.post("/v1/pairing/status", json!({ "code": "-", "device_key": self.device })).await?;
+        if r["status"].as_str() != Some("approved") {
+            return Ok(("waiting".into(), None));
+        }
+        self.store.set("username", r["username"].as_str().unwrap_or_default())?;
+        self.sign_in().await?;
+        self.top_up_key_packages().await?;
+        Ok(("approved".into(), r["blob"].as_str().map(String::from)))
+    }
+
     /// Whether this device is waiting for approval (and for which username).
     pub fn pairing(&self) -> Option<String> {
         self.store.get("pairing").and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|p| p["username"].as_str().map(String::from))

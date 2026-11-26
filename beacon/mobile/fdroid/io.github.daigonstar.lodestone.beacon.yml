@@ -1,0 +1,29 @@
+# DRAFT metadata for F-Droid (fdroiddata). Not submitted, not checked by F-Droid. Fill in once there is a tagged release.
+Categories:
+  - Internet
+License: GPL-3.0-or-later
+AuthorName: Robb
+SourceCode: https://github.com/daigonstar/lodestone
+IssueTracker: https://github.com/daigonstar/lodestone/issues
+
+AutoName: Lodestone Beacon
+
+RepoType: git
+Repo: https://github.com/daigonstar/lodestone
+
+Builds:
+  - versionName: 0.1.0
+    versionCode: 1000
+    commit: beacon-mobile-v0.1.0       # a tag that doesn't exist yet
+    subdir: beacon/mobile/src-tauri/gen/android/app
+    sudo:
+      - apt-get update
+      - apt-get install -y rustc cargo   # F-Droid needs a recent Rust; to be checked
+    init: cargo install tauri-cli --version "^2" --locked   # to be checked: F-Droid may want this pinned or prebuilt
+    gradle:
+      - yes
+    prebuild: echo "TODO: build the Rust library for each Android ABI before Gradle (cargo tauri android build)"
+    ndk: r27c
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags ^beacon-mobile-v

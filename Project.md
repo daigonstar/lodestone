@@ -3,7 +3,7 @@
 What needs doing to get Lodestone to users, and where each item stands. Update this file whenever an
 item is finished or partly done.
 
-Last updated: 2026-11-26 (Beacon mobile plan written)
+Last updated: 2026-11-26 (first Android test app built)
 
 ## Current focus
 
@@ -88,7 +88,9 @@ Recommendation: Tauri 2 mobile reusing the Rust core and web UI, native Kotlin/S
 | Plan and comparison | Done, waiting for Robb's choice. Nothing built |
 | Apple (US$99/yr) and Google Play (US$25) developer accounts | Not needed for Android first; decide later |
 | Decide push notifications (no push first, or a publisher relay that needs an AGENTS.md change) | Waiting on Robb |
-| Spike: Beacon client on Android | Client crate builds for Android arm64 (not run; no phone here), all dependency licences are free. Next: Tauri shell, F-Droid metadata, run on a real phone |
+| Spike: Beacon client on Android | Done: client builds and packages for Android arm64 (see the first version below) |
+| First version of the Android app (`beacon/mobile/`): identity, add server, approve a PC by scanning its QR code | Built 2026-11-26 as an 11 MB test APK. New server route `/v1/pairing/adopt` and desktop "Sign in with my phone" screen, with tests. **Not run on a phone yet**; key not in the Keystore yet; no chat |
+| Robb tries the test APK on a phone | Waiting on Robb |
 | Phase 1: Android pairing and chat, history copy, report/block, account deletion | Not started |
 | Phase 2: F-Droid listing, notifications | Not started |
 

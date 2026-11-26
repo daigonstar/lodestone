@@ -247,6 +247,31 @@ Run in the cloud session with the Android NDK r27c and Rust target `aarch64-linu
   build it from source, so this goes on the list of things to check in the spike.
 - **Not done yet:** the Tauri Android shell with the UI, a run on a real phone, and the F-Droid metadata file.
 
+## First version (built 2026-11-26)
+
+Robb asked for a first Android app to try, with the phone as the key authenticator. It is in `beacon/mobile/`
+(Tauri 2, same Rust client as the desktop app, plain HTML/JS screens). It does **not** have chat yet.
+
+- **What it does:** make or restore the identity (24 words), add a server (new account or get back into your
+  account with the identity), and **approve a new PC by scanning the QR code the PC shows**, after comparing the
+  fingerprint on both screens. Approving hands the PC the identity, sealed so the server can't read it.
+- **Protocol change (needs review):** PR #10's pairing has the signed-in PC show the QR code. A PC with no camera
+  can't scan a phone, so this adds the other direction: `POST /v1/pairing/adopt` and `beacon-pair:2|…` QR codes
+  (see `PROTOCOL.md`), plus a "Sign in with my phone" screen on the desktop. The server checks the new device's
+  signature (bound to the server address), a 10-minute age limit, and the device limit. The existing flow is
+  unchanged. It is a sign-in flow, so AGENTS.md says it needs a close look.
+- **Tested:** the server route and the whole phone-to-PC flow are covered by new automated tests (they run on
+  Linux, with real keys and a real server). The Android app **compiles and packages** (11 MB release APK, arm64,
+  Android 7 or newer). **It has not been run on a phone**: the camera scan, the screens and the real server
+  connection are untested.
+- **Differences from the plan above:** the key is in the app's private storage, **not** the Android Keystore yet;
+  TLS uses Mozilla's built-in certificate authorities (so servers need a public certificate, e.g. Let's Encrypt)
+  instead of the Java helper; QR scanning is the vendored jsQR library (Apache-2.0, readable code) in the web
+  view, not a native camera plug-in. The test APK is signed with a throwaway key, so a later build with another key
+  needs the app uninstalled first.
+- **Not in it:** chat, files, voice, notifications, history copy, report and block, account deletion, F-Droid
+  submission (a draft metadata file is in `beacon/mobile/fdroid/`).
+
 ## Phased path (Android first)
 
 Estimates are rough and assume one developer working with Claude, with Robb testing on a real Android
