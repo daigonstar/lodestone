@@ -143,12 +143,12 @@ shape of the plugin API are in `docs/plugin-api-notes.md`.
 
 | Item | Status |
 | --- | --- |
-| GitHub releases (AppImage, `.deb`, binary tarball, Flatpak bundle) | Done, latest is 0.2.1 (2026-11-26) |
+| GitHub releases (AppImage, `.deb`, binary tarball, Flatpak bundle) | Done, latest is 0.2.2 (2026-11-26) |
 | Security review fixes shipped in a release | Done, in 0.1.2 and later |
 | Unreleased changes on `main` | 7 commits since 0.2.0 |
 | New releases (Robb, 2026-11-26): Lodestone **0.2.1**, Kiln **0.2.0**, Beacon **0.2.0** | **Lodestone 0.2.1 published** (tag `0.2.1` on `comms` 1f883ea; AppImage, `.deb`, tarball, `SHA256SUMS-linux`; Flatpak bundle and `SHA256SUMS-flatpak` added from Robb's PC with `scripts/release.sh`; AUR files and Flathub manifest updated to 0.2.1, source checksums verified, packages not built; none of the release files have been launched). **Kiln 0.2.0 published.** Tests on Robb's PC before tagging all passed. **Beacon 0.2.0 published as a pre-release for testers** (Robb, 2026-11-26; tag `beacon-v0.2.0` on `comms` 121dd57; Linux Flatpak and `SHA256SUMS`, built on Robb's PC, not launched; Windows zip to be added later). Lodestone's Plug-ins page skips pre-releases, so testers install the Flatpak by hand. `beacon/` audit reports 3 vulnerabilities, checked 2026-11-26 with `cargo tree` and the source: libcrux-kem 0.0.9 (RUSTSEC-2026-0331 high, 0330) is only in `Cargo.lock` for an unused optional backend and is not selected in any build of the workspace; crypto-bigint 0.5.5 (RUSTSEC-2026-0387, timing) is compiled in for the P-curves, which Beacon's ciphersuite and keys (X25519, Ed25519) don't use. Not fixed; `cargo audit` still fails |
 | Test builds of `comms` at 7307f19 (Linux AppImage, .deb, Beacon programs; Windows `lodestone.exe`; Beacon Android APK) | Built 2026-11-26, in the project files under `builds/comms-7307f19-2026-11-26/`. Not run on real hardware: Windows exe never run, APK never installed on a phone, Linux builds not launched. No Flatpak and no Windows Beacon (needs GStreamer for Windows). APK signed with a throwaway key |
-| Plug-ins page switch "Also offer test builds (pre-releases)", off by default, so testers can install Beacon pre-releases from Lodestone | Built 2026-11-26 as hotfix **0.2.2** at Robb's request (PR into `comms`). Unit-tested for the release picking; the page itself not clicked through. Tag `0.2.2` once merged |
+| Plug-ins page switch "Also offer test builds (pre-releases)", off by default, so testers can install Beacon pre-releases from Lodestone | **Done: Lodestone 0.2.2 published 2026-11-26** (tag `0.2.2` on `comms` d7f4c10; AppImage, `.deb`, tarball, Flatpak, checksums). Also in it: installing a Flatpak plug-in over an installed one no longer fails (`--reinstall`), and finished versions count as newer than their test builds. Release picking unit-tested and checked against the real Beacon pre-release; not yet clicked through in the real app. 0.2.2 Flatpak installed on Robb's PC and Beacon removed there so Robb can test installing it |
 | `release.yml` ran on every tag, including `kiln-v*` and `beacon-v*`, and would have attached Lodestone's files to plug-in releases | Fixed: plug-in tags are excluded (PR into `comms`) |
 
 ## AUR (paused)
@@ -157,8 +157,8 @@ Paused on 2026-11-26: the AUR account can't be created yet.
 
 | Item | Status |
 | --- | --- |
-| `packaging/aur/lodestone` (builds from source) PKGBUILD and `.SRCINFO` | Done, at 0.2.1 |
-| `packaging/aur/lodestone-bin` (prebuilt) PKGBUILD and `.SRCINFO` | Done, at 0.2.1 |
+| `packaging/aur/lodestone` (builds from source) PKGBUILD and `.SRCINFO` | Done, at 0.2.2 |
+| `packaging/aur/lodestone-bin` (prebuilt) PKGBUILD and `.SRCINFO` | Done, at 0.2.2 |
 | `scripts/release.sh` updates both AUR packages each release | Done |
 | Test-build both packages on Arch (clean chroot, `namcap`) | Not done, needs an Arch machine |
 | Create an AUR account | **Blocked**, can't create one yet |
@@ -173,7 +173,7 @@ To resume: create the account, add an SSH key to it, then follow step 4 of `RELE
 - **GitHub releases:** already working. Arch users can use the AppImage or the binary tarball, or
   build `packaging/aur/lodestone` themselves with `makepkg -si` from a clone of this repository.
 - **Flathub:** the manifest, metainfo and screenshots in `packaging/flatpak/` already exist and point
-  at 0.2.1 (manifest not test-built from the tag source). Submitting it needs a GitHub account only. Flathub reviewers may question the host access
+  at 0.2.2 (manifest not test-built from the tag source). Submitting it needs a GitHub account only. Flathub reviewers may question the host access
   the Flatpak needs (`--filesystem=host`, `--talk-name=org.freedesktop.Flatpak`).
 - **Debian and Ubuntu:** the `.deb` is built each release. A PPA or other apt repository could come
   later.
