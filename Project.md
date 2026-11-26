@@ -147,6 +147,7 @@ shape of the plugin API are in `docs/plugin-api-notes.md`.
 | Security review fixes shipped in a release | Done, in 0.1.2 and later |
 | Unreleased changes on `main` | 7 commits since 0.2.0 |
 | New releases (Robb, 2026-11-26): Lodestone **0.2.1**, Kiln **0.2.0**, Beacon **0.2.0** | Versions set: Lodestone 0.2.1 (`tauri.conf.json`, `Cargo.toml`, `Cargo.lock`, metainfo), Kiln 0.2.0, Beacon app is already 0.2.0. **Tags `0.2.1`, `kiln-v0.2.0`, `beacon-v0.2.0` not pushed** (tag pushes refused, 403). `beacon-v0.2.0` also needs `scripts/release-beacon.sh` (Flatpak and a Windows zip built on a machine with those tools) |
+| Test builds of `comms` at 7307f19 (Linux AppImage, .deb, Beacon programs; Windows `lodestone.exe`; Beacon Android APK) | Built 2026-11-26, in the project files under `builds/comms-7307f19-2026-11-26/`. Not run on real hardware: Windows exe never run, APK never installed on a phone, Linux builds not launched. No Flatpak and no Windows Beacon (needs GStreamer for Windows). APK signed with a throwaway key |
 | `release.yml` ran on every tag, including `kiln-v*` and `beacon-v*`, and would have attached Lodestone's files to plug-in releases | Fixed: plug-in tags are excluded (PR into `comms`) |
 
 ## AUR (paused)
