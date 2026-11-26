@@ -109,6 +109,12 @@ struct Payload {
     /// `profile`: the name colour, as #rrggbb.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     color: Option<String>,
+    /// A reply in a forum channel: the sequence number of the post it answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thread: Option<i64>,
+    /// A forum post's title (a post has a title and no `thread`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
 }
 
 /// Largest profile picture.
@@ -116,6 +122,12 @@ pub const MAX_AVATAR: usize = 256 * 1024;
 
 fn valid_color(c: &str) -> bool {
     c.len() == 7 && c.starts_with('#') && c[1..].bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// A forum post's title: 1 to 120 characters, no control characters.
+fn clean_title(t: &str) -> Option<String> {
+    let t = t.trim();
+    (!t.is_empty() && t.chars().count() <= 120 && !t.chars().any(char::is_control)).then(|| t.to_string())
 }
 
 fn clean_display_name(n: &str) -> Option<String> {
@@ -501,6 +513,17 @@ impl Client {
         self.create_channel_with(community, name, kind, json!({ "private": true, "access": access })).await
     }
 
+    /// The history a new device would be sent, as text (tests only).
+    #[doc(hidden)]
+    pub fn pair_history_for_test(&self) -> String {
+        self.store.export_history(300, 5 * 1024 * 1024).map(|h| h.to_string()).unwrap_or_default()
+    }
+
+    /// Add a channel of any kind: "text", "voice", "forum", "announcement" or "media".
+    pub async fn create_channel_kind(&self, community: &str, name: &str, kind: &str) -> Result<String> {
+        self.create_channel_of(community, name, kind).await
+    }
+
     async fn create_channel_of(&self, community: &str, name: &str, kind: &str) -> Result<String> {
         self.create_channel_with(community, name, kind, json!({})).await
     }
@@ -547,16 +570,34 @@ impl Client {
     /// Encrypt and send a text message. Catches up with the channel first, so it goes out in the
     /// current epoch.
     pub async fn send_text(&self, channel: &str, text: &str) -> Result<Message> {
+        self.send_payload(channel, Payload { t: "text".into(), body: text.to_string(), ..Default::default() }).await
+    }
+
+    /// A new forum post: a title and a first message (a forum channel lists posts, each with its replies).
+    pub async fn send_post(&self, channel: &str, title: &str, body: &str) -> Result<Message> {
+        let title = clean_title(title).ok_or_else(|| Error::Local("A post needs a title of 1 to 120 characters".into()))?;
+        self.send_payload(channel, Payload { t: "text".into(), body: body.to_string(), title: Some(title), ..Default::default() }).await
+    }
+
+    /// A reply to a forum post (`thread` is the post's sequence number).
+    pub async fn send_reply(&self, channel: &str, thread: i64, text: &str) -> Result<Message> {
+        if thread <= 0 {
+            return Err(Error::Local("Reply to a post".into()));
+        }
+        self.send_payload(channel, Payload { t: "text".into(), body: text.to_string(), thread: Some(thread), ..Default::default() }).await
+    }
+
+    async fn send_payload(&self, channel: &str, p: Payload) -> Result<Message> {
         let _g = self.op.lock().await;
         let devices = self.community_devices_for(channel).await?;
         self.catch_up(channel, &devices).await?;
         let mut group = self.group(channel)?.ok_or_else(|| Error::Local("You aren't in this channel's encrypted group yet; someone in it has to add you (it happens automatically when they're online)".into()))?;
-        let payload = serde_json::to_vec(&Payload { t: "text".into(), body: text.to_string(), ..Default::default() }).map_err(local)?;
+        let payload = serde_json::to_vec(&p).map_err(local)?;
         let out = group.create_message(&self.provider, &self.signer, &payload).map_err(local)?;
         self.persist()?;
         let epoch = group.epoch().as_u64();
         let seq = self.server.send(channel, "application", epoch, &out.tls_serialize_detached().map_err(local)?).await?.ok_or_else(|| Error::Local("The server refused the message".into()))?;
-        let m = Message { channel: channel.into(), seq, sender: self.username().unwrap_or_default(), sender_device: self.device.clone(), body: text.into(), sent_at: now(), attachment: None };
+        let m = Message { channel: channel.into(), seq, sender: self.username().unwrap_or_default(), sender_device: self.device.clone(), body: p.body, sent_at: now(), attachment: None, thread: p.thread, title: p.title };
         // The read position isn't moved here: catching up skips our own messages, and moving it could
         // jump over someone else's message that arrived just before ours.
         self.store.add_message(&m)?;
@@ -590,7 +631,7 @@ impl Client {
         let out = group.create_message(&self.provider, &self.signer, &payload).map_err(local)?;
         self.persist()?;
         let seq = self.server.send(channel, "application", group.epoch().as_u64(), &out.tls_serialize_detached().map_err(local)?).await?.ok_or_else(|| Error::Local("The server refused the message".into()))?;
-        let m = Message { channel: channel.into(), seq, sender: self.username().unwrap_or_default(), sender_device: self.device.clone(), body: caption.into(), sent_at: now(), attachment: Some(file) };
+        let m = Message { channel: channel.into(), seq, sender: self.username().unwrap_or_default(), sender_device: self.device.clone(), body: caption.into(), sent_at: now(), attachment: Some(file), thread: None, title: None };
         // The read position isn't moved here: catching up skips our own messages, and moving it could
         // jump over someone else's message that arrived just before ours.
         self.store.add_message(&m)?;
@@ -793,7 +834,7 @@ impl Client {
         let devices = self.community_devices_for(channel).await?;
         self.catch_up(channel, &devices).await?;
         let mut group = self.group(channel)?.ok_or_else(|| Error::Local("You aren't in this channel's encrypted group yet".into()))?;
-        let payload = serde_json::to_vec(&Payload { t: "react".into(), body: emoji.into(), target: Some(target), on: Some(on), file: None, color: None }).map_err(local)?;
+        let payload = serde_json::to_vec(&Payload { t: "react".into(), body: emoji.into(), target: Some(target), on: Some(on), file: None, color: None, thread: None, title: None }).map_err(local)?;
         let out = group.create_message(&self.provider, &self.signer, &payload).map_err(local)?;
         self.persist()?;
         self.server.send(channel, "application", group.epoch().as_u64(), &out.tls_serialize_detached().map_err(local)?).await?.ok_or_else(|| Error::Local("The server refused it".into()))?;
@@ -986,6 +1027,9 @@ impl Client {
                             f["name"] = json!(clean_file_name(f["name"].as_str().unwrap_or_default()));
                             f
                         }),
+                        // A reply names its post; a post has a title. Anything odd is shown as a plain message.
+                        thread: p.thread.filter(|t| *t > 0),
+                        title: if p.thread.is_none() { p.title.as_deref().and_then(clean_title) } else { None },
                     }),
                     Some(p) if p.t == "profile" => {
                                         // Only a verified sender's own profile is kept (names marked ⚠ don't count).

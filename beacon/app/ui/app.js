@@ -70,15 +70,17 @@ async function loadState() {
 
 // ---------- channel list: categories, child channels, right-click menus ----------
 const collapsedCats = new Set();
+const KIND_NAMES = { text: "Text", voice: "Voice", forum: "Forum", announcement: "Announcement", media: "Media" };
+const kindMark = (c) => ({ forum: ic("forum"), announcement: ic("megaphone"), media: ic("image"), voice: ic("volume") })[c.kind] || "#";
 function channelRowHTML(sp, c, child) {
   const kids = child ? [] : sp.channels.filter((k) => k.parent === c.id);
   const lockNote = (c.private ? `<span class="rule" title="Private: only chosen people can read it">${ic("lock")}</span>` : "") + (c.post_rule === "admins" ? `<span class="rule" title="Only admins can post here">${ic("lock")}</span>` : "");
   // A private channel you manage but aren't on the list for: shown dimmed, can't be opened.
-  if (c.can_read === false) return `<div class="ch locked ${child ? "child" : ""}" data-ctx-channel="${esc(c.id)}" title="Private, and you're not on its list. You can still manage it (right-click)."># ${esc(c.name)}<span class="rule">${ic("lock")}</span></div>`;
+  if (c.can_read === false) return `<div class="ch locked ${child ? "child" : ""}" data-ctx-channel="${esc(c.id)}" title="Private, and you're not on its list. You can still manage it (right-click).">${kindMark(c)} ${esc(c.name)}<span class="rule">${ic("lock")}</span></div>`;
   const wait = c.ready ? "" : ' <span class="wait">(waiting for keys)</span>';
   const row = c.kind === "voice"
     ? `<button class="ch vc ${child ? "child" : ""}" data-voice="${esc(c.id)}" data-ctx-channel="${esc(c.id)}" title="${c.ready ? "Join the call" : "Waiting for this device's keys"}">${ic("volume")} ${esc(c.name)}${wait}</button><div class="vc-people ${child ? "child" : ""}" data-vc="${esc(c.id)}"></div>`
-    : `<button class="ch ${child ? "child" : ""} ${c.id === state.sel.channel ? "on" : ""}" data-channel="${esc(c.id)}" data-ctx-channel="${esc(c.id)}"># ${esc(c.name)}${lockNote}${wait}${mentionBadge(sp.server, c.id)}</button>`;
+    : `<button class="ch ${child ? "child" : ""} ${c.id === state.sel.channel ? "on" : ""}" data-channel="${esc(c.id)}" data-ctx-channel="${esc(c.id)}">${kindMark(c)} ${esc(c.name)}${lockNote}${wait}${mentionBadge(sp.server, c.id)}</button>`;
   return row + kids.map((k) => channelRowHTML(sp, k, true)).join("");
 }
 function channelListHTML(sp) {
@@ -103,7 +105,7 @@ document.addEventListener("click", (e) => {
 
 const isAdmin = (sp) => sp.your_role === "owner" || sp.your_role === "admin";
 const catOptions = (sp, sel) => `<option value="">No category</option>` + (sp.categories || []).map((c) => `<option value="${esc(c.id)}" ${c.id === sel ? "selected" : ""}>${esc(c.name)}</option>`).join("");
-const parentOptions = (sp, self, sel) => `<option value="">None (top level)</option>` + sp.channels.filter((c) => c.kind !== "voice" && !c.parent && c.id !== self).map((c) => `<option value="${esc(c.id)}" ${c.id === sel ? "selected" : ""}># ${esc(c.name)}</option>`).join("");
+const parentOptions = (sp, self, sel) => `<option value="">None (top level)</option>` + sp.channels.filter((c) => c.kind === "text" && !c.parent && c.id !== self).map((c) => `<option value="${esc(c.id)}" ${c.id === sel ? "selected" : ""}># ${esc(c.name)}</option>`).join("");
 const refreshAfter = async (fn) => { try { await fn(); await loadState(); } catch (err) { toast(err.message, true); } };
 
 function editChannelDialog(id) {
@@ -202,10 +204,10 @@ document.addEventListener("contextmenu", (e) => {
   if (chEl) {
     const c = sp.channels.find((x) => x.id === chEl.dataset.ctxChannel);
     if (!c) return;
-    items = `<div class="menu-title">${c.kind === "voice" ? ic("volume") : "#"} ${esc(c.name)}</div>
+    items = `<div class="menu-title">${kindMark(c)} ${esc(c.name)}</div>
       <button type="button" data-m="edit">Edit channel…</button>
       ${c.kind === "voice" ? "" : '<button type="button" data-m="perms">Manage permissions…</button>'}
-      ${c.kind === "voice" || c.parent ? "" : '<button type="button" data-m="child">New child channel…</button>'}
+      ${c.kind !== "text" || c.parent ? "" : '<button type="button" data-m="child">New child channel…</button>'}
       <hr><button type="button" class="danger-text" data-m="delete">Delete channel…</button>`;
     menu.dataset.id = c.id;
   } else if (catEl) {
@@ -331,15 +333,17 @@ function render() {
   // The chat area is only rebuilt when you switch channel or it changes (name, topic, keys arriving).
   // Refreshes (every few seconds, and on live events) used to rebuild it, which jumped the message list
   // and threw away anything you were typing.
-  const chatKey = JSON.stringify([state.sel.server, ch.id, ch.name, ch.topic || "", !!ch.ready, ch.post_rule, admin]);
+  const chatKey = JSON.stringify([state.sel.server, ch.id, ch.name, ch.topic || "", !!ch.ready, ch.post_rule, admin, ch.kind]);
   if ($("#chat").dataset.key === chatKey && $("#msgs")) return;
   $("#chat").dataset.key = chatKey;
-  $("#chat").innerHTML = `<header><h3># ${esc(ch.name)}${ch.topic ? `<span class="topic">${esc(ch.topic)}</span>` : ""}</h3><button class="gear" id="toggle-members" title="Show or hide members">${ic("users")}</button><span class="lock" title="Only members' devices can read this channel; the server stores ciphertext.">${ic("lock")} end-to-end encrypted</span></header>
-    <div class="msgs" id="msgs"></div><button type="button" class="new-msgs hidden" id="new-msgs">New messages ↓</button>
+  $("#chat").innerHTML = `<header><h3>${kindMark(ch)} ${esc(ch.name)}${ch.topic ? `<span class="topic">${esc(ch.topic)}</span>` : ""}</h3><button class="gear" id="toggle-members" title="Show or hide members">${ic("users")}</button><span class="lock" title="Only members' devices can read this channel; the server stores ciphertext.">${ic("lock")} end-to-end encrypted</span></header>
+    <div class="msgs ${ch.kind === "media" ? "gallery" : ""}" id="msgs"></div><button type="button" class="new-msgs hidden" id="new-msgs">New messages ↓</button>
     <div class="composer">${ch.ready && ch.post_rule === "admins" && !admin
       ? `<p class="muted read-only">${ic("lock")} Only admins can post in this channel.</p>`
+      : ch.ready && ch.kind === "forum"
+      ? `<div id="forum-bar" class="forum-bar"></div>`
       : ch.ready
-      ? `<div id="pending" class="pending hidden"></div><div class="compose-row"><button type="button" class="emoji-btn" id="attach-btn" title="Attach a file or image (or paste / drop one)">${ic("attach")}</button><textarea id="text" placeholder="Message (Enter to send, Shift+Enter for a new line)" maxlength="8000"></textarea><button type="button" class="emoji-btn" id="emoji-btn" title="Emoji">${ic("smile")}</button></div>`
+      ? `<div id="pending" class="pending hidden"></div><div class="compose-row"><button type="button" class="emoji-btn" id="attach-btn" title="Attach a file or image (or paste / drop one)">${ic("attach")}</button><textarea id="text" placeholder="${ch.kind === "media" ? "Attach a picture or file, add a caption if you like, then press Enter" : "Message (Enter to send, Shift+Enter for a new line)"}" maxlength="8000"></textarea><button type="button" class="emoji-btn" id="emoji-btn" title="Emoji">${ic("smile")}</button></div>`
       : '<p class="muted">You\'re a member, but no one in this channel has been online to give your device its keys yet. It happens automatically.</p>'}</div>`;
   // Stick to the newest message only while you're at the bottom; pictures that finish loading keep
   // you there. Scrolled up, you stay where you are.
@@ -370,6 +374,7 @@ function render() {
       e.preventDefault();
       const text = t.value.trim();
       if (!text && !state.pending) return;
+      if (current().ch?.kind === "media" && !state.pending) return toast("This is a media channel: attach a picture or file to add it", true);
       t.disabled = true;
       try {
         if (state.pending) {
@@ -531,12 +536,15 @@ async function loadMessages() {
       }
       return row;
     };
+    if (ch.kind === "forum") return renderForum(box, ch, r, makeRow, reacts);
     // Rows are kept and updated in place: only new messages are added, and a row is redrawn only when its
     // reactions change. Rebuilding everything made pictures reload (and the list jump while you read).
     box.querySelector(":scope > p.muted")?.remove();
+    // A media channel is a gallery: only messages with a picture or file.
+    const shown = ch.kind === "media" ? r.messages.filter((m) => m.attachment) : r.messages;
     const existing = new Map([...box.querySelectorAll(":scope > .msg")].map((x) => [x.dataset.seq, x]));
     let prev = null, added = 0;
-    for (const m of r.messages) {
+    for (const m of shown) {
       const key = JSON.stringify(reacts.get(m.seq) || []);
       let row = existing.get(String(m.seq));
       if (!row) added++;
@@ -552,12 +560,103 @@ async function loadMessages() {
       prev = row;
     }
     for (const gone of existing.values()) gone.remove();
-    if (!r.messages.length) box.innerHTML = '<p class="muted">No messages yet. Messages sent before you joined can\'t be read on this device, by design.</p>';
+    if (!shown.length) box.innerHTML = ch.kind === "media" ? '<p class="muted">Nothing here yet. Attach a picture or file below to add the first one.</p>' : ch.kind === "announcement" ? '<p class="muted">No announcements yet. Announcements sent before you joined can\'t be read on this device, by design.</p>' : '<p class="muted">No messages yet. Messages sent before you joined can\'t be read on this device, by design.</p>';
     const first = !box.dataset.seen;
     if (atBottom || first) { box.scrollTop = box.scrollHeight; box.dataset.stick = "1"; }
     else if (added) $("#new-msgs")?.classList.remove("hidden");
     box.dataset.seen = "1";
   } catch (e) { toast(e.message, true); }
+}
+
+// ---------- forum channels: posts with titles, each with its own replies ----------
+const forumView = {}; // channel id -> the open post's sequence number (none = the list of posts)
+function renderForum(box, ch, r, makeRow, reacts) {
+  box.classList.remove("gallery");
+  const posts = r.messages.filter((m) => m.title && !m.thread);
+  const replies = new Map();
+  for (const m of r.messages) if (m.thread) { if (!replies.has(m.thread)) replies.set(m.thread, []); replies.get(m.thread).push(m); }
+  const open = posts.find((p) => p.seq === forumView[ch.id]);
+  if (!open) delete forumView[ch.id];
+  const key = JSON.stringify([open ? open.seq : 0, r.messages.map((m) => [m.seq, reacts.get(m.seq) || null])]);
+  const bar = $("#forum-bar");
+  const barKey = open ? `post:${open.seq}` : "list";
+  if (bar && bar.dataset.view !== barKey) {
+    bar.dataset.view = barKey;
+    const { sp } = current();
+    const canPost = !(ch.post_rule === "admins" && !isAdmin(sp));
+    if (open) {
+      bar.innerHTML = canPost ? `<div class="compose-row"><textarea id="forum-reply" placeholder="Reply (Enter to send, Shift+Enter for a new line)" maxlength="8000"></textarea></div>` : `<p class="muted read-only">${ic("lock")} Only admins can reply in this channel.</p>`;
+      const t = $("#forum-reply");
+      if (t) {
+        t.focus();
+        t.addEventListener("keydown", async (e) => {
+          if (e.key !== "Enter" || e.shiftKey || e.defaultPrevented) return;
+          e.preventDefault();
+          const text = t.value.trim();
+          if (!text) return;
+          t.disabled = true;
+          try { await api("/api/send", { server: state.sel.server, channel: ch.id, text, thread: open.seq }); t.value = ""; }
+          catch (err) { toast(err.message, true); }
+          t.disabled = false;
+          t.focus();
+        });
+      }
+    } else {
+      bar.innerHTML = canPost ? `<button type="button" class="primary" id="new-post">New post</button>` : `<p class="muted read-only">${ic("lock")} Only admins can start posts in this channel.</p>`;
+      const b = $("#new-post");
+      if (b) b.onclick = () => newPostDialog(ch);
+    }
+  }
+  if (box.dataset.fkey === key && box.dataset.fview === barKey) return;
+  box.dataset.fkey = key;
+  box.dataset.fview = barKey;
+  box.replaceChildren();
+  box.dataset.stick = "";
+  if (open) {
+    const head = document.createElement("div");
+    head.className = "forum-head";
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "ghost";
+    back.textContent = "← All posts";
+    back.onclick = () => { delete forumView[ch.id]; loadMessages(); };
+    const h = document.createElement("h2");
+    h.className = "forum-title";
+    h.textContent = open.title;
+    head.append(back, h);
+    box.append(head, makeRow(open));
+    for (const m of replies.get(open.seq) || []) box.append(makeRow(m));
+    box.scrollTop = box.scrollHeight;
+    return;
+  }
+  if (!posts.length) { box.innerHTML = '<p class="muted">No posts yet. Start one with "New post". Posts made before you joined can\'t be read on this device, by design.</p>'; return; }
+  const last = (p) => Math.max(p.sent_at, ...(replies.get(p.seq) || []).map((m) => m.sent_at));
+  for (const p of [...posts].sort((a, b) => last(b) - last(a))) {
+    const rs = replies.get(p.seq) || [];
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "post-card";
+    const prof = profileOf(p.sender);
+    const t = document.createElement("b");
+    t.className = "post-title";
+    t.textContent = p.title;
+    const snip = document.createElement("span");
+    snip.className = "post-snip";
+    snip.textContent = p.body.slice(0, 160);
+    const meta = document.createElement("small");
+    meta.className = "post-meta";
+    meta.textContent = `${prof.name || p.sender} · ${rs.length === 1 ? "1 reply" : `${rs.length} replies`} · last activity ${new Date(last(p) * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`;
+    card.append(t, snip, meta);
+    card.onclick = () => { forumView[ch.id] = p.seq; loadMessages(); };
+    box.append(card);
+  }
+}
+function newPostDialog(ch) {
+  ask("New post", `<label>Title<input name="title" maxlength="120" required placeholder="What's this about?"></label>
+    <label>Post<textarea name="text" maxlength="8000" required rows="6" placeholder="Write the first message"></textarea></label>`, "Post", async (f) => {
+      await api("/api/send", { server: state.sel.server, channel: ch.id, title: f.get("title"), text: f.get("text") });
+      await loadMessages();
+    });
 }
 
 // ---------- members and status ----------
@@ -1490,7 +1589,7 @@ function channelDialog(opts = {}) {
   const { sp } = current();
   const under = opts.parent && sp.channels.find((c) => c.id === opts.parent);
   ask(under ? `New child channel of # ${under.name}` : "New channel", `<label>Name<input name="name" maxlength="64" required placeholder="raids"></label>
-    <label>Kind<select name="kind"><option value="text">Text: messages, files, reactions</option><option value="voice">Voice: calls (end-to-end encrypted)</option></select></label>
+    <label>Kind<select name="kind"><option value="text">Text: messages, files, reactions</option><option value="forum">Forum: posts with titles, each with its own replies</option><option value="announcement">Announcement: only admins post, everyone reads</option><option value="media">Media: a gallery of pictures and files</option><option value="voice">Voice: calls (end-to-end encrypted)</option></select></label>
     ${under ? "" : `<label>Category<select name="category">${catOptions(sp, opts.category)}</select></label>`}
     ${readFields(sp, null)}`, "Create", async (f) => {
     const kind = f.get("kind");

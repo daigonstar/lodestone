@@ -332,3 +332,55 @@ async fn private_channels_only_reach_the_people_on_their_list() {
     bob.sync().await.unwrap();
     assert_eq!(bodies(&bob, &secret).last().unwrap(), "alice: everyone now");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn forum_announcement_and_media_channels() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (url, setup) = start_server(tmp.path()).await;
+    let alice = Client::open(&tmp.path().join("alice"), &url).unwrap();
+    alice.register("alice", &setup, None).await.unwrap();
+    let community = alice.create_community("Guild").await.unwrap();
+    let invite = alice.create_invite(&community, 5, 3600).await.unwrap();
+    let bob = Client::open(&tmp.path().join("bob"), &url).unwrap();
+    bob.register("bob", invite["code"].as_str().unwrap(), None).await.unwrap();
+    let forum = alice.create_channel_kind(&community, "ideas", "forum").await.unwrap();
+    let news = alice.create_channel_kind(&community, "news", "announcement").await.unwrap();
+    let media = alice.create_channel_kind(&community, "screenshots", "media").await.unwrap();
+    assert!(alice.create_channel_kind(&community, "nope", "wiki").await.is_err());
+    for c in [&alice, &bob, &alice, &bob] {
+        c.sync().await.unwrap();
+    }
+    let kinds = alice.server.get(&format!("/v1/communities/{community}")).await.unwrap();
+    let kind_of = |id: &str| kinds["channels"].as_array().unwrap().iter().find(|c| c["id"] == id).map(|c| (c["kind"].as_str().unwrap().to_string(), c["post_rule"].as_str().unwrap().to_string())).unwrap();
+    assert_eq!(kind_of(&forum), ("forum".into(), "everyone".into()));
+    assert_eq!(kind_of(&news), ("announcement".into(), "admins".into()), "announcements start read-only for members");
+    assert_eq!(kind_of(&media).0, "media");
+
+    // Forum: a post has a title, a reply names its post; a reply can't be a titled post and a title is needed.
+    assert!(alice.send_post(&forum, "  ", "no title").await.is_err());
+    assert!(alice.send_reply(&forum, 0, "orphan").await.is_err());
+    let post = alice.send_post(&forum, "Raid times", "When shall we raid?").await.unwrap();
+    bob.sync().await.unwrap();
+    let reply = bob.send_reply(&forum, post.seq, "Fridays at 8").await.unwrap();
+    alice.sync().await.unwrap();
+    let seen = alice.messages(&forum, 50).unwrap();
+    assert_eq!((seen[0].title.as_deref(), seen[0].thread), (Some("Raid times"), None));
+    assert_eq!((seen[1].title.as_deref(), seen[1].thread, seen[1].seq), (None, Some(post.seq), reply.seq));
+    assert_eq!(seen[1].sender, "bob");
+    // It survives copying history to a new device.
+    let exported = alice.pair_history_for_test();
+    assert!(exported.contains("Raid times") && exported.contains("\"th\":"));
+
+    // Announcement: members read, only admins post.
+    alice.send_text(&news, "Server night is Friday").await.unwrap();
+    assert!(bob.send_text(&news, "me too?").await.is_err());
+    bob.sync().await.unwrap();
+    assert_eq!(bodies(&bob, &news), vec!["alice: Server night is Friday"]);
+
+    // Media: a file with a caption arrives for the other member.
+    let png = [&b"\x89PNG\r\n\x1a\n"[..], &[0u8; 32]].concat();
+    alice.send_file(&media, "boss.png", &png, "first clear").await.unwrap();
+    bob.sync().await.unwrap();
+    let m = &bob.messages(&media, 10).unwrap()[0];
+    assert_eq!((m.body.as_str(), m.attachment.as_ref().unwrap()["mime"].as_str()), ("first clear", Some("image/png")));
+}
