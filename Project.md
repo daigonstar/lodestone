@@ -25,7 +25,7 @@ tracked here.
 
 ## Windows parity (roadmap item 1)
 
-The Windows port lives on the `comms` branch (not yet on `main`). Audit done 2026-11-26 by reading the
+The Windows port lives on the `comms` branch. `comms` is **not merged to `main` until 0.3.0 is ready** (Robb, 2026-11-26): it is the next featured version. PR #6 (`comms` into `main`) stays open until then. Audit done 2026-11-26 by reading the
 code. Nothing below was run on Windows: this cloud session can only build for Linux, so the Windows
 changes are untested and compile-checked only by reading. Linux builds and its 62 tests pass.
 
@@ -49,8 +49,8 @@ process list, Comms plug-in install, update checks for installed programs.
 | Steam friends, achievements, RetroAchievements, ROM scanning | Low | Shared code, should work, untested on Windows |
 | Flatpak, MangoHud, Proton, umu, GOG setup in Wine | n/a | Linux only by design |
 
-Suggested order: merge `comms` to `main`; add a Windows build to CI and releases; test the Epic/GOG and
-Steam changes on a Windows PC; then the Medium items.
+Suggested order, all on `comms`: add a Windows build to CI and releases; test the Epic/GOG and Steam
+changes on a Windows PC; then the Medium items. Merge `comms` to `main` only for the 0.3.0 release.
 
 ## Releases
 
