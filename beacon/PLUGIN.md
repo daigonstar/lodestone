@@ -1,5 +1,8 @@
 # Lodestone plug-ins (draft, version 1)
 
+This is the reference for the bridge. For a guide to building a plug-in, with a working example, see
+[docs/PLUGINS.md](../docs/PLUGINS.md).
+
 A plug-in is a separate program, normally its own Flatpak with its own sandbox, that shows its interface
 inside Lodestone's window. Lodestone Beacon is the first. The design keeps the polish of one app and the
 safety of two:
