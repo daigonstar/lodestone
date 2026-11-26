@@ -6,6 +6,7 @@
   --text: #e8eaf0;
   --muted: #8a91a6;
   --accent: #7c5cff;
+  --spark: #5fd4ff;
   --danger: #ff5c6c;
   --radius: 10px;
   color-scheme: dark;
@@ -322,3 +323,14 @@ html, body { overflow: hidden; }
 
 /* "You started a game: share it?" */
 .game-offer { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 30; display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--bg-2); border: 1px solid #3ddc9788; border-radius: 12px; box-shadow: 0 10px 30px #000a; }
+
+/* Icons (the sprite is in index.html): angular line icons with one spark each, a soft glow when lit */
+.i { width: 1.2em; height: 1.2em; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: bevel; stroke-linecap: round; vertical-align: -0.25em; flex: none; }
+button .i { width: 20px; height: 20px; }
+.call-btns button .i, .stage-controls button .i { width: 22px; height: 22px; }
+.stage-controls button.active .i, .call-btns button.active .i, .stage-controls button.share-on .i { filter: drop-shadow(0 0 4px var(--spark)); }
+.srv.home .i { width: 24px; height: 24px; }
+.srv.home.on .i, .gear:hover .i, .emoji-btn:hover .i { filter: drop-shadow(0 0 5px rgba(124, 92, 255, 0.8)); }
+.leave, .vc-person .i, .danger .i { --spark: var(--danger); }
+.badge .i { width: 14px; height: 14px; }
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }

@@ -6,6 +6,8 @@ const TOKEN = new URLSearchParams(location.hash.slice(1)).get("t") || "";
 history.replaceState(null, "", location.pathname); // don't leave the secret in the address bar
 
 const $ = (s) => document.querySelector(s);
+// An icon from the sprite in index.html (angular line icons; the cyan spark comes from --spark in the CSS).
+const ic = (name) => `<svg class="i" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const state = { servers: [], bridge: false, sel: { server: "", community: "", channel: "" }, me: "", showMembers: true, profiles: {}, prefs: { theme: "lodestone", accent: "" } };
 
@@ -68,15 +70,15 @@ async function loadState() {
 // ---------- rendering ----------
 function render() {
   const all = communities();
-  $("#communities").innerHTML = `<button class="srv home ${state.home || !all.length ? "on" : ""}" id="home-btn" title="Home: join or create communities">⌂</button><div class="srv-sep"></div>` + all.map((s) => `<button class="srv ${!state.home && s.server === state.sel.server && s.id === state.sel.community ? "on" : ""}" data-community="${esc(s.id)}" data-server="${esc(s.server)}" title="${esc(s.name)}">${iconHTML(s)}</button>`).join("")
-    + `<button class="srv add" id="add-community" title="Join or create a community">+</button>`;
+  $("#communities").innerHTML = `<button class="srv home ${state.home || !all.length ? "on" : ""}" id="home-btn" title="Home: join or create communities">${ic("home")}</button><div class="srv-sep"></div>` + all.map((s) => `<button class="srv ${!state.home && s.server === state.sel.server && s.id === state.sel.community ? "on" : ""}" data-community="${esc(s.id)}" data-server="${esc(s.server)}" title="${esc(s.name)}">${iconHTML(s)}</button>`).join("")
+    + `<button class="srv add" id="add-community" title="Join or create a community">${ic("plus")}</button>`;
   const { sp, ch } = current();
   if (!sp || state.home) return renderHome();
   const admin = sp.your_role === "owner" || sp.your_role === "admin";
-  $("#channels").innerHTML = `<h2><span>${esc(sp.name)}</span><button class="gear" data-act="settings" title="Community settings">⚙</button></h2><div class="server" title="${esc(sp.server)}">${esc(sp.me)} · ${esc(sp.server.replace(/^https?:\/\//, ""))}</div>
+  $("#channels").innerHTML = `<h2><span>${esc(sp.name)}</span><button class="gear" data-act="settings" title="Community settings">${ic("settings")}</button></h2><div class="server" title="${esc(sp.server)}">${esc(sp.me)} · ${esc(sp.server.replace(/^https?:\/\//, ""))}</div>
     <div class="chlist">${sp.channels.filter((c) => c.kind !== "voice").map((c) => `<button class="ch ${c.id === state.sel.channel ? "on" : ""}" data-channel="${esc(c.id)}"># ${esc(c.name)}${c.ready ? "" : ' <span class="wait">(waiting for keys)</span>'}${mentionBadge(sp.server, c.id)}</button>`).join("")}
     ${sp.channels.some((c) => c.kind === "voice") ? '<h4 class="chhead">Voice</h4>' : ""}
-    ${sp.channels.filter((c) => c.kind === "voice").map((c) => `<button class="ch vc" data-voice="${esc(c.id)}" title="${c.ready ? "Join the call" : "Waiting for this device's keys"}">🔊 ${esc(c.name)}${c.ready ? "" : ' <span class="wait">(waiting for keys)</span>'}</button><div class="vc-people" data-vc="${esc(c.id)}"></div>`).join("")}</div>
+    ${sp.channels.filter((c) => c.kind === "voice").map((c) => `<button class="ch vc" data-voice="${esc(c.id)}" title="${c.ready ? "Join the call" : "Waiting for this device's keys"}">${ic("volume")} ${esc(c.name)}${c.ready ? "" : ' <span class="wait">(waiting for keys)</span>'}</button><div class="vc-people" data-vc="${esc(c.id)}"></div>`).join("")}</div>
     <div class="side-actions"><button data-act="invite">Invite people</button>${admin ? '<button class="ghost" data-act="channel">New channel</button>' : ""}</div>
     <div id="callbar"></div>
     ${meBar()}`;
@@ -89,10 +91,10 @@ function render() {
   const chatKey = JSON.stringify([state.sel.server, ch.id, ch.name, ch.topic || "", !!ch.ready]);
   if ($("#chat").dataset.key === chatKey && $("#msgs")) return;
   $("#chat").dataset.key = chatKey;
-  $("#chat").innerHTML = `<header><h3># ${esc(ch.name)}${ch.topic ? `<span class="topic">${esc(ch.topic)}</span>` : ""}</h3><button class="gear" id="toggle-members" title="Show or hide members">👥</button><span class="lock" title="Only members' devices can read this channel; the server stores ciphertext.">🔒 end-to-end encrypted</span></header>
+  $("#chat").innerHTML = `<header><h3># ${esc(ch.name)}${ch.topic ? `<span class="topic">${esc(ch.topic)}</span>` : ""}</h3><button class="gear" id="toggle-members" title="Show or hide members">${ic("users")}</button><span class="lock" title="Only members' devices can read this channel; the server stores ciphertext.">${ic("lock")} end-to-end encrypted</span></header>
     <div class="msgs" id="msgs"></div><button type="button" class="new-msgs hidden" id="new-msgs">New messages ↓</button>
     <div class="composer">${ch.ready
-      ? '<div id="pending" class="pending hidden"></div><div class="compose-row"><button type="button" class="emoji-btn" id="attach-btn" title="Attach a file or image (or paste / drop one)">📎</button><textarea id="text" placeholder="Message (Enter to send, Shift+Enter for a new line)" maxlength="8000"></textarea><button type="button" class="emoji-btn" id="emoji-btn" title="Emoji">😊</button></div>'
+      ? '<div id="pending" class="pending hidden"></div><div class="compose-row"><button type="button" class="emoji-btn" id="attach-btn" title="Attach a file or image (or paste / drop one)">${ic("attach")}</button><textarea id="text" placeholder="Message (Enter to send, Shift+Enter for a new line)" maxlength="8000"></textarea><button type="button" class="emoji-btn" id="emoji-btn" title="Emoji">${ic("smile")}</button></div>'
       : '<p class="muted">You\'re a member, but no one in this channel has been online to give your device its keys yet. It happens automatically.</p>'}</div>`;
   // Stick to the newest message only while you're at the bottom; pictures that finish loading keep
   // you there. Scrolled up, you stay where you are.
@@ -154,9 +156,9 @@ function renderHome() {
   renderVoice();
   $("#chat").dataset.key = "";
   $("#chat").innerHTML = `<div class="home-page">
-    <div class="test-banner"><b>🧪 Test build</b><span>This is an early test version of Lodestone Beacon for testers. Expect rough edges and missing pieces, and things may change or need resetting between builds. Messages, files, calls, cameras and screen shares are end-to-end encrypted, but please don't rely on it for anything important yet. If something breaks or feels wrong, tell whoever invited you.</span></div>
+    <div class="test-banner"><b>${ic("beacon")} Test build</b><span>This is an early test version of Lodestone Beacon for testers. Expect rough edges and missing pieces, and things may change or need resetting between builds. Messages, files, calls, cameras and screen shares are end-to-end encrypted, but please don't rely on it for anything important yet. If something breaks or feels wrong, tell whoever invited you.</span></div>
     <h1>Welcome to Beacon</h1>
-    <p class="muted">Chat, voice calls, cameras and screen sharing with your friends, on communities you or they server. Everything is encrypted on your PC; the server only passes it on.</p>
+    <p class="muted">Chat, voice calls, cameras and screen sharing with your friends, in communities on servers you or they run. Everything is encrypted on your PC; the server only passes it on.</p>
     <div class="home-cards">
       <section class="card">
         <h3>Join a community</h3>
@@ -185,8 +187,8 @@ function renderHome() {
     <h3>Getting around</h3>
     <ul class="tips">
       <li><b>Communities</b> are on the left; <b>right-click</b> one to invite people, open its settings or leave it.</li>
-      <li><b>Voice channels</b> (🔊) are calls: click one to join, and click it again to see everyone.</li>
-      <li>In a call, the bar at the bottom left has <b>mute</b>, <b>deafen</b>, <b>camera</b> 📷, <b>screen share</b> 🖥 and <b>leave</b>. ⚙ picks your microphone, speakers and camera.</li>
+      <li><b>Voice channels</b> (${ic("volume")}) are calls: click one to join, and click it again to see everyone.</li>
+      <li>In a call, the bar at the bottom left has <b>mute</b>, <b>deafen</b>, <b>camera</b> ${ic("camera")}, <b>screen share</b> ${ic("screen")} and <b>leave</b>. ${ic("settings")} picks your microphone, speakers and camera.</li>
       <li>Someone sharing their screen shows <span class="live">LIVE</span>: click it to watch.</li>
       <li>Your status, profile, look and devices are under your name at the bottom left.</li>
     </ul>
@@ -253,7 +255,7 @@ async function loadMessages() {
       add.className = "react-add";
       add.type = "button";
       add.title = "Add a reaction";
-      add.textContent = "☺+";
+      add.textContent = "+";
       add.dataset.reactAdd = m.seq;
       row.append(time, who, body, add);
       if (m.attachment) row.append(attachmentEl(m));
@@ -323,8 +325,8 @@ function renderMembers(sp) {
   const sorted = [...sp.members].sort((a, b) => rank[a.role] - rank[b.role] || a.username.localeCompare(b.username));
   const on = sorted.filter((m) => m.presence !== "offline"), off = sorted.filter((m) => m.presence === "offline");
   const row = (m) => `<div class="member ${m.presence}" title="${esc(STATUS_WORDS[m.presence] || m.presence)}${m.status_text ? " · " + esc(m.status_text) : ""}">
-      <span class="av-wrap" data-avatar-user="${esc(m.username)}">${avatarHTML(m.username)}<span class="dot ${esc(m.presence)}"></span></span><span class="grow"><span class="mline"><span class="mname" ${profileOf(m.username).color ? `style="color:${esc(profileOf(m.username).color)}"` : ""}>${esc(profileOf(m.username).name || m.username)}</span>${m.role === "owner" ? '<span class="badge" title="Owner">👑</span>' : m.role === "admin" ? '<span class="badge" title="Admin">🛡</span>' : ""}</span>
-      <small>${profileOf(m.username).name && profileOf(m.username).name !== m.username ? "@" + esc(m.username) + (m.status_text ? " · " : "") : ""}${esc(m.status_text || "")}</small>${profileOf(m.username).playing && m.presence !== "offline" ? `<small class="playing" title="Playing ${esc(profileOf(m.username).playing)}">🎮 ${esc(profileOf(m.username).playing)}</small>` : ""}</span></div>`;
+      <span class="av-wrap" data-avatar-user="${esc(m.username)}">${avatarHTML(m.username)}<span class="dot ${esc(m.presence)}"></span></span><span class="grow"><span class="mline"><span class="mname" ${profileOf(m.username).color ? `style="color:${esc(profileOf(m.username).color)}"` : ""}>${esc(profileOf(m.username).name || m.username)}</span>${m.role === "owner" ? '<span class="badge" title="Owner">' + ic("crown") + '</span>' : m.role === "admin" ? '<span class="badge" title="Admin">' + ic("shield") + '</span>' : ""}</span>
+      <small>${profileOf(m.username).name && profileOf(m.username).name !== m.username ? "@" + esc(m.username) + (m.status_text ? " · " : "") : ""}${esc(m.status_text || "")}</small>${profileOf(m.username).playing && m.presence !== "offline" ? `<small class="playing" title="Playing ${esc(profileOf(m.username).playing)}">${ic("gamepad")} ${esc(profileOf(m.username).playing)}</small>` : ""}</span></div>`;
   el.innerHTML = `<h4>Online — ${on.length}</h4>${on.map(row).join("")}<h4>Offline — ${off.length}</h4>${off.map(row).join("")}`;
 }
 document.addEventListener("click", (e) => {
@@ -565,7 +567,7 @@ function showPending() {
   const f = state.pending;
   el.classList.toggle("hidden", !f);
   if (!f) return (el.innerHTML = "");
-  el.innerHTML = `<span>📎 ${esc(f.name || "pasted image")} <small class="muted">${fmtSize(f.size)} · press Enter to send, with your message as its caption</small></span><button type="button" class="ghost" id="pending-x" title="Remove">✕</button>`;
+  el.innerHTML = `<span>📎 ${esc(f.name || "pasted image")} <small class="muted">${fmtSize(f.size)} · press Enter to send, with your message as its caption</small></span><button type="button" class="ghost" id="pending-x" title="Remove">${ic("close")}</button>`;
   $("#pending-x").onclick = () => setPending(null);
   $("#text")?.focus();
 }
@@ -596,14 +598,14 @@ function attachmentEl(m) {
     img.alt = a.name;
     img.className = "attach-img";
     img.title = `${a.name} · ${fmtSize(a.size)} · click to enlarge`;
-    fileUrl(m.seq).then((u) => (img.src = u)).catch((e) => { wrap.textContent = `⚠ ${e.message}`; });
+    fileUrl(m.seq).then((u) => (img.src = u)).catch((e) => { wrap.textContent = e.message; });
     img.onclick = () => { $("#lightbox-img").src = img.src; $("#lightbox").classList.remove("hidden"); };
     wrap.append(img);
   } else {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "attach-file";
-    b.textContent = `📄 ${a.name} · ${fmtSize(a.size)} · Save`;
+    b.textContent = `${a.name} · ${fmtSize(a.size)} · Save`;
     b.onclick = async () => {
       try {
         const link = document.createElement("a");
@@ -1116,7 +1118,7 @@ function renderVoice() {
     const people = mine ? call.participants : (ch?.in_call || []).map((u) => ({ username: u }));
     setHTML(el, people.map((p) => {
       const live = p.sharing ? (mine && !p.me ? `<button type="button" class="live ${call.watching.includes(p.slot) ? "on" : ""}" data-watch="${p.slot}" title="${call.watching.includes(p.slot) ? "Stop watching" : "Watch their screen"}">LIVE</button>` : '<span class="live" title="Sharing their screen">LIVE</span>') : "";
-      return `<div class="vc-person ${p.speaking ? "speaking" : ""}">${avatarHTML(p.username)}<span class="grow">${esc(profileOf(p.username).name || p.username)}</span>${live}${p.deafened ? '<span title="Deafened">🔇</span>' : p.muted ? '<span title="Muted" class="muted-mic">🎙</span>' : ""}</div>`;
+      return `<div class="vc-person ${p.speaking ? "speaking" : ""}">${avatarHTML(p.username)}<span class="grow">${esc(profileOf(p.username).name || p.username)}</span>${live}${p.deafened ? '<span title="Deafened">' + ic("headphones-off") + '</span>' : p.muted ? '<span title="Muted">' + ic("mic-off") + '</span>' : ""}</div>`;
     }).join(""));
     el.previousElementSibling?.classList.toggle("on", !!mine);
   }
@@ -1126,14 +1128,14 @@ function renderVoice() {
   const ch = communities().find((x) => x.server === call.server)?.channels.find((c) => c.id === call.channel);
   const trouble = voice.audio?.error;
   setHTML(bar, `<div class="callbar">
-    <div class="call-info"><b class="${call.connected ? "ok" : "wait"}">${call.connected ? "Voice connected" : "Connecting…"}</b><small title="${esc(call.server)}">🔊 ${esc(ch?.name || "call")}${call.sharing ? ` · sharing ${call.sharing.width}×${call.sharing.height}${call.sharing.sound ? " with sound" : ""}` : ""}${trouble ? ` · <span class="bad">${esc(trouble)}</span>` : ""}</small></div>
+    <div class="call-info"><b class="${call.connected ? "ok" : "wait"}">${call.connected ? "Voice connected" : "Connecting…"}</b><small title="${esc(call.server)}">${ic("volume")} ${esc(ch?.name || "call")}${call.sharing ? ` · sharing ${call.sharing.width}×${call.sharing.height}${call.sharing.sound ? " with sound" : ""}` : ""}${trouble ? ` · <span class="bad">${esc(trouble)}</span>` : ""}</small></div>
     <div class="call-btns">
-      <button type="button" data-call="mute" class="${call.muted ? "active" : ""}" title="${call.muted ? "Unmute" : "Mute"}"><span class="${call.muted ? "muted-mic" : ""}">🎙</span></button>
-      <button type="button" data-call="deafen" class="${call.deafened ? "active" : ""}" title="${call.deafened ? "Undeafen" : "Deafen (hear no one, and mute)"}">${call.deafened ? "🔇" : "🎧"}</button>
-      <button type="button" data-call="camera" class="${call.camera ? "active share-on" : ""}" title="${call.camera ? "Turn your camera off" : "Turn your camera on"}">📷</button>
-      <button type="button" data-call="share" class="${call.sharing ? "active share-on" : ""}" title="${call.sharing ? "Stop sharing your screen" : "Share your screen"}">🖥</button>
-      <button type="button" data-call="sound" title="Sound and sharing settings">⚙</button>
-      <button type="button" data-call="leave" class="leave" title="Leave the call">✕</button>
+      <button type="button" data-call="mute" class="${call.muted ? "active" : ""}" title="${call.muted ? "Unmute" : "Mute"}">${ic(call.muted ? "mic-off" : "mic")}</button>
+      <button type="button" data-call="deafen" class="${call.deafened ? "active" : ""}" title="${call.deafened ? "Undeafen" : "Deafen (hear no one, and mute)"}">${ic(call.deafened ? "headphones-off" : "headphones")}</button>
+      <button type="button" data-call="camera" class="${call.camera ? "active share-on" : ""}" title="${call.camera ? "Turn your camera off" : "Turn your camera on"}">${ic(call.camera ? "camera" : "camera-off")}</button>
+      <button type="button" data-call="share" class="${call.sharing ? "active share-on" : ""}" title="${call.sharing ? "Stop sharing your screen" : "Share your screen"}">${ic("screen")}</button>
+      <button type="button" data-call="sound" title="Sound and sharing settings">${ic("settings")}</button>
+      <button type="button" data-call="leave" class="leave" title="Leave the call">${ic("call-end")}</button>
     </div></div>`);
 }
 // Redraw only when something changed: replacing a button between press and release loses the click.
@@ -1411,7 +1413,7 @@ function renderStage() {
   const key = screens.join();
   if (stage.dataset.videos !== key || !stage.querySelector(".stage-people")) {
     stage.dataset.videos = key;
-    stage.innerHTML = `<header class="stage-head"><b>🔊 ${esc(ch?.name || "Call")}</b><span class="lock">🔒 end-to-end encrypted</span><span class="grow"></span>
+    stage.innerHTML = `<header class="stage-head"><b>${ic("volume")} ${esc(ch?.name || "Call")}</b><span class="lock">${ic("lock")} end-to-end encrypted</span><span class="grow"></span>
         <button type="button" class="ghost" data-stage="close" title="Back to the chat (you stay in the call)">Back to chat</button></header>
       ${screens.length ? `<div class="stage-grid n${Math.min(screens.length, 4)}">${screens.map((slot) => {
         const mine = slot === call.slot;
@@ -1419,8 +1421,8 @@ function renderStage() {
         return `<figure data-slot="${slot}">
         <img data-stream="s${slot}" alt="${mine ? "Preview of your screen share" : "Screen share"}">
         <figcaption><span class="live">LIVE</span> <b>${mine ? "Your screen" : p ? who(p) : "Someone"}</b>${mine ? '<small class="muted">preview: what others see, smaller</small>' : ""}<span class="grow"></span>
-          <button type="button" class="ghost" data-stage="focus" title="Fill the Beacon window (double-click the picture for full screen)">⤢</button>
-          ${mine ? '<button type="button" class="ghost" data-call="share" title="Stop sharing">Stop sharing</button>' : `<button type="button" class="ghost" data-watch="${slot}" title="Stop watching">✕</button>`}</figcaption></figure>`;
+          <button type="button" class="ghost" data-stage="focus" title="Fill the Beacon window (double-click the picture for full screen)">${ic("expand")}</button>
+          ${mine ? '<button type="button" class="ghost" data-call="share" title="Stop sharing">Stop sharing</button>' : `<button type="button" class="ghost" data-watch="${slot}" title="Stop watching">${ic("close")}</button>`}</figcaption></figure>`;
       }).join("")}</div>` : ""}
       <div class="stage-people ${screens.length ? "strip" : ""}"></div>
       <div class="stage-controls"></div>`;
@@ -1438,7 +1440,7 @@ function renderStage() {
       t.innerHTML = '<div class="tile-media"></div><div class="tile-foot"><b></b><span class="tile-state"></span></div>';
       if (!p.me) {
         // Their volume, just for you: made once per tile so refreshes never fight your dragging.
-        t.insertAdjacentHTML("beforeend", `<label class="pvol" title="${who(p)}'s volume, just for you"><span>🔊</span><input type="range" min="0" max="200" step="5" value="${p.volume ?? 100}" data-pvol="${esc(p.username)}"><output>${Math.round(p.volume ?? 100)}%</output></label>`);
+        t.insertAdjacentHTML("beforeend", `<label class="pvol" title="${who(p)}'s volume, just for you"><span>${ic("volume")}</span><input type="range" min="0" max="200" step="5" value="${p.volume ?? 100}" data-pvol="${esc(p.username)}"><output>${Math.round(p.volume ?? 100)}%</output></label>`);
       }
       people.appendChild(t);
     }
@@ -1446,19 +1448,19 @@ function renderStage() {
     t.classList.toggle("speaking", !!p.speaking);
     t.classList.toggle("has-cam", camOn);
     setHTML(t.querySelector(".tile-media"), camOn ? `<img data-stream="c${p.slot}" alt="${who(p)}'s camera">` : avatarHTML(p.username));
-    setHTML(t.querySelector("b"), `${who(p)}${p.me ? " (you)" : ""}${profileOf(p.username).playing ? `<small class="playing">🎮 ${esc(profileOf(p.username).playing)}</small>` : ""}`);
+    setHTML(t.querySelector("b"), `${who(p)}${p.me ? " (you)" : ""}${profileOf(p.username).playing ? `<small class="playing">${ic("gamepad")} ${esc(profileOf(p.username).playing)}</small>` : ""}`);
     const watching = call.watching.includes(p.slot);
     const live = p.sharing && !p.me ? `<button type="button" class="live ${watching ? "on" : ""}" data-watch="${p.slot}">${watching ? "Watching" : "Watch"}</button>` : p.sharing ? '<span class="live">LIVE</span>' : "";
-    setHTML(t.querySelector(".tile-state"), `${p.deafened ? '<span title="Deafened">🔇</span>' : p.muted ? '<span title="Muted" class="muted-mic">🎙</span>' : ""}${live}`);
+    setHTML(t.querySelector(".tile-state"), `${p.deafened ? '<span title="Deafened">' + ic("headphones-off") + '</span>' : p.muted ? '<span title="Muted">' + ic("mic-off") + '</span>' : ""}${live}`);
   }
   // The call's controls, under the tiles (same buttons as the sidebar's call bar).
   setHTML(stage.querySelector(".stage-controls"), `
-    <button type="button" data-call="mute" class="${call.muted ? "active" : ""}" title="${call.muted ? "Unmute" : "Mute"}"><span class="${call.muted ? "muted-mic" : ""}">🎙</span><small>${call.muted ? "Unmute" : "Mute"}</small></button>
-    <button type="button" data-call="deafen" class="${call.deafened ? "active" : ""}" title="${call.deafened ? "Undeafen" : "Deafen"}">${call.deafened ? "🔇" : "🎧"}<small>${call.deafened ? "Undeafen" : "Deafen"}</small></button>
-    <button type="button" data-call="camera" class="${call.camera ? "active share-on" : ""}">📷<small>${call.camera ? "Camera off" : "Camera"}</small></button>
-    <button type="button" data-call="share" class="${call.sharing ? "active share-on" : ""}">🖥<small>${call.sharing ? "Stop sharing" : "Share"}</small></button>
-    <button type="button" data-call="sound">⚙<small>Settings</small></button>
-    <button type="button" data-call="leave" class="leave">✕<small>Leave</small></button>`);
+    <button type="button" data-call="mute" class="${call.muted ? "active" : ""}" title="${call.muted ? "Unmute" : "Mute"}">${ic(call.muted ? "mic-off" : "mic")}<small>${call.muted ? "Unmute" : "Mute"}</small></button>
+    <button type="button" data-call="deafen" class="${call.deafened ? "active" : ""}" title="${call.deafened ? "Undeafen" : "Deafen"}">${ic(call.deafened ? "headphones-off" : "headphones")}<small>${call.deafened ? "Undeafen" : "Deafen"}</small></button>
+    <button type="button" data-call="camera" class="${call.camera ? "active share-on" : ""}">${ic(call.camera ? "camera" : "camera-off")}<small>${call.camera ? "Camera off" : "Camera"}</small></button>
+    <button type="button" data-call="share" class="${call.sharing ? "active share-on" : ""}">${ic("screen")}<small>${call.sharing ? "Stop sharing" : "Share"}</small></button>
+    <button type="button" data-call="sound">${ic("settings")}<small>Settings</small></button>
+    <button type="button" data-call="leave" class="leave">${ic("call-end")}<small>Leave</small></button>`);
   for (const k of keys) {
     if (!streams.has(k)) readStream(k);
     else { const u = streams.get(k).url; if (u) for (const img of document.querySelectorAll(`img[data-stream="${k}"]`)) if (!img.src) img.src = u; }
