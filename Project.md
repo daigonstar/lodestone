@@ -3,7 +3,7 @@
 What needs doing to get Lodestone to users, and where each item stands. Update this file whenever an
 item is finished or partly done.
 
-Last updated: 2026-11-26 (Beacon rename done in code)
+Last updated: 2026-11-26 (Beacon channel types merged, plug-in guide written)
 
 ## Current focus
 
@@ -20,7 +20,7 @@ tracked here.
 | # | Item | Status |
 | --- | --- | --- |
 | 1 | Windows version at the same level as the Linux version | In progress: audit done, see "Windows parity" below |
-| 2 | Write-up on how other people can make plugins for Lodestone | Not started |
+| 2 | Write-up on how other people can make plugins for Lodestone | Written: [docs/PLUGINS.md](docs/PLUGINS.md) with a runnable example and a test that plays Lodestone's part (PR into `comms`). It says plainly that Lodestone only knows Beacon today: making Lodestone's plug-in list, install and approval general (official list built in, user-added sources only in their own settings) is **not built** |
 | 3 | Convert Kiln into a plugin, released as 0.3.0 (target: mid December 2026) | Not started |
 
 ## Windows parity (roadmap item 1)
