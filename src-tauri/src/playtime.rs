@@ -10,13 +10,16 @@
 //! Lodestone shows the larger of the store's figure and its own, so time isn't counted twice when
 //! the store also saw the game run.
 
+#[cfg(not(windows))]
 use crate::model::home;
 use crate::{state, vdf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -48,8 +51,11 @@ pub fn all() -> HashMap<String, Played> {
     let mut out = HashMap::new();
     steam(&mut out);
     epic_cached(&mut out);
-    lutris(&mut out);
-    heroic(&mut out);
+    #[cfg(not(windows))]
+    {
+        lutris(&mut out);
+        heroic(&mut out);
+    }
     battlenet(&mut out);
     *CACHE.lock().unwrap() = Some((Instant::now(), out.clone()));
     out
@@ -121,6 +127,17 @@ fn parse_epic(v: &Value) -> HashMap<String, Played> {
 
 // ---------------- Battle.net ----------------
 
+/// Windows: Battle.net keeps its settings in %APPDATA%\\Battle.net.
+#[cfg(windows)]
+fn battlenet(out: &mut HashMap<String, Played>) {
+    let Some(appdata) = std::env::var_os("APPDATA") else { return };
+    if let Some(v) = fs::read_to_string(std::path::Path::new(&appdata).join("Battle.net").join("Battle.net.config")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
+        bnet_config(&v, out);
+    }
+}
+
+/// Linux: inside Battle.net's Proton prefix.
+#[cfg(not(windows))]
 fn battlenet(out: &mut HashMap<String, Played>) {
     let Ok(app) = crate::stores::winapps::find("battlenet") else { return };
     let users = crate::proton::drive_c(&app.prefix()).join("users");
@@ -135,13 +152,14 @@ fn battlenet(out: &mut HashMap<String, Played>) {
 fn bnet_config(v: &Value, out: &mut HashMap<String, Played>) {
     for (uid, g) in v["Games"].as_object().into_iter().flatten() {
         let Some(last) = g["LastPlayed"].as_str().and_then(|s| s.parse::<u64>().ok()) else { continue };
-        let code = crate::stores::bnet_agent::code_for_uid(uid);
+        let code = crate::stores::bnet_catalog::code_for_uid(uid);
         merge(out, format!("battlenet:{}", code.to_ascii_lowercase()), Played { seconds: 0, last });
     }
 }
 
 // ---------------- Lutris and Heroic ----------------
 
+#[cfg(not(windows))]
 fn lutris(out: &mut HashMap<String, Played>) {
     let h = home();
     for db in [h.join(".var/app/net.lutris.Lutris/data/lutris/pga.db"), h.join(".local/share/lutris/pga.db")] {
@@ -149,6 +167,7 @@ fn lutris(out: &mut HashMap<String, Played>) {
     }
 }
 
+#[cfg(not(windows))]
 fn lutris_db(db: &Path, out: &mut HashMap<String, Played>) {
     use rusqlite::{Connection, OpenFlags};
     let Ok(conn) = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX) else { return };
@@ -160,6 +179,7 @@ fn lutris_db(db: &Path, out: &mut HashMap<String, Played>) {
     }
 }
 
+#[cfg(not(windows))]
 fn heroic(out: &mut HashMap<String, Played>) {
     let h = home();
     for f in [h.join(".var/app/com.heroicgameslauncher.hgl/config/heroic/store/timestamp.json"), h.join(".config/heroic/store/timestamp.json")] {
@@ -169,6 +189,7 @@ fn heroic(out: &mut HashMap<String, Played>) {
     }
 }
 
+#[cfg(not(windows))]
 /// Heroic's timestamp.json: { appName: { totalPlayed (minutes), lastPlayed (ISO date) } }. App names are
 /// unique across its stores, so the same figure is offered for each store's id; only the real one exists.
 fn heroic_timestamps(v: &Value, out: &mut HashMap<String, Played>) {
@@ -180,6 +201,7 @@ fn heroic_timestamps(v: &Value, out: &mut HashMap<String, Played>) {
     }
 }
 
+#[cfg(not(windows))]
 /// "2026-11-21T10:26:36.522Z" -> unix seconds (UTC).
 fn iso_to_unix(s: &str) -> u64 {
     let n = |a: usize, b: usize| s.get(a..b).and_then(|x| x.parse::<i64>().ok());
@@ -216,11 +238,14 @@ mod tests {
         assert_eq!(out["battlenet:osi"].last, 1795292815);
         assert_eq!(out["battlenet:pro"].last, 1700000000);
 
-        let h = serde_json::json!({ "1207664593": { "lastPlayed": "2026-11-21T10:26:36.522Z", "totalPlayed": 90 } });
-        heroic_timestamps(&h, &mut out);
-        assert_eq!(out["gog:1207664593"].seconds, 5400);
-        assert_eq!(iso_to_unix("1970-01-02T00:00:00Z"), 86400);
-        assert_eq!(iso_to_unix("2023-11-14T22:13:20Z"), 1700000000);
+        #[cfg(not(windows))]
+        {
+            let h = serde_json::json!({ "1207664593": { "lastPlayed": "2026-11-21T10:26:36.522Z", "totalPlayed": 90 } });
+            heroic_timestamps(&h, &mut out);
+            assert_eq!(out["gog:1207664593"].seconds, 5400);
+            assert_eq!(iso_to_unix("1970-01-02T00:00:00Z"), 86400);
+            assert_eq!(iso_to_unix("2023-11-14T22:13:20Z"), 1700000000);
+        }
     }
 
     /// `cargo test live_playtime -- --ignored --nocapture`: totals from this PC's stores.

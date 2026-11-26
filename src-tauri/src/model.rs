@@ -99,6 +99,7 @@ pub fn path_str(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
+#[cfg(not(windows))]
 pub fn first_existing(paths: &[PathBuf]) -> Option<PathBuf> {
     paths.iter().find(|p| p.exists()).cloned()
 }

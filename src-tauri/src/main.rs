@@ -6,8 +6,14 @@ mod plugins;
 mod program_updates;
 mod downloads;
 mod friends;
+#[cfg(not(windows))]
 mod gog_setup;
+#[cfg(not(windows))]
 mod host;
+#[cfg(windows)]
+#[path = "host_windows.rs"]
+mod host;
+#[cfg(not(windows))]
 mod mangohud;
 mod playtime;
 mod gamesdb;
@@ -192,9 +198,10 @@ fn launch_game(id: String, mode: Option<String>, inner: State<'_, Shared>, app: 
         }
     }
     let spec = alt.or(kiln_spec.as_ref()).or(game.launch.as_ref()).ok_or("No launch method for this game")?;
-    let hud = inner.store.lock().unwrap().games.get(&id).and_then(|e| e.mangohud).unwrap_or_else(|| settings::load().mangohud);
+    #[cfg(not(windows))]
     let with_hud;
-    let spec = if hud {
+    #[cfg(not(windows))]
+    let spec = if inner.store.lock().unwrap().games.get(&id).and_then(|e| e.mangohud).unwrap_or_else(|| settings::load().mangohud) {
         with_hud = mangohud::apply(spec.clone());
         &with_hud
     } else {
@@ -310,13 +317,17 @@ fn open_client(store: String) -> Result<(), String> {
         let spec = app.open()?;
         return launcher::spawn(&spec, launcher::log_path(&format!("client-{}", app.id))).map(|_| ()).map_err(|e| e.to_string());
     }
+    // Windows: every launcher is one of the apps above (installed through winget).
+    #[cfg(windows)]
+    let spec: Option<LaunchSpec> = None;
+    #[cfg(not(windows))]
     let spec = match store.as_str() {
         "steam" => Some(LaunchSpec::new("steam", &[])),
         "epic" | "gog" | "amazon" => stores::heroic::open_client(),
         "minecraft" => Some(LaunchSpec::new("flatpak", &["run", "com.atlauncher.ATLauncher"])),
         _ => Some(LaunchSpec::new("flatpak", &["run", "net.lutris.Lutris"])),
-    }
-    .ok_or("That launcher isn't installed")?;
+    };
+    let spec = spec.ok_or("That launcher isn't installed")?;
     launcher::spawn(&spec, launcher::log_path(&format!("client-{store}"))).map(|_| ()).map_err(|e| e.to_string())
 }
 
@@ -358,7 +369,8 @@ async fn install_game(id: String, inner: State<'_, Shared>) -> Result<String, St
     let game = inner.games.lock().unwrap().get(&id).cloned().ok_or("Unknown game")?;
     if let Some(app) = id.strip_prefix("epic:").filter(|_| stores::epic::account().is_some() && game.install.is_none()) {
         tools::LEGENDARY.ensure().await?;
-        if !cfg!(windows) && tools::umu_path().is_none() {
+        #[cfg(not(windows))]
+        if tools::umu_path().is_none() {
             tools::install_umu().await?;
         }
         downloads::start(&id, &game.title, &stores::epic::install_cmd(app)?, None)?;
@@ -366,7 +378,8 @@ async fn install_game(id: String, inner: State<'_, Shared>) -> Result<String, St
     }
     if let Some(gid) = id.strip_prefix("gog:").filter(|_| stores::gog::account().is_some() && game.install.is_none()) {
         tools::GOGDL.ensure().await?;
-        if !cfg!(windows) && tools::umu_path().is_none() {
+        #[cfg(not(windows))]
+        if tools::umu_path().is_none() {
             tools::install_umu().await?;
         }
         let (g2, t2) = (gid.to_string(), game.title.clone());
@@ -375,6 +388,7 @@ async fn install_game(id: String, inner: State<'_, Shared>) -> Result<String, St
     }
     let mut how = "client";
     // Blizzard games: download through Battle.net's own service with its window kept hidden.
+    #[cfg(not(windows))]
     if let Some((code, tact)) = id.strip_prefix("battlenet:").filter(|_| !game.installed).and_then(stores::winapps::bnet_product) {
         let title = game.title.clone();
         let r = tauri::async_runtime::spawn_blocking(move || stores::bnet_agent::install(&code, &tact, &title)).await.map_err(|e| e.to_string())?;
@@ -776,6 +790,7 @@ fn accounts() -> serde_json::Value {
 
 /// Install DirectX/VC++ runtimes into a Proton game's prefix (shows as a download job).
 #[tauri::command]
+#[cfg(not(windows))]
 fn install_runtimes(id: String, inner: State<'_, Shared>) -> Result<(), String> {
     let game = inner.games.lock().unwrap().get(&id).cloned().ok_or("Unknown game")?;
     let pfx = game.prefix.ok_or("This game doesn't run through Lodestone's Proton")?;
@@ -783,6 +798,7 @@ fn install_runtimes(id: String, inner: State<'_, Shared>) -> Result<(), String> 
     downloads::start(&format!("runtimes-{id}"), &format!("Runtimes for {}", game.title), &spec, None)
 }
 
+#[cfg(not(windows))]
 fn have_flatpak(app_id: &str) -> bool {
     let h = model::home();
     [std::path::PathBuf::from("/var/lib/flatpak/app"), h.join(".local/share/flatpak/app")].iter().any(|b| b.join(app_id).exists())
@@ -791,22 +807,34 @@ fn have_flatpak(app_id: &str) -> bool {
 /// What the first-run guide shows: launchers and tools already on this PC.
 #[tauri::command]
 fn setup_overview() -> serde_json::Value {
-    let w = |b: &str| model::which(b).is_some();
-    serde_json::json!({
+    let kiln = kiln::command().is_some().then(|| {
+        let g = kiln::games();
+        serde_json::json!({ "supported": g.iter().filter(|x| x.installed).count(), "managed": g.iter().filter(|x| x.managed).map(|x| x.name.clone()).collect::<Vec<_>>() })
+    });
+    // Windows: Steam, Epic and GOG are set up through winget, and games run natively.
+    #[cfg(windows)]
+    return serde_json::json!({
         "done": settings::load().onboarded,
-        "steam": { "found": stores::steam::steam_id64().is_some() || w("steam") || have_flatpak("com.valvesoftware.Steam"), "account": steam_account() },
-        "heroic": have_flatpak("com.heroicgameslauncher.hgl") || w("heroic"),
-        "lutris": have_flatpak("net.lutris.Lutris") || w("lutris"),
-        "atlauncher": have_flatpak("com.atlauncher.ATLauncher") || w("atlauncher"),
-        "prism": have_flatpak("org.prismlauncher.PrismLauncher") || w("prismlauncher"),
-        "protons": tools::protons().iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
-        "umu": tools::umu_version(),
+        "steam": { "found": stores::steam::steam_id64().is_some(), "account": steam_account() },
         "games_dir": settings::games_dir().to_string_lossy(),
-        "kiln": kiln::command().is_some().then(|| {
-            let g = kiln::games();
-            serde_json::json!({ "supported": g.iter().filter(|x| x.installed).count(), "managed": g.iter().filter(|x| x.managed).map(|x| x.name.clone()).collect::<Vec<_>>() })
-        }),
-    })
+        "kiln": kiln,
+    });
+    #[cfg(not(windows))]
+    {
+        let w = |b: &str| model::which(b).is_some();
+        serde_json::json!({
+            "done": settings::load().onboarded,
+            "steam": { "found": stores::steam::steam_id64().is_some() || w("steam") || have_flatpak("com.valvesoftware.Steam"), "account": steam_account() },
+            "heroic": have_flatpak("com.heroicgameslauncher.hgl") || w("heroic"),
+            "lutris": have_flatpak("net.lutris.Lutris") || w("lutris"),
+            "atlauncher": have_flatpak("com.atlauncher.ATLauncher") || w("atlauncher"),
+            "prism": have_flatpak("org.prismlauncher.PrismLauncher") || w("prismlauncher"),
+            "protons": tools::protons().iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
+            "umu": tools::umu_version(),
+            "games_dir": settings::games_dir().to_string_lossy(),
+            "kiln": kiln,
+        })
+    }
 }
 
 #[tauri::command]
@@ -870,6 +898,7 @@ async fn downloads_status() -> Vec<downloads::Status> {
     tauri::async_runtime::spawn_blocking(|| {
         let mut v = downloads::statuses();
         v.extend(steam_bg::statuses());
+        #[cfg(not(windows))]
         v.extend(stores::bnet_agent::statuses());
         downloads::finish(&mut v);
         downloads::record(&v);
@@ -895,6 +924,7 @@ fn is_steam_job(id: &str) -> bool {
 
 #[tauri::command]
 fn download_cancel(id: String) -> Result<(), String> {
+    #[cfg(not(windows))]
     if stores::bnet_agent::is_job(&id) {
         return stores::bnet_agent::cancel(&id);
     }
@@ -907,6 +937,7 @@ fn download_cancel(id: String) -> Result<(), String> {
 
 #[tauri::command]
 fn download_dismiss(id: String) {
+    #[cfg(not(windows))]
     stores::bnet_agent::dismiss(&id);
     if is_steam_job(&id) {
         steam_bg::dismiss(&id);
@@ -1164,6 +1195,7 @@ fn mc_open_folder(instance: String, kind: String) -> Result<(), String> {
 // ---------------- Proton + Windows launchers ----------------
 
 #[tauri::command]
+#[cfg(not(windows))]
 fn proton_info() -> serde_json::Value {
     serde_json::json!({
         "umu": tools::umu_version(),
@@ -1175,43 +1207,44 @@ fn proton_info() -> serde_json::Value {
 }
 
 #[tauri::command]
+#[cfg(not(windows))]
 async fn setup_proton() -> Result<String, String> {
-    if cfg!(windows) {
-        return Err("On Windows games run natively: Proton and MangoHud are for Linux".into());
-    }
     tools::install_umu().await
 }
 
 #[tauri::command]
+#[cfg(not(windows))]
 fn mangohud_info() -> mangohud::Info {
     mangohud::info()
 }
 
 #[tauri::command]
+#[cfg(not(windows))]
 async fn setup_mangohud() -> Result<String, String> {
-    if cfg!(windows) {
-        return Err("On Windows games run natively: Proton and MangoHud are for Linux".into());
-    }
     mangohud::install().await
 }
 
 #[tauri::command]
+#[cfg(not(windows))]
 fn mangohud_config_get() -> (String, String) {
     mangohud::config_get()
 }
 
 #[tauri::command]
+#[cfg(not(windows))]
 fn mangohud_config_save(text: String) -> Result<(), String> {
     mangohud::config_save(&text)
 }
 
 #[tauri::command]
+#[cfg(not(windows))]
 fn mangohud_preview() -> Result<(), String> {
     let spec = mangohud::preview()?;
     launcher::spawn(&spec, launcher::log_path("mangohud-preview")).map(|_| ()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
+#[cfg(not(windows))]
 fn set_mangohud(on: bool) -> Result<(), String> {
     let mut s = settings::load();
     s.mangohud = on;
@@ -1219,6 +1252,7 @@ fn set_mangohud(on: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+#[cfg(not(windows))]
 fn set_proton(path: String) -> Result<(), String> {
     let mut s = settings::load();
     s.proton = path;
@@ -1498,6 +1532,7 @@ fn emu_open(id: String, inner: State<'_, Shared>) -> Result<(), String> {
 
 /// Show or hide a system's emulator in the desktop's app menu.
 #[tauri::command]
+#[cfg(not(windows))]
 async fn emu_menu_entry(system: String, index: usize, show: bool) -> Result<(), String> {
     blocking(move || stores::emulation::set_system_menu_entry(&system, index, show)).await?
 }
@@ -1575,9 +1610,12 @@ fn tracker(app: AppHandle, inner: Shared) {
 }
 
 fn main() {
+    #[cfg(not(windows))]
     host::use_host_dirs();
     state::lock_down_secrets();
+    #[cfg(not(windows))]
     gog_setup::main_hook();
+    #[cfg(not(windows))]
     stores::bnet_agent::play_hook();
     launcher::ORIGINAL_ENV.get_or_init(|| std::env::vars().collect());
     // WebKitGTK's DMA-BUF renderer shows a blank window with NVIDIA's proprietary driver. Everywhere else
@@ -1624,6 +1662,7 @@ fn main() {
             get_settings,
             startup_view,
             refresh_series,
+            #[cfg(not(windows))]
             proton_info,
             app_version,
             emu_systems,
@@ -1632,6 +1671,7 @@ fn main() {
             ra_sync,
             thumbs_sync,
             store_achievements,
+            #[cfg(not(windows))]
             emu_menu_entry,
             emu_folders,
             beacon_status,
@@ -1654,13 +1694,21 @@ fn main() {
             ra_game,
             downloads_history,
             downloads_history_clear,
+            #[cfg(not(windows))]
             mangohud_info,
+            #[cfg(not(windows))]
             setup_mangohud,
+            #[cfg(not(windows))]
             set_mangohud,
+            #[cfg(not(windows))]
             mangohud_config_get,
+            #[cfg(not(windows))]
             mangohud_config_save,
+            #[cfg(not(windows))]
             mangohud_preview,
+            #[cfg(not(windows))]
             setup_proton,
+            #[cfg(not(windows))]
             set_proton,
             winapp_status,
             winapp_setup,
@@ -1696,6 +1744,7 @@ fn main() {
             friends_owning,
             setup_overview,
             set_onboarded,
+            #[cfg(not(windows))]
             install_runtimes,
             download_cancel,
             download_dismiss,

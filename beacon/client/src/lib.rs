@@ -109,6 +109,12 @@ struct Payload {
     /// `profile`: the name colour, as #rrggbb.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     color: Option<String>,
+    /// A reply in a forum channel: the sequence number of the post it answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thread: Option<i64>,
+    /// A forum post's title (a post has a title and no `thread`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
 }
 
 /// Largest profile picture.
@@ -116,6 +122,12 @@ pub const MAX_AVATAR: usize = 256 * 1024;
 
 fn valid_color(c: &str) -> bool {
     c.len() == 7 && c.starts_with('#') && c[1..].bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// A forum post's title: 1 to 120 characters, no control characters.
+fn clean_title(t: &str) -> Option<String> {
+    let t = t.trim();
+    (!t.is_empty() && t.chars().count() <= 120 && !t.chars().any(char::is_control)).then(|| t.to_string())
 }
 
 fn clean_display_name(n: &str) -> Option<String> {
@@ -405,6 +417,29 @@ impl Client {
         Ok(())
     }
 
+    /// Before approving a waiting device: leave it your recent message history, encrypted with the pairing key `key`
+    /// (which only the QR code carries, so the server can't read it). Returns how many messages were sent.
+    pub async fn pair_send_history(&self, device_key: &str, key: &[u8; 32]) -> Result<usize> {
+        let h = self.store.export_history(300, 5 * 1024 * 1024)?;
+        let n = h["messages"].as_array().map_or(0, |m| m.len());
+        if n == 0 {
+            return Ok(0);
+        }
+        let sealed = identity::Identity::seal_bytes(h.to_string().as_bytes(), key);
+        let q: String = device_key.bytes().map(|b| if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' { (b as char).to_string() } else { format!("%{b:02X}") }).collect();
+        self.server.put_raw(&format!("/v1/pairing/history?device_key={q}"), sealed).await?;
+        Ok(n)
+    }
+
+    /// On the new device, once approved: collect the history the approving device left and add it. Returns how many
+    /// messages were added (0 when nothing was left, or it couldn't be opened).
+    pub async fn pair_fetch_history(&self, key: &[u8; 32]) -> Result<usize> {
+        let Ok((sealed, _)) = self.server.get_raw("/v1/pairing/history").await else { return Ok(0) };
+        let Some(plain) = identity::Identity::open_bytes(&sealed, key) else { return Ok(0) };
+        let Ok(h) = serde_json::from_slice::<Value>(&plain) else { return Ok(0) };
+        Ok(self.store.import_history(&h)?)
+    }
+
     /// On the new device: offer this device for a code. Returns (username, this device's fingerprint);
     /// then wait for `pair_check` to say it was approved.
     pub async fn pair_claim(&self, code: &str) -> Result<(String, String)> {
@@ -503,9 +538,34 @@ impl Client {
         self.create_channel_of(community, name, "voice").await
     }
 
+    /// Add a channel only the people in `access` (usernames of community members) and you can read. Its encrypted
+    /// group only ever gets their devices.
+    pub async fn create_private_channel(&self, community: &str, name: &str, kind: &str, access: &[String]) -> Result<String> {
+        self.create_channel_with(community, name, kind, json!({ "private": true, "access": access })).await
+    }
+
+    /// The history a new device would be sent, as text (tests only).
+    #[doc(hidden)]
+    pub fn pair_history_for_test(&self) -> String {
+        self.store.export_history(300, 5 * 1024 * 1024).map(|h| h.to_string()).unwrap_or_default()
+    }
+
+    /// Add a channel of any kind: "text", "voice", "forum", "announcement" or "media".
+    pub async fn create_channel_kind(&self, community: &str, name: &str, kind: &str) -> Result<String> {
+        self.create_channel_of(community, name, kind).await
+    }
+
     async fn create_channel_of(&self, community: &str, name: &str, kind: &str) -> Result<String> {
+        self.create_channel_with(community, name, kind, json!({})).await
+    }
+
+    async fn create_channel_with(&self, community: &str, name: &str, kind: &str, extra: Value) -> Result<String> {
         let _g = self.op.lock().await;
-        let ch = self.server.post(&format!("/v1/communities/{community}/channels"), json!({ "name": name, "kind": kind })).await?;
+        let mut body = json!({ "name": name, "kind": kind });
+        if let (Some(b), Some(e)) = (body.as_object_mut(), extra.as_object()) {
+            b.extend(e.clone());
+        }
+        let ch = self.server.post(&format!("/v1/communities/{community}/channels"), body).await?;
         let id = ch["id"].as_str().unwrap_or_default().to_string();
         self.new_group(&id, community, name)?;
         Ok(id)
@@ -541,16 +601,34 @@ impl Client {
     /// Encrypt and send a text message. Catches up with the channel first, so it goes out in the
     /// current epoch.
     pub async fn send_text(&self, channel: &str, text: &str) -> Result<Message> {
+        self.send_payload(channel, Payload { t: "text".into(), body: text.to_string(), ..Default::default() }).await
+    }
+
+    /// A new forum post: a title and a first message (a forum channel lists posts, each with its replies).
+    pub async fn send_post(&self, channel: &str, title: &str, body: &str) -> Result<Message> {
+        let title = clean_title(title).ok_or_else(|| Error::Local("A post needs a title of 1 to 120 characters".into()))?;
+        self.send_payload(channel, Payload { t: "text".into(), body: body.to_string(), title: Some(title), ..Default::default() }).await
+    }
+
+    /// A reply to a forum post (`thread` is the post's sequence number).
+    pub async fn send_reply(&self, channel: &str, thread: i64, text: &str) -> Result<Message> {
+        if thread <= 0 {
+            return Err(Error::Local("Reply to a post".into()));
+        }
+        self.send_payload(channel, Payload { t: "text".into(), body: text.to_string(), thread: Some(thread), ..Default::default() }).await
+    }
+
+    async fn send_payload(&self, channel: &str, p: Payload) -> Result<Message> {
         let _g = self.op.lock().await;
         let devices = self.community_devices_for(channel).await?;
         self.catch_up(channel, &devices).await?;
         let mut group = self.group(channel)?.ok_or_else(|| Error::Local("You aren't in this channel's encrypted group yet; someone in it has to add you (it happens automatically when they're online)".into()))?;
-        let payload = serde_json::to_vec(&Payload { t: "text".into(), body: text.to_string(), ..Default::default() }).map_err(local)?;
+        let payload = serde_json::to_vec(&p).map_err(local)?;
         let out = group.create_message(&self.provider, &self.signer, &payload).map_err(local)?;
         self.persist()?;
         let epoch = group.epoch().as_u64();
         let seq = self.server.send(channel, "application", epoch, &out.tls_serialize_detached().map_err(local)?).await?.ok_or_else(|| Error::Local("The server refused the message".into()))?;
-        let m = Message { channel: channel.into(), seq, sender: self.username().unwrap_or_default(), sender_device: self.device.clone(), body: text.into(), sent_at: now(), attachment: None };
+        let m = Message { channel: channel.into(), seq, sender: self.username().unwrap_or_default(), sender_device: self.device.clone(), body: p.body, sent_at: now(), attachment: None, thread: p.thread, title: p.title };
         // The read position isn't moved here: catching up skips our own messages, and moving it could
         // jump over someone else's message that arrived just before ours.
         self.store.add_message(&m)?;
@@ -584,7 +662,7 @@ impl Client {
         let out = group.create_message(&self.provider, &self.signer, &payload).map_err(local)?;
         self.persist()?;
         let seq = self.server.send(channel, "application", group.epoch().as_u64(), &out.tls_serialize_detached().map_err(local)?).await?.ok_or_else(|| Error::Local("The server refused the message".into()))?;
-        let m = Message { channel: channel.into(), seq, sender: self.username().unwrap_or_default(), sender_device: self.device.clone(), body: caption.into(), sent_at: now(), attachment: Some(file) };
+        let m = Message { channel: channel.into(), seq, sender: self.username().unwrap_or_default(), sender_device: self.device.clone(), body: caption.into(), sent_at: now(), attachment: Some(file), thread: None, title: None };
         // The read position isn't moved here: catching up skips our own messages, and moving it could
         // jump over someone else's message that arrived just before ours.
         self.store.add_message(&m)?;
@@ -787,7 +865,7 @@ impl Client {
         let devices = self.community_devices_for(channel).await?;
         self.catch_up(channel, &devices).await?;
         let mut group = self.group(channel)?.ok_or_else(|| Error::Local("You aren't in this channel's encrypted group yet".into()))?;
-        let payload = serde_json::to_vec(&Payload { t: "react".into(), body: emoji.into(), target: Some(target), on: Some(on), file: None, color: None }).map_err(local)?;
+        let payload = serde_json::to_vec(&Payload { t: "react".into(), body: emoji.into(), target: Some(target), on: Some(on), file: None, color: None, thread: None, title: None }).map_err(local)?;
         let out = group.create_message(&self.provider, &self.signer, &payload).map_err(local)?;
         self.persist()?;
         self.server.send(channel, "application", group.epoch().as_u64(), &out.tls_serialize_detached().map_err(local)?).await?.ok_or_else(|| Error::Local("The server refused it".into()))?;
@@ -817,11 +895,34 @@ impl Client {
         for s in me["communities"].as_array().into_iter().flatten() {
             let community_id = s["id"].as_str().unwrap_or_default();
             let community = self.server.get(&format!("/v1/communities/{community_id}")).await?;
-            let devices = devices_of(&community);
+            // Channels that have gone from your list (taken off a private channel, or it was deleted): forget their
+            // encrypted groups so a later welcome can bring you back. What you already read stays on this device.
+            let readable: Vec<&str> = community["channels"].as_array().into_iter().flatten().filter(|c| c["can_read"] != false).filter_map(|c| c["id"].as_str()).collect();
+            for (id, comm, ..) in self.store.channels()? {
+                if comm == community_id && !readable.contains(&id.as_str()) {
+                    if let Some(mut g) = self.group(&id)? {
+                        g.delete(self.provider.storage()).map_err(local)?;
+                        self.persist()?;
+                    }
+                }
+            }
             for ch in community["channels"].as_array().into_iter().flatten() {
                 let channel = ch["id"].as_str().unwrap_or_default();
-                if self.group(channel)?.is_none() {
-                    continue; // waiting for a member to add us
+                // Private channels you can't read (admins see them in the list) have no group for you.
+                if ch["can_read"] == false {
+                    continue;
+                }
+                let devices = devices_of(&community, Some(ch));
+                match self.group(channel)? {
+                    None => continue, // waiting for a member to add us
+                    // Taken out of this channel earlier (a private channel's list, say): forget the dead group
+                    // so a new welcome can bring us back in.
+                    Some(mut g) if !g.is_active() => {
+                        g.delete(self.provider.storage()).map_err(local)?;
+                        self.persist()?;
+                        continue;
+                    }
+                    Some(_) => {}
                 }
                 self.store.add_channel(channel, community_id, ch["name"].as_str().unwrap_or_default(), 0)?;
                 new.extend(self.catch_up(channel, &devices).await?);
@@ -836,7 +937,9 @@ impl Client {
     /// Device key -> username for every member of the channel's community, from the server.
     async fn community_devices_for(&self, channel: &str) -> Result<HashMap<String, String>> {
         let community = self.store.channels()?.into_iter().find(|c| c.0 == channel).map(|c| c.1).ok_or_else(|| Error::Local("Unknown channel".into()))?;
-        Ok(devices_of(&self.server.get(&format!("/v1/communities/{community}")).await?))
+        let c = self.server.get(&format!("/v1/communities/{community}")).await?;
+        let ch = c["channels"].as_array().into_iter().flatten().find(|x| x["id"] == channel).cloned();
+        Ok(devices_of(&c, ch.as_ref()))
     }
 
     async fn take_welcomes(&self) -> Result<()> {
@@ -846,6 +949,14 @@ impl Client {
             let Some(bytes) = item["body"].as_str().and_then(unb64) else { continue };
             let Ok(msg) = MlsMessageIn::tls_deserialize_exact(&bytes) else { continue };
             let MlsMessageBodyIn::Welcome(welcome) = msg.extract() else { continue };
+            // A group we were taken out of (it stops being active once we read the removal) is dead; forget it so
+            // a welcome that adds us back can be used. A live group is never replaced.
+            if let Some(mut old) = self.group(channel)? {
+                if old.is_active() {
+                    continue;
+                }
+                old.delete(self.provider.storage()).map_err(local)?;
+            }
             match StagedWelcome::new_from_welcome(&self.provider, &Self::join_config(), welcome, None).and_then(|s| s.into_group(&self.provider)) {
                 Ok(group) => {
                     // The group ID must be the channel the server delivered it for.
@@ -947,6 +1058,9 @@ impl Client {
                             f["name"] = json!(clean_file_name(f["name"].as_str().unwrap_or_default()));
                             f
                         }),
+                        // A reply names its post; a post has a title. Anything odd is shown as a plain message.
+                        thread: p.thread.filter(|t| *t > 0),
+                        title: if p.thread.is_none() { p.title.as_deref().and_then(clean_title) } else { None },
                     }),
                     Some(p) if p.t == "profile" => {
                                         // Only a verified sender's own profile is kept (names marked ⚠ don't count).
@@ -1023,6 +1137,9 @@ impl Client {
     /// whose accounts left. Any member may do this; the server's one-commit-per-epoch rule settles races.
     async fn reconcile(&self, channel: &str, devices: &HashMap<String, String>) -> Result<()> {
         let Some(mut group) = self.group(channel)? else { return Ok(()) };
+        if !group.is_active() {
+            return Ok(()); // we were taken out of this channel; the next sync forgets it
+        }
         let in_group: BTreeMap<String, LeafNodeIndex> = group.members().filter_map(|m| identity_of(&m.credential).map(|(_, d)| (d, m.index))).collect();
         let remove: Vec<LeafNodeIndex> = in_group.iter().filter(|(d, _)| !devices.contains_key(*d) && **d != self.device).map(|(_, i)| *i).collect();
         let mut users: Vec<&String> = devices.iter().filter(|(d, _)| !in_group.contains_key(*d)).map(|(_, u)| u).collect();
@@ -1087,11 +1204,16 @@ impl Client {
     }
 }
 
-/// Device key -> username for a community's members (from `GET /v1/communities/{id}`).
-fn devices_of(community: &Value) -> HashMap<String, String> {
+/// Device key -> username for the devices that belong in a channel's group: every community member's, or for a
+/// private channel only those on its list (from `GET /v1/communities/{id}`).
+fn devices_of(community: &Value, channel: Option<&Value>) -> HashMap<String, String> {
     let mut out = HashMap::new();
+    let only: Option<Vec<&str>> = channel.filter(|c| c["private"] == true).map(|c| c["access"].as_array().into_iter().flatten().filter_map(|u| u.as_str()).collect());
     for m in community["members"].as_array().into_iter().flatten() {
         let user = m["username"].as_str().unwrap_or_default();
+        if only.as_ref().is_some_and(|o| !o.contains(&user)) {
+            continue;
+        }
         for d in m["devices"].as_array().into_iter().flatten() {
             if let Some(d) = d.as_str() {
                 out.insert(d.to_string(), user.to_string());

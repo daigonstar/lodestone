@@ -3,7 +3,7 @@
 What needs doing to get Lodestone to users, and where each item stands. Update this file whenever an
 item is finished or partly done.
 
-Last updated: 2026-11-26 (first Android test app built)
+Last updated: 2026-11-26 (Android test app and PRs merged into comms)
 
 ## Current focus
 
@@ -20,7 +20,7 @@ tracked here.
 | # | Item | Status |
 | --- | --- | --- |
 | 1 | Windows version at the same level as the Linux version | In progress: audit done, see "Windows parity" below |
-| 2 | Write-up on how other people can make plugins for Lodestone | Not started |
+| 2 | Write-up on how other people can make plugins for Lodestone | Written: [docs/PLUGINS.md](docs/PLUGINS.md) with a runnable example and a test that plays Lodestone's part (PR into `comms`). It says plainly that Lodestone only knows Beacon today: making Lodestone's plug-in list, install and approval general (official list built in, user-added sources only in their own settings) is **not built** |
 | 3 | Convert Kiln into a plugin, released as 0.3.0 (target: mid December 2026) | Not started |
 
 ## Windows parity (roadmap item 1)
@@ -52,6 +52,29 @@ process list, Comms plug-in install, update checks for installed programs.
 Suggested order, all on `comms`: add a Windows build to CI and releases; test the Epic/GOG and Steam
 changes on a Windows PC; then the Medium items. Merge `comms` to `main` only for the 0.3.0 release.
 
+### Windows-only build (Robb, 2026-11-26: "100% Windows for that version")
+
+Done: the Windows build no longer contains Linux code for MangoHud, Proton and umu (Windows runs
+programs directly), GOG setup in Wine, Heroic, Lutris, ATLauncher and Prism scanning, the Flatpak host
+layer (`host_windows.rs` replaces `host.rs`), the Battle.net Proton helper, Linux play-time files, and
+the Flatpak update check. Windows has its own versions of the same calls (winget, registry, process
+snapshot). The Windows build is now compile-checked here with `cargo check --tests --target
+x86_64-pc-windows-gnu` (needs `gcc-mingw-w64-x86-64`), zero warnings. Linux: 62 tests pass.
+
+Second pass done (same day): emulators (Flatpak lookups, app-menu entries and zenity are Linux-only;
+Windows has its own folder dialog and drive-top search), Beacon launch and Kiln lookup split by system,
+Recycle Bin for uninstalls (`os::trash`), Minecraft hub folders per system (Prism's `%APPDATA%` folder
+on Windows; ATLauncher has no fixed Windows folder, so it isn't found there), Windows wording and
+placeholders in Settings and first run.
+
+Left for Robb to decide or for later:
+- `tauri.conf.json` asset scope (artwork for games on other drives): the Linux list is `$HOME`, `/mnt`,
+  `/media`. Windows needs drive globs, which let the page read any file on those drives. Not changed.
+- Minecraft hub launch on Windows (Prism's program location), Kiln on Windows (plug-in in 0.3.0).
+- Emulators keep ES-DE's Linux launch strings (`.so` core names, `%EMULATOR_*%`) as the shared table;
+  Windows converts them to `.dll` when it runs them. That is data, not Linux code.
+- Never run on Windows: only compiled (`cargo check --tests --target x86_64-pc-windows-gnu`).
+
 ## Beacon rename and rebrand (feeds roadmap item 3)
 
 Decided by Robb on 2026-11-26: the Comms plug-in becomes **Lodestone Beacon**. In its words: **server** is
@@ -71,8 +94,11 @@ look too, moving away from Discord's look. Plan and inventory: `beacon/NAMING-PL
 | Polish the welcome screen | Done in `beacon/app/ui`: slogan "Find your people. Keep it private." (Robb's pick), Beacon mark and glow, joined communities as cards on the home page, join and create cards, tips folded away, one-line test-build note. Checked only in a headless browser, not on Windows |
 | Community banners | Done: owners and admins can set a banner (PNG, JPEG, GIF or WebP, up to 512 KiB) in community settings; it shows on the community's home-page card, with a colour fallback. New server route `/v1/communities/{id}/banner` (tested), documented in PROTOCOL.md. Existing servers add the column on start-up |
 | Guided server setup | Done: "Set up your own server" opens a step-by-step page (this device or another device, who will use it, how to start it, an address check, admin account, first community). "Just me, to try it" has a **Start it for me** button that runs a Beacon server inside the app on 127.0.0.1:8080 only (data in Beacon's own folder `local-server`, voice off, comes back up when Beacon starts). Friends-over-the-internet and other-device paths show the Docker steps from the README with copy buttons; they were not run here. Tested end to end against the in-app server, including a restart |
-| Channel menus, categories, child channels, posting rules | Built on a new branch (PR into `comms`): right-click a channel for Edit, Manage permissions, New child channel, Delete; right-click a category or the empty list for New channel and New category; categories collapse; child channels (one level, under a text channel) sit indented; "Who can post" per channel (everyone or admins only, enforced by the server; members can't react in admins-only channels). Server routes tested. Checked in a headless browser with the in-app server only. **Not built yet: private channels (choose who can read), which need changes to the channel encryption groups, and drag-to-reorder of channels and categories** |
-| Identity, cross-server username, QR pairing | Built on the same branch as the channel menus (PR into `comms`): first run asks for an identity before anything else (new with a 24-word recovery phrase, restore from phrase, or link to another device); the identity's public key is recorded on each server account and the same username is offered on every server (the person can pick another if taken); "Reconnect to a server" brings a restored identity back into its account with no approval; pairing shows a QR code and text that also hands the identity to the new device, sealed with a key that stays off the server. Server, client and app tested (new tests for register, recover and the hand-over). **For the phone app:** it needs a QR scanner and the same pair/recover calls. **Not done:** history copy to new devices (waiting on Robb's choice), warning when a name shows up with a different identity, mobile app, push notifications |
+| Channel menus, categories, child channels, posting rules | Built on a new branch (PR into `comms`): right-click a channel for Edit, Manage permissions, New child channel, Delete; right-click a category or the empty list for New channel and New category; categories collapse; child channels (one level, under a text channel) sit indented; "Who can post" per channel (everyone or admins only, enforced by the server; members can't react in admins-only channels). Server routes tested. Checked in a headless browser with the in-app server only. **Not built yet: drag-to-reorder of channels and categories** |
+| Private channels | Built (PR into `comms`): when creating a channel or in Manage permissions, choose "Only chosen people" and tick members. Hidden from everyone else (admins see it dimmed so they can manage it); server refuses messages, files, welcomes, voice and live events for anyone off the list; apps only add listed people's devices to the encrypted group, so removal is enforced by keys. Taken off the list: can't read anything new, keeps what they already read. Server and client tests (including remove and add back) and a two-app headless check. **Not done:** warning to admins who aren't on the list that they can't read it, private categories, private categories |
+| Channel types: forum, announcement, media | Built (PR into `comms`), Robb chose all three. Pick the type when creating a channel. **Forum:** list of posts with titles, open one to read and reply (titles and threads are inside the encrypted message). **Announcement:** starts admins-only, members read (can't react, the server can't tell reactions from messages). **Media:** gallery of pictures and files with captions. New icons for each. Tested end-to-end (client) and in two app instances in a headless browser. **Not done:** attach a picture to a forum post or reply, edit or delete messages/posts, pinned posts, forum posts older than the last 300 messages |
+| Identity, cross-server username, QR pairing | Built on the same branch as the channel menus (PR into `comms`): first run asks for an identity before anything else (new with a 24-word recovery phrase, restore from phrase, or link to another device); the identity's public key is recorded on each server account and the same username is offered on every server (the person can pick another if taken); "Reconnect to a server" brings a restored identity back into its account with no approval; pairing shows a QR code and text that also hands the identity to the new device, sealed with a key that stays off the server. Server, client and app tested (new tests for register, recover and the hand-over). **For the phone app:** it needs a QR scanner and the same pair/recover calls. **Not done:** warning when a name shows up with a different identity, mobile app, push notifications |
+| Copy history when pairing a device | Built (PR into `comms`), Robb's choice "copy at pairing, backup later": approving a QR-paired device first uploads the last 300 messages per channel (and their reactions) encrypted with the QR key, up to 6 MiB, kept 10 minutes, collected once by the new device; failure never blocks approval. Tests: server permissions and once-only, client end-to-end. Not tested on a real phone. **Not done:** encrypted server backup for older history, no copy for hand-typed (no-QR) pairing |
 | PR #7 (plug-in installer) still uses `comms`, `comms-v` and the old Flatpak id | Needs merging with this rename before either lands |
 | Existing `comms-v*` draft releases on GitHub | Would be re-published as `beacon-v*` |
 
