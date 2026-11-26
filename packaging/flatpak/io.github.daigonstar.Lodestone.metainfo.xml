@@ -72,6 +72,16 @@
     <display_length compare="ge">768</display_length>
   </requires>
   <releases>
+    <release version="0.2.1" date="2026-11-26" type="development">
+      <description>
+        <p>Test release from the comms branch: plug-ins and the Windows build.</p>
+        <ul>
+          <li>Plug-ins page: install and update the official plug-ins (Lodestone Beacon, Kiln) from their GitHub releases, checked against GitHub's checksum</li>
+          <li>Kiln is a plug-in with an on/off switch</li>
+          <li>The Windows build no longer contains Linux-only code</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-11-25" type="development">
       <description>
         <p>The Emulation Update (beta): your ROMs as libraries in Lodestone, with achievements.</p>
