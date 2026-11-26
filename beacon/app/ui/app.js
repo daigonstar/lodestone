@@ -1393,6 +1393,8 @@ async function seeCameras(on) {
   voice.camsOn = on;
   try { await api("/api/voice/see-cameras", { on }); } catch { voice.camsOn = !on; }
 }
+// Shown around a tile while its person is talking: a ring of runes (drawn as strokes, so no font is needed) that turns slowly.
+const RUNE_RING = '<svg class="rune-ring" viewBox="0 0 130 130" aria-hidden="true"><polygon class="rr-hex-a" points="65.0,7.0 115.2,36.0 115.2,94.0 65.0,123.0 14.8,94.0 14.8,36.0"/><g class="rr-runes"><g transform="rotate(0 65 65) translate(60 5)"><path d="M2 14V0M2 4L8 1M2 8L8 5"/></g><g transform="rotate(30 65 65) translate(60 5)"><path d="M2 14V0L8 4V14"/></g><g transform="rotate(60 65 65) translate(60 5)"><path d="M2 14V0M2 3L8 6.5L2 10"/></g><g transform="rotate(90 65 65) translate(60 5)"><path d="M2 14V0M2 2L8 5M2 6L8 9"/></g><g transform="rotate(120 65 65) translate(60 5)"><path d="M2 14V0L8 3.5L2 7L8 14"/></g><g transform="rotate(150 65 65) translate(60 5)"><path d="M8 2L2 7L8 12"/></g><g transform="rotate(180 65 65) translate(60 5)"><path d="M1 1L9 13M9 1L1 13"/></g><g transform="rotate(210 65 65) translate(60 5)"><path d="M2 14V0L8 3.5L2 7"/></g><g transform="rotate(240 65 65) translate(60 5)"><path d="M2 14V0M8 14V0M2 5L8 9"/></g><g transform="rotate(270 65 65) translate(60 5)"><path d="M5 14V0M1 4L9 9"/></g><g transform="rotate(300 65 65) translate(60 5)"><path d="M5 0V14"/></g><g transform="rotate(330 65 65) translate(60 5)"><path d="M7 0L2 4L7 8L2 12"/></g></g><polygon class="rr-hex-b" points="65.0,25.0 99.6,45.0 99.6,85.0 65.0,105.0 30.4,85.0 30.4,45.0"/></svg>';
 function renderStage() {
   const stage = $("#stage");
   const call = voice.call;
@@ -1437,7 +1439,7 @@ function renderStage() {
       t = document.createElement("div");
       t.className = "tile";
       t.dataset.tile = p.slot;
-      t.innerHTML = '<div class="tile-media"></div><div class="tile-foot"><b></b><span class="tile-state"></span></div>';
+      t.innerHTML = RUNE_RING + '<div class="tile-media"></div><div class="tile-foot"><b></b><span class="tile-state"></span></div>';
       if (!p.me) {
         // Their volume, just for you: made once per tile so refreshes never fight your dragging.
         t.insertAdjacentHTML("beforeend", `<label class="pvol" title="${who(p)}'s volume, just for you"><span>${ic("volume")}</span><input type="range" min="0" max="200" step="5" value="${p.volume ?? 100}" data-pvol="${esc(p.username)}"><output>${Math.round(p.volume ?? 100)}%</output></label>`);
