@@ -8,7 +8,9 @@ name: Release builds
 
 on:
   push:
-    tags: ['*']
+    # Plug-in releases have their own workflows (kiln-release.yml) or are made by hand (scripts/release-beacon.sh);
+    # this one builds Lodestone itself, so it skips their tags.
+    tags: ['*', '!kiln-v*', '!beacon-v*']
   workflow_dispatch:
     inputs:
       tag:
