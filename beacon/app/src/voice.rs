@@ -39,8 +39,9 @@ pub struct Settings {
     /// Each person's volume in percent, by "server|username" (100 when not set).
     #[serde(default)]
     pub user_volumes: HashMap<String, f64>,
-    /// A screen share's sound: "off", "default" (what you hear on your default output; Windows: everything
-    /// except Beacon) or an output's id (its monitor on Linux). The call's own voices are never included.
+    /// A screen share's sound: "off", "default" (every app's sound except Beacon's), "app:<name>" (one
+    /// app's, Linux only) or an output's id (everything on it: its monitor on Linux, with the call removed
+    /// by echo cancelling; loopback on Windows, call included).
     #[serde(default = "default_sound")]
     pub share_sound: String,
     /// When you start a game during a call: "ask" (offer to share it; the default), "auto" (start
@@ -153,7 +154,8 @@ impl Voice {
         if !["ask", "auto", "off"].contains(&s.game_share.as_str()) {
             return Err("Unknown game sharing choice".into());
         }
-        if s.share_sound != "off" && s.share_sound != "default" && !audio::valid_device(&s.share_sound) {
+        let app_name_ok = s.share_sound.strip_prefix("app:").map(|a| !a.is_empty() && a.len() <= 512 && !a.chars().any(char::is_control));
+        if s.share_sound != "off" && s.share_sound != "default" && !app_name_ok.unwrap_or_else(|| audio::valid_device(&s.share_sound)) {
             return Err("That isn't a sound device".into());
         }
         if !audio::valid_device(&s.camera) {
@@ -623,25 +625,54 @@ pub async fn start_share(app: &Shared, source: Option<String>) -> Result<(), Str
     share.keyframe();
     *video.share.lock().unwrap() = Some(share);
     // The share's sound, if wanted. If it can't start, the picture is still shared.
-    let from = match app.voice.settings().share_sound.as_str() {
-        "off" => None,
-        "default" => Some(audio::ShareSoundFrom::Default),
-        other => Some(audio::ShareSoundFrom::Output(other.to_string())),
+    start_share_sound(app, &controls, &video);
+    client.voice_share(&channel, true).await.map_err(|e| e.to_string())
+}
+
+/// Start the share's sound as the settings say (or stop it, for "off").
+fn start_share_sound(app: &Shared, controls: &Arc<call::Controls>, video: &Video) {
+    video.share_sound.lock().unwrap().take();
+    let choice = app.voice.settings().share_sound;
+    let from = match choice.as_str() {
+        "off" => return,
+        "default" => audio::ShareSoundFrom::Default,
+        other => match other.strip_prefix("app:") {
+            Some(name) => audio::ShareSoundFrom::App(name.to_string()),
+            None => audio::ShareSoundFrom::Output(other.to_string()),
+        },
     };
-    if let Some(from) = from {
-        let ctl = controls.clone();
-        match audio::ShareSound::start(from, &app.voice.levels, move |frame| {
-            let mut q = ctl.share_sound_out.lock().unwrap();
-            while q.len() >= 10 {
-                q.pop_front();
-            }
-            q.push_back(frame);
-        }) {
-            Ok(snd) => *video.share_sound.lock().unwrap() = Some(snd),
-            Err(e) => *app.voice.levels.error_slot() = Some(format!("Sharing without sound: {e}")),
+    let ctl = controls.clone();
+    match audio::ShareSound::start(from, &app.voice.levels, move |frame| {
+        let mut q = ctl.share_sound_out.lock().unwrap();
+        while q.len() >= 10 {
+            q.pop_front();
+        }
+        q.push_back(frame);
+    }) {
+        Ok(snd) => *video.share_sound.lock().unwrap() = Some(snd),
+        Err(e) => *app.voice.levels.error_slot() = Some(format!("Sharing without sound: {e}")),
+    }
+}
+
+/// The share sound choice changed: if you're sharing, switch to it now.
+pub async fn share_sound_changed(app: &Shared) {
+    let g = app.voice.session.lock().await;
+    if let Some(s) = g.as_ref() {
+        if s.video.share.lock().unwrap().is_some() {
+            start_share_sound(app, &s.call.controls, &s.video);
         }
     }
-    client.voice_share(&channel, true).await.map_err(|e| e.to_string())
+}
+
+/// Apps playing sound now, to choose one to share (Linux only).
+#[cfg(not(windows))]
+pub async fn sound_apps() -> Vec<String> {
+    tokio::task::spawn_blocking(|| lodestone_beacon_media::appsound::apps().into_iter().map(|a| a.name).collect()).await.unwrap_or_default()
+}
+
+#[cfg(windows)]
+pub async fn sound_apps() -> Vec<String> {
+    Vec::new()
 }
 
 /// What you can share (Windows: monitors and windows; empty on Linux, where the desktop asks).

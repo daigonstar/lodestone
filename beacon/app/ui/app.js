@@ -1872,7 +1872,7 @@ async function soundDialog() {
       <option value="open" ${s.mode === "open" ? "selected" : ""}>All the time</option></select></label>
     <label>Camera<span class="row"><select name="camera" id="cam-select"><option value="${esc(s.camera || "")}">${s.camera ? "Chosen camera" : "First camera"}</option></select><button type="button" class="ghost" id="cam-find" title="Lists your cameras (your desktop may ask to allow camera access)">Find cameras</button></span></label>
     <label>Sound with your screen share<select name="share_sound">${shareSoundOpts([], s.share_sound ?? "default")}</select></label>
-    <p class="muted small">Your friends hear what you hear, but never the call itself (their own voices are taken out). Choose an output to share only what plays there, for example a DAW or game bus.</p>
+    <p class="muted small">Beacon's own sound (your friends' voices and chimes) isn't sent. On Linux you can also share just one app that's playing, such as a game or a DAW. A whole output is everything on it: on Linux the call is taken out by echo cancelling, which may not be perfect; on Windows the call is included.</p>
     <label>When I start a game during a call<select name="game_share">
       <option value="ask" ${(s.game_share || "ask") === "ask" ? "selected" : ""}>Offer to share it</option>
       <option value="auto" ${s.game_share === "auto" ? "selected" : ""}>Share it right away</option>
@@ -1897,13 +1897,13 @@ async function soundDialog() {
   form.querySelectorAll("#sound-dlg select").forEach((el) => (el.onchange = save));
   form.querySelector("[name=threshold]").oninput = save;
   form.querySelector("[name=volume]").oninput = save;
-  api("/api/voice/devices").then(({ devices }) => {
+  api("/api/voice/devices").then(({ devices, apps }) => {
     if (!$("#sound-dlg")) return;
     const mic = form.querySelector("[name=mic]"), spk = form.querySelector("[name=speakers]");
     mic.innerHTML = opts(devices, "microphone", mic.value);
     spk.innerHTML = opts(devices, "speakers", spk.value);
     const ss = form.querySelector("[name=share_sound]");
-    ss.innerHTML = shareSoundOpts(devices, ss.value);
+    ss.innerHTML = shareSoundOpts(devices, ss.value, apps || []);
   }).catch((e) => toast(e.message, true));
   $("#cam-find").onclick = async () => {
     try {
@@ -1921,14 +1921,16 @@ async function soundDialog() {
   $("#dlg").addEventListener("close", () => { if (voice.audio?.testing) api("/api/voice/test", { on: false }).catch(() => {}); setTimeout(pollVoice, 300); }, { once: true });
   pollVoice();
 }
-// Choices for a screen share's sound: off, everything you hear, or one output (Linux: its monitor;
-// Windows: that device's loopback).
-function shareSoundOpts(list, cur) {
+// Choices for a screen share's sound: off, every app but Beacon, one app (Linux), or one output
+// (Linux: its monitor; Windows: that device's loopback).
+function shareSoundOpts(list, cur, apps = []) {
   const outs = list.filter((d) => d.kind === "monitor").length ? list.filter((d) => d.kind === "monitor") : list.filter((d) => d.kind === "speakers");
   const label = (d) => d.label.replace(/^Monitor of /, "");
-  return `<option value="default" ${cur === "default" ? "selected" : ""}>Everything you hear (except the call)</option>`
+  const names = [...new Set([...apps, ...(cur.startsWith("app:") ? [cur.slice(4)] : [])])];
+  return `<option value="default" ${cur === "default" ? "selected" : ""}>All apps (never Beacon)</option>`
     + `<option value="off" ${cur === "off" ? "selected" : ""}>No sound</option>`
-    + outs.map((d) => `<option value="${esc(d.name)}" ${d.name === cur ? "selected" : ""}>Only what plays on: ${esc(label(d))}</option>`).join("")
+    + names.map((n) => `<option value="${esc("app:" + n)}" ${"app:" + n === cur ? "selected" : ""}>Only ${esc(n)}${apps.includes(n) ? "" : " (not playing now)"}</option>`).join("")
+    + outs.map((d) => `<option value="${esc(d.name)}" ${d.name === cur ? "selected" : ""}>Everything on: ${esc(label(d))}</option>`).join("")
     + (cur && cur !== "default" && cur !== "off" && !outs.some((d) => d.name === cur) ? `<option value="${esc(cur)}" selected>Chosen output</option>` : "");
 }
 function soundMeter() {

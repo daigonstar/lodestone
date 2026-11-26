@@ -557,15 +557,20 @@ fn self_probe(levels: &Levels) -> std::sync::MutexGuard<'_, String> {
 /// What a screen share's sound comes from.
 #[derive(Clone, Debug)]
 pub enum ShareSoundFrom {
-    /// Everything you hear on your default output (Linux), or everything except Beacon (Windows).
+    /// Every app's sound except Beacon's.
     Default,
+    /// One app's sound, by the name it gives the sound server (Linux only).
+    App(String),
     /// One output (its monitor on Linux; loopback of that device on Windows).
     Output(String),
 }
 
-/// Your screen share's sound: captured, the call's own voices taken out, encoded as stereo Opus
-/// (128 kbps, 20 ms frames) for the call engine, which encrypts it. Nothing is recorded or kept.
+/// Your screen share's sound: captured without the call in it, encoded as stereo Opus (128 kbps,
+/// 20 ms frames) for the call engine, which encrypts it. Nothing is recorded or kept.
 pub struct ShareSound {
+    /// Linux, sharing apps' sound: what feeds the pipeline.
+    #[cfg(not(windows))]
+    apps: Option<crate::appsound::AppCapture>,
     pipeline: gst::Pipeline,
 }
 
@@ -573,10 +578,14 @@ impl ShareSound {
     pub fn start(from: ShareSoundFrom, levels: &Levels, out: impl Fn(Vec<u8>) + Send + Sync + 'static) -> Result<Self, String> {
         gst::init().map_err(|e| format!("GStreamer didn't start: {e}"))?;
         let raw2 = format!("audio/x-raw,format=S16LE,rate={RATE},channels=2,layout=interleaved");
-        // Linux: your output's monitor, with the call's voices removed by the echo canceller (it's given
-        // the exact call sound as its reference). Windows: Windows itself leaves Beacon out.
+        // Linux, apps: each app is recorded on its own and mixed (appsound), so the call is never there.
+        // Linux, a whole output: its monitor, with the call's voices removed by the echo canceller (it's
+        // given the exact call sound as its reference). Windows: Windows itself leaves Beacon out.
         #[cfg(not(windows))]
-        let (source, clean) = {
+        let (source, clean) = if matches!(from, ShareSoundFrom::Default | ShareSoundFrom::App(_)) {
+            let _ = levels;
+            ("appsrc name=src is-live=true format=time do-timestamp=true caps=audio/x-raw,format=S16LE,rate=48000,channels=2,layout=interleaved ! audioconvert", String::new())
+        } else {
             let probe = levels.probe.lock().unwrap().clone();
             let clean = if probe.is_empty() {
                 String::new()
@@ -595,10 +604,11 @@ impl ShareSound {
         ))?;
         let src = p.by_name("src").ok_or("sound setup failed")?;
         #[cfg(not(windows))]
-        match &from {
-            ShareSoundFrom::Default => src.set_property_from_str("device", "@DEFAULT_MONITOR@"),
-            ShareSoundFrom::Output(name) if valid_device(name) => src.set_property_from_str("device", name),
-            ShareSoundFrom::Output(_) => return Err("That isn't a sound device".into()),
+        if let ShareSoundFrom::Output(name) = &from {
+            if !valid_device(name) {
+                return Err("That isn't a sound device".into());
+            }
+            src.set_property_from_str("device", name);
         }
         #[cfg(windows)]
         match &from {
@@ -608,6 +618,7 @@ impl ShareSound {
             }
             ShareSoundFrom::Output(name) if valid_device(name) => src.set_property_from_str("device", name),
             ShareSoundFrom::Output(_) => return Err("That isn't a sound device".into()),
+            ShareSoundFrom::App(_) => return Err("Windows can't share one app's sound yet".into()),
         }
         let sink = by_name::<AppSink>(&p, "out")?;
         sink.set_callbacks(
@@ -622,12 +633,40 @@ impl ShareSound {
                 .build(),
         );
         p.set_state(gst::State::Playing).map_err(|_| "Couldn't capture the sound to share".to_string())?;
-        Ok(Self { pipeline: p })
+        #[cfg(not(windows))]
+        let apps = match from {
+            ShareSoundFrom::Output(_) => None,
+            other => {
+                let only = match other {
+                    ShareSoundFrom::App(name) => Some(name),
+                    _ => None,
+                };
+                let input = by_name::<AppSrc>(&p, "src")?;
+                let capture = crate::appsound::AppCapture::start(only, move |pcm| {
+                    let _ = input.push_buffer(gst::Buffer::from_mut_slice(pcm));
+                });
+                match capture {
+                    Ok(c) => Some(c),
+                    Err(e) => {
+                        let _ = p.set_state(gst::State::Null);
+                        return Err(e);
+                    }
+                }
+            }
+        };
+        Ok(Self {
+            #[cfg(not(windows))]
+            apps,
+            pipeline: p,
+        })
     }
 }
 
 impl Drop for ShareSound {
     fn drop(&mut self) {
+        // The feed stops before what it feeds.
+        #[cfg(not(windows))]
+        self.apps.take();
         let _ = self.pipeline.set_state(gst::State::Null);
     }
 }

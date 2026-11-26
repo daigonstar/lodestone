@@ -1032,11 +1032,15 @@ async fn voice_state(State(app): State<Shared>, Json(r): Json<VoiceState>) -> R 
 
 async fn voice_devices(State(app): State<Shared>) -> R {
     let list = crate::voice::devices(&app).await.map_err(Fail)?;
-    Ok(Json(json!({ "devices": list })))
+    Ok(Json(json!({ "devices": list, "apps": crate::voice::sound_apps().await })))
 }
 
 async fn voice_settings(State(app): State<Shared>, Json(r): Json<crate::voice::Settings>) -> R {
+    let before = app.voice.settings().share_sound;
     app.voice.set_settings(r).map_err(Fail)?;
+    if app.voice.settings().share_sound != before {
+        crate::voice::share_sound_changed(&app).await;
+    }
     Ok(Json(json!({ "ok": true })))
 }
 

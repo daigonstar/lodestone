@@ -12,9 +12,9 @@
 //!   (voice gate, Opus, jitter buffer, mixing, echo cancellation) with your audio played straight back
 //!   to you, as one other person in a call would hear it. Shows the level and when the gate is open.
 //!   `--open` sends all the time instead of on voice activity; `--silent` plays into nothing.
-//! - `share-sound [seconds]`: the call's sound (silently, so the call's voices can be taken out) plus
-//!   a screen share's sound from your default output, encoded as it would be sent. Shows frames per
-//!   second. Nothing is recorded or sent.
+//! - `share-sound [seconds] [app]`: a screen share's sound (every app's but Beacon's, or just the
+//!   named one on Linux), encoded as it would be sent and played back silently. Shows the apps playing
+//!   and frames per second. Nothing is recorded or sent.
 //! - `video [seconds] [720p]`: the screen share encoder (1080p30 VP8 by default) fed a moving test
 //!   pattern, end-to-end encrypted and decrypted, then decoded into pictures as a viewer would. Shows
 //!   frame rates and sizes. Nothing is captured from your screen.
@@ -232,7 +232,7 @@ fn voice(secs: u64, mic: Option<&String>, speakers: Option<&String>, open: bool,
     Ok(())
 }
 
-fn share_sound(secs: u64) -> Result<(), String> {
+fn share_sound(secs: u64, app: Option<String>) -> Result<(), String> {
     use lodestone_beacon_media::audio::{GstAudio, Levels, Options, ShareSound, ShareSoundFrom};
     use lodestone_beacon_media::call::Audio;
     let levels = Arc::new(Levels::default());
@@ -249,12 +249,15 @@ fn share_sound(secs: u64) -> Result<(), String> {
     let (f, bytes) = (frames.clone(), Arc::new(AtomicU64::new(0)));
     let b = bytes.clone();
     let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
-    let _share = ShareSound::start(ShareSoundFrom::Default, &levels, move |frame| {
+    #[cfg(not(windows))]
+    println!("Apps playing now (Beacon left out): {:?}", lodestone_beacon_media::appsound::apps().iter().map(|a| a.name.as_str()).collect::<Vec<_>>());
+    let from = app.map_or(ShareSoundFrom::Default, ShareSoundFrom::App);
+    let _share = ShareSound::start(from, &levels, move |frame| {
         f.fetch_add(1, Ordering::Relaxed);
         b.fetch_add(frame.len() as u64, Ordering::Relaxed);
         let _ = tx.send(frame);
     })?;
-    println!("Capturing your default output's sound for {secs} s (play something to see the size grow)...");
+    println!("Capturing apps' sound for {secs} s (play something to see the size grow)...");
     let t = Instant::now();
     while t.elapsed() < Duration::from_secs(secs) {
         if let Some(call) = call.as_mut() {
@@ -416,7 +419,7 @@ async fn main() {
         #[cfg(target_os = "linux")]
         "loopback" => loopback(secs(1, 15), flag("--mic"), flag("--speakers")),
         "voice" => voice(secs(1, 15), flag("--mic"), flag("--speakers"), args.iter().any(|a| a == "--open"), args.iter().any(|a| a == "--silent")),
-        "share-sound" => share_sound(secs(1, 4)),
+        "share-sound" => share_sound(secs(1, 4), args.get(2).cloned()),
         "video" => video(secs(1, 5), args.get(2).map(String::as_str).unwrap_or("1080p")),
         #[cfg(target_os = "linux")]
         "camera" => camera(secs(1, 5)).await,

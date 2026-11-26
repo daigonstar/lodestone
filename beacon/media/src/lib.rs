@@ -4,5 +4,7 @@
 
 pub mod call;
 pub mod frames;
+#[cfg(not(windows))]
+pub mod appsound;
 pub mod audio;
 pub mod video;
