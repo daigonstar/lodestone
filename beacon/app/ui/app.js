@@ -1393,9 +1393,9 @@ async function seeCameras(on) {
   voice.camsOn = on;
   try { await api("/api/voice/see-cameras", { on }); } catch { voice.camsOn = !on; }
 }
-// Shown on the edge of a tile while its person is talking: rune strokes (drawn, so no font is needed) along all four sides.
-const RUNE_EDGE = '<div class="rune-edge" aria-hidden="true"><svg class="re re-t"><rect width="100%" height="100%" fill="url(#rune-h)"/></svg><svg class="re re-b"><rect width="100%" height="100%" fill="url(#rune-h)"/></svg><svg class="re re-l"><rect width="100%" height="100%" fill="url(#rune-v)"/></svg><svg class="re re-r"><rect width="100%" height="100%" fill="url(#rune-v)"/></svg></div>';
-// A bar under the top bar while someone in your call shares their screen and you aren't watching it.
+// Around a tile while its person is talking: a thin violet and cyan light that travels slowly round the outside of the card.
+const SPEAK_RING = '<span class="speak-ring" aria-hidden="true"></span>';
+// A thin bar at the top of the call view while someone shares their screen and you aren't watching it.
 function updateShareBanner() {
   const el = $("#stage #share-banner");
   if (!el) return;
@@ -1451,7 +1451,7 @@ function renderStage() {
       t = document.createElement("div");
       t.className = "tile";
       t.dataset.tile = p.slot;
-      t.innerHTML = RUNE_EDGE + '<div class="tile-media"></div><div class="tile-foot"><b></b><span class="tile-state"></span></div>';
+      t.innerHTML = SPEAK_RING + '<div class="tile-media"></div><div class="tile-foot"><b></b><span class="tile-state"></span></div>';
       if (!p.me) {
         // Their volume, just for you: made once per tile so refreshes never fight your dragging.
         t.insertAdjacentHTML("beforeend", `<label class="pvol" title="${who(p)}'s volume, just for you"><span>${ic("volume")}</span><input type="range" min="0" max="200" step="5" value="${p.volume ?? 100}" data-pvol="${esc(p.username)}"><output>${Math.round(p.volume ?? 100)}%</output></label>`);

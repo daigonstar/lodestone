@@ -378,28 +378,26 @@ button .i { width: 20px; height: 20px; }
 .layout:has(.stage:not(.hidden)) .callbar { display: none; }
 @media (max-width: 860px) { .layout { grid-template-columns: 180px minmax(0, 1fr) auto; } .callbar { left: calc(180px + (100vw - 180px) / 2); } }
 
-/* Speaking: runes run around the OUTSIDE of the card, in place of its outline, so nothing is drawn over a camera picture.
-   The card no longer clips its children (the runes sit outside it); the camera picture and its caption clip themselves. */
+/* Speaking: a thin violet and cyan light travels slowly around the OUTSIDE of the card, in place of its outline, so nothing is
+   drawn over a camera picture. The card no longer clips its children (the light sits outside it); the camera picture and its
+   caption clip themselves. */
+@property --spin { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
 .tile { position: relative; overflow: visible; }
 .tile.has-cam .tile-media { border-radius: calc(var(--radius) - 2px); overflow: hidden; }
 .tile.has-cam .tile-foot { border-radius: 0 0 calc(var(--radius) - 2px) calc(var(--radius) - 2px); }
-.stage-people:not(.strip) { padding: 30px; gap: 30px; }
-.stage-people.strip { padding: 26px 26px 22px; gap: 26px; }
-.rune-edge { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .25s; }
-.tile.speaking .rune-edge { opacity: 1; animation: rune-shimmer 2.2s ease-in-out infinite; }
-.rune-edge .re { position: absolute; overflow: hidden; filter: drop-shadow(0 0 3px rgba(95, 212, 255, .5)); }
-.rune-edge .re-t, .rune-edge .re-b { left: -2px; right: -2px; height: 10px; }
-.rune-edge .re-t { top: -16px; }
-.rune-edge .re-b { bottom: -16px; }
-.rune-edge .re-l, .rune-edge .re-r { top: -2px; bottom: -2px; width: 10px; }
-.rune-edge .re-l { left: -16px; }
-.rune-edge .re-r { right: -16px; }
-@keyframes rune-shimmer { 0%, 100% { opacity: .45; } 50% { opacity: .85; } }
-/* the outline is replaced by the runes */
+.stage-people:not(.strip) { padding: 24px; gap: 24px; }
+.stage-people.strip { padding: 20px 20px 16px; gap: 20px; }
+.speak-ring { position: absolute; inset: -6px; border-radius: calc(var(--radius) + 5px); padding: 2px; pointer-events: none; opacity: 0; transition: opacity .3s;
+  background: conic-gradient(from var(--spin), var(--accent), var(--spark), #b8a6ff, var(--accent));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  filter: drop-shadow(0 0 6px rgba(124, 92, 255, .7)); animation: ring-spin 5s linear infinite; }
+.tile.speaking .speak-ring { opacity: 1; }
+@keyframes ring-spin { to { --spin: 360deg; } }
+/* the outline is replaced by the light */
 .tile.speaking { border-color: transparent; box-shadow: none; }
 .vc-person.speaking .av { box-shadow: none; filter: drop-shadow(0 0 5px var(--spark)); }
 .vc-person.speaking { color: var(--text); }
-@media (prefers-reduced-motion: reduce) { .tile.speaking .rune-edge { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .speak-ring { animation: none; } }
 
 /* Someone in the call is sharing their screen: a thin bar at the top of the call view, with who and a Watch button */
 .share-banner { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 10px; padding: 5px 14px; font-size: 13px; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 22%, var(--bg-2)), color-mix(in srgb, var(--spark) 14%, var(--bg-2))); border-bottom: 1px solid color-mix(in srgb, var(--spark) 40%, var(--line)); }
