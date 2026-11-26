@@ -3,7 +3,7 @@
 What needs doing to get Lodestone to users, and where each item stands. Update this file whenever an
 item is finished or partly done.
 
-Last updated: 2026-11-26 (Beacon rename done in code)
+Last updated: 2026-11-26 (Beacon mobile plan written)
 
 ## Current focus
 
@@ -73,6 +73,20 @@ look too, moving away from Discord's look. Plan and inventory: `beacon/NAMING-PL
 | Guided server setup | Done: "Set up your own server" opens a step-by-step page (this device or another device, who will use it, how to start it, an address check, admin account, first community). "Just me, to try it" has a **Start it for me** button that runs a Beacon server inside the app on 127.0.0.1:8080 only (data in Beacon's own folder `local-server`, voice off, comes back up when Beacon starts). Friends-over-the-internet and other-device paths show the Docker steps from the README with copy buttons; they were not run here. Tested end to end against the in-app server, including a restart |
 | PR #7 (plug-in installer) still uses `comms`, `comms-v` and the old Flatpak id | Needs merging with this rename before either lands |
 | Existing `comms-v*` draft releases on GitHub | Would be re-published as `beacon-v*` |
+
+## Beacon mobile apps (Android and iOS)
+
+Robb wants Beacon on both stores, with the phone as a paired device and an authenticator for new PCs.
+Plan written 2026-11-26: `beacon/MOBILE-PLAN.md` (approaches compared, store rules, AGENTS.md conflicts, phases).
+Recommendation: Tauri 2 mobile reusing the Rust core and web UI, native Kotlin/Swift plug-ins where needed.
+
+| Item | Status |
+| --- | --- |
+| Plan and comparison | Done, waiting for Robb's choice. Nothing built |
+| Robb creates Apple (US$99/yr) and Google Play (US$25) developer accounts | Not started, Robb must do it; on the critical path |
+| Decide push notifications (no push first, or a publisher relay that needs an AGENTS.md change) | Waiting on Robb |
+| Spike: Beacon client on Android and iOS | Not started |
+| Phase 1: pairing and chat, history copy, report/block, account deletion | Not started |
 
 ## Releases
 
