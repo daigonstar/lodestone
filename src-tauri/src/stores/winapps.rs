@@ -1,7 +1,9 @@
 //! Windows-only launchers and games that Lodestone installs into its own Proton prefixes:
 //! Battle.net, the EA app and Ubisoft Connect (and the games they install), and Guild Wars 2.
+// Parts of this file are Linux-only (Proton prefixes, Flatpak); on Windows they're simply unused.
 
 use crate::model::*;
+#[allow(unused_imports)]
 use crate::proton::{self, Run};
 use serde::Serialize;
 use std::fs;
@@ -15,6 +17,7 @@ pub enum Kind {
     Game,
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 pub struct WinApp {
     pub id: &'static str,
     pub name: &'static str,
@@ -80,10 +83,43 @@ pub const APPS: &[WinApp] = &[
     },
 ];
 
-pub fn find(id: &str) -> Result<&'static WinApp, String> {
-    APPS.iter().find(|a| a.id == id).ok_or_else(|| format!("unknown app {id}"))
+/// Windows only: the stores' own launchers, which on Linux come from elsewhere (Steam natively, Epic
+/// and GOG through Heroic). Paths are their installers' defaults.
+#[cfg(windows)]
+pub const WINDOWS_LAUNCHERS: &[WinApp] = &[
+    WinApp { id: "steam", name: "Steam", store: "steam", installer_url: "", installer_file: "", installer_args: &[], exe: "Program Files (x86)/Steam/steam.exe", kind: Kind::Client, proton_store: None, game_id: "" },
+    WinApp { id: "epic", name: "Epic Games Launcher", store: "epic", installer_url: "", installer_file: "", installer_args: &[], exe: "Program Files (x86)/Epic Games/Launcher/Portal/Binaries/Win64/EpicGamesLauncher.exe", kind: Kind::Client, proton_store: None, game_id: "" },
+    WinApp { id: "gog", name: "GOG GALAXY", store: "gog", installer_url: "", installer_file: "", installer_args: &[], exe: "Program Files (x86)/GOG Galaxy/GalaxyClient.exe", kind: Kind::Client, proton_store: None, game_id: "" },
+];
+
+/// Every app Lodestone can set up: on Windows also the stores' own launchers.
+pub fn apps() -> Vec<&'static WinApp> {
+    #[allow(unused_mut)]
+    let mut v: Vec<&'static WinApp> = APPS.iter().collect();
+    #[cfg(windows)]
+    v.extend(WINDOWS_LAUNCHERS.iter());
+    v
 }
 
+/// Windows: the winget package for an app (installed from its publisher's official download).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn winget_id(id: &str) -> Option<&'static str> {
+    match id {
+        "battlenet" => Some("Blizzard.BattleNet"),
+        "ea" => Some("ElectronicArts.EADesktop"),
+        "ubisoft" => Some("Ubisoft.Connect"),
+        "steam" => Some("Valve.Steam"),
+        "epic" => Some("EpicGames.EpicGamesLauncher"),
+        "gog" => Some("GOG.Galaxy"),
+        _ => None,
+    }
+}
+
+pub fn find(id: &str) -> Result<&'static WinApp, String> {
+    apps().into_iter().find(|a| a.id == id).ok_or_else(|| format!("unknown app {id}"))
+}
+
+#[cfg(not(windows))]
 /// Wine prefixes other launchers made, where a store app may already be installed:
 /// Lutris games' prefixes, Lutris's usual ~/Games folders, and Steam's Proton prefixes (non-Steam games).
 fn foreign_prefixes() -> Vec<(PathBuf, &'static str)> {
@@ -122,6 +158,7 @@ fn foreign_prefixes() -> Vec<(PathBuf, &'static str)> {
     out
 }
 
+#[cfg(not(windows))]
 /// Where another launcher already installed this app, if Lodestone hasn't set it up itself.
 /// Checked at most every 30 seconds.
 fn foreign(app: &WinApp) -> Option<(PathBuf, &'static str)> {
@@ -139,6 +176,7 @@ fn foreign(app: &WinApp) -> Option<(PathBuf, &'static str)> {
     found
 }
 
+#[cfg(not(windows))]
 /// The app's executable is in this drive_c (the EA app after fixing its version link).
 fn app_in(app: &WinApp, drive_c: &Path) -> bool {
     if drive_c.join(app.exe).is_file() {
@@ -151,6 +189,48 @@ fn app_in(app: &WinApp, drive_c: &Path) -> bool {
     false
 }
 
+impl WinApp {
+    /// On Windows, the system drive itself.
+    #[cfg(windows)]
+    pub fn prefix(&self) -> PathBuf {
+        PathBuf::from("C:\\")
+    }
+    #[cfg(windows)]
+    pub fn found_in(&self) -> Option<&'static str> {
+        None
+    }
+    /// Windows: the program's real path ("Program Files" folders where Windows says they are).
+    #[cfg(windows)]
+    pub fn exe_path(&self) -> PathBuf {
+        let env = |k: &str, d: &str| std::env::var_os(k).map(PathBuf::from).unwrap_or_else(|| PathBuf::from(d));
+        let rel = self.exe.replace('/', "\\");
+        if let Some(r) = rel.strip_prefix("Program Files (x86)\\") {
+            env("ProgramFiles(x86)", "C:\\Program Files (x86)").join(r)
+        } else if let Some(r) = rel.strip_prefix("Program Files\\") {
+            env("ProgramFiles", "C:\\Program Files").join(r)
+        } else {
+            PathBuf::from("C:\\").join(rel)
+        }
+    }
+    #[cfg(windows)]
+    pub fn installed(&self) -> bool {
+        self.exe_path().is_file()
+    }
+    /// Windows: programs run directly.
+    #[cfg(windows)]
+    pub fn run(&self, exe: &Path, args: Vec<String>) -> Result<LaunchSpec, String> {
+        let a: Vec<&str> = args.iter().map(String::as_str).collect();
+        let mut spec = LaunchSpec::new(exe.to_string_lossy().into_owned(), &a);
+        spec.cwd = exe.parent().map(Path::to_path_buf);
+        Ok(spec)
+    }
+    #[cfg(windows)]
+    pub fn open(&self) -> Result<LaunchSpec, String> {
+        self.run(&self.exe_path(), vec![])
+    }
+}
+
+#[cfg(not(windows))]
 impl WinApp {
     /// Lodestone's own prefix, or one where Lutris or Steam already has this app installed.
     pub fn prefix(&self) -> PathBuf {
@@ -208,13 +288,33 @@ pub struct Status {
 }
 
 pub fn status() -> Vec<Status> {
-    APPS.iter()
+    apps()
+        .into_iter()
         .map(|a| Status { id: a.id, name: a.name, store: a.store, installed: a.installed(), prefix: a.prefix().to_string_lossy().into_owned(), found_in: a.found_in() })
         .collect()
 }
 
 /// Download the official installer and start it inside the app's prefix. The installer window appears.
 pub async fn setup(app: &WinApp) -> Result<LaunchSpec, String> {
+    // Windows: through winget where the app has a package; otherwise its official installer, run
+    // directly (no Proton).
+    #[cfg(windows)]
+    {
+        if let Some(id) = winget_id(app.id) {
+            return Ok(crate::winget::install_spec(id));
+        }
+        let dl = crate::state::data_dir().join("downloads");
+        fs::create_dir_all(&dl).map_err(|e| e.to_string())?;
+        let file = dl.join(app.installer_file);
+        let bytes = crate::net::client().get(app.installer_url).send().await.map_err(crate::net::err)?.error_for_status().map_err(crate::net::err)?.bytes().await.map_err(crate::net::err)?;
+        if !bytes.starts_with(b"MZ") {
+            return Err(format!("{} download wasn't a Windows installer", app.name));
+        }
+        fs::write(&file, &bytes).map_err(|e| e.to_string())?;
+        return app.run(&file, app.installer_args.iter().map(|s| s.to_string()).collect());
+    }
+    #[cfg(not(windows))]
+    {
     if crate::tools::umu_path().is_none() {
         crate::tools::install_umu().await?;
     }
@@ -229,6 +329,7 @@ pub async fn setup(app: &WinApp) -> Result<LaunchSpec, String> {
     }
     fs::write(&file, &bytes).map_err(|e| e.to_string())?;
     app.run(&file, app.installer_args.iter().map(|s| s.to_string()).collect())
+    }
 }
 
 // ---------------- Battle.net games ----------------
@@ -236,10 +337,17 @@ pub async fn setup(app: &WinApp) -> Result<LaunchSpec, String> {
 /// Start a game through Battle.net without its window: "--autostarted" is Battle.net's tray start
 /// (with AutoStartMinimized on). If Battle.net is already running, the command goes to it.
 fn bnet_play(app: &WinApp, client: &Path, exec: String) -> Result<LaunchSpec, String> {
-    let spec = app.run(client, vec![])?;
-    Ok(super::bnet_agent::play_spec(spec, client, &exec))
+    // Windows: Battle.net takes the command itself; no helper program is needed.
+    #[cfg(windows)]
+    return app.run(client, vec!["--autostarted".to_string(), exec]);
+    #[cfg(not(windows))]
+    {
+        let spec = app.run(client, vec![])?;
+        Ok(super::bnet_agent::play_spec(spec, client, &exec))
+    }
 }
 
+#[cfg(not(windows))]
 /// Battle.net settings for Play from Lodestone: start in the tray, and close once the game is running
 /// (GameLaunchWindowBehavior 2; 1 is "minimize", which some desktops can't do), without coming back
 /// when the game ends.
@@ -249,11 +357,13 @@ pub fn bnet_quiet_launches(drive_c: &Path) {
     bnet_config_set(drive_c, "RestoreWindowOnGameEnd", "false");
 }
 
+#[cfg(not(windows))]
 /// Make Battle.net's tray start ("--autostarted", what Windows uses at login) stay in the tray.
 pub fn bnet_start_minimized(drive_c: &Path) {
     bnet_config_set(drive_c, "AutoStartMinimized", "true");
 }
 
+#[cfg(not(windows))]
 /// Launch code ("OSI") and download product ("osi") of a catalog game, for background installs.
 pub fn bnet_product(code: &str) -> Option<(String, String)> {
     if let Some((uid, _, tact, _)) = bnet_catalog::WOW.iter().find(|w| w.0.eq_ignore_ascii_case(code)) {
@@ -267,6 +377,7 @@ pub fn bnet_product(code: &str) -> Option<(String, String)> {
     Some((p.code.clone(), tact.clone()))
 }
 
+#[cfg(not(windows))]
 /// Battle.net deletes its saved sign-in on exit when "Keep me logged in" was unticked (Client.AutoLogin
 /// false in Battle.net.config), so every start asks for the password again. Turn it back on before
 /// starting Battle.net; only that one setting is touched.
@@ -274,6 +385,7 @@ fn bnet_keep_signed_in(drive_c: &Path) {
     bnet_config_set(drive_c, "AutoLogin", "true");
 }
 
+#[cfg(not(windows))]
 /// Set a Client setting in Battle.net.config, leaving everything else as it is.
 fn bnet_config_set(drive_c: &Path, key: &str, value: &str) {
     let Ok(users) = fs::read_dir(drive_c.join("users")) else { return };
@@ -676,6 +788,7 @@ fn same_title(a: &str, b: &str) -> bool {
 /// The EA app installs into `EA Desktop\\<version>\\EA Desktop` and points `EA Desktop\\EA Desktop` at it with
 /// a Windows junction, which Wine leaves as a broken folder. Everything (Lodestone, the EA app's own links,
 /// games starting it for sign-in) uses the junction path, so make it a real link to the newest version.
+#[cfg(not(windows))]
 fn ea_fix_link(drive_c: &Path) {
     let base = drive_c.join("Program Files/Electronic Arts/EA Desktop");
     let Ok(rd) = fs::read_dir(&base) else { return };
@@ -706,7 +819,7 @@ fn ea_fix_link(drive_c: &Path) {
         Ok(_) => return,
         Err(_) => {}
     }
-    let _ = std::os::unix::fs::symlink(&target, &link);
+    let _ = crate::tools::link_dir(&target, &link);
 }
 
 #[derive(Debug, PartialEq)]
@@ -870,6 +983,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn keeps_battlenet_signed_in() {
         let c = std::env::temp_dir().join(format!("lodestone-bn-{}", std::process::id()));
@@ -894,6 +1008,8 @@ mod tests {
         for p in cat.values().filter(|p| p.code.eq_ignore_ascii_case("osi")) { println!("catalog OSI tact {:?}", p.tact); }
         for g in super::bnet_games(app) { println!("{} installed={} {}", g.id, g.installed, g.title); }
     }
+
+    #[cfg(unix)] // Linux behaviour (sh, Linux paths, symlinks)
 
     #[test]
     fn links_ea_app_version_folder() {
@@ -943,6 +1059,7 @@ mod tests {
 #[cfg(test)]
 mod foreign_tests {
     /// A Battle.net installed by Lutris (plain prefix) or Steam (compatdata with pfx/) is found.
+    #[cfg(unix)] // Linux behaviour (sh, Linux paths, symlinks)
     #[test]
     fn finds_store_apps_in_other_launchers_prefixes() {
         let root = std::env::temp_dir().join(format!("lodestone-foreign-{}", std::process::id()));

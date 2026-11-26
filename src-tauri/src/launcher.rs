@@ -6,7 +6,6 @@ use crate::state;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -53,11 +52,9 @@ pub fn spawn(spec: &LaunchSpec, log: PathBuf) -> std::io::Result<Child> {
         cmd.current_dir(d);
     }
     let mut cmd = crate::host::wrap(cmd);
-    cmd.stdin(Stdio::null())
-        .stdout(out.try_clone()?)
-        .stderr(out)
-        // Own process group: keeps running if Lodestone closes, and no terminal signals reach it.
-        .process_group(0);
+    cmd.stdin(Stdio::null()).stdout(out.try_clone()?).stderr(out);
+    // Detached: keeps running if Lodestone closes, and no terminal signals reach it.
+    crate::os::detach(&mut cmd);
     cmd.spawn()
 }
 
@@ -138,8 +135,18 @@ fn matches(d: &Detect, procs: &[String]) -> bool {
             let needle = format!("\0{a}\0");
             procs.iter().any(|p| p.contains(&needle))
         }
+        // Windows paths ignore case and take either slash, and stores write them differently from
+        // how Windows reports a running program (C:/Games vs c:\games): compare them the same way.
+        Detect::Contains(s) if cfg!(windows) => {
+            let needle = windows_path_key(s);
+            procs.iter().any(|p| windows_path_key(p).contains(&needle))
+        }
         Detect::Contains(s) => procs.iter().any(|p| p.contains(s.as_str())),
     }
+}
+
+fn windows_path_key(s: &str) -> String {
+    s.to_lowercase().replace('/', "\\")
 }
 
 /// Every process's command line, args separated (and wrapped) by NUL so exact-arg matching works.
@@ -162,9 +169,18 @@ pub fn process_table() -> Vec<String> {
 pub type Sessions = HashMap<String, Session>;
 
 #[cfg(test)]
+#[cfg_attr(windows, allow(unused_imports))]
 mod tests {
     use super::*;
     use crate::model::{Detect, Game, LaunchSpec};
+
+    #[test]
+    fn windows_paths_compare_without_case_or_slash_differences() {
+        assert_eq!(windows_path_key("C:/Games/Hades"), windows_path_key("c:\\GAMES\\hades"));
+        assert!(windows_path_key("\0C:\\Games\\Hades\\x64\\Hades.exe\0").contains(&windows_path_key("c:/games/hades")));
+    }
+
+    #[cfg(unix)] // Linux behaviour (sh, Linux paths, symlinks)
 
     #[test]
     fn games_dont_inherit_lodestones_cert_override() {
@@ -175,6 +191,8 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&log).unwrap().trim(), "[]");
         let _ = std::fs::remove_file(log);
     }
+
+    #[cfg(unix)] // Linux behaviour (sh, Linux paths, symlinks)
 
     #[test]
     fn spawns_detached_and_tracks_until_exit() {

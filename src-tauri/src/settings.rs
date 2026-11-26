@@ -47,6 +47,18 @@ pub struct Settings {
     /// Emulators Lodestone installs get an app menu entry (off: hidden, since you launch them here).
     #[serde(default)]
     pub emu_menu_entry: bool,
+    /// Bridge permissions you approved for each plug-in ("beacon" -> ["friends:read", ...]).
+    #[serde(default)]
+    pub plugin_permissions: std::collections::HashMap<String, Vec<String>>,
+    /// Plug-ins you switched off (Plug-ins page). A plug-in that isn't listed is on.
+    #[serde(default)]
+    pub plugins_disabled: Vec<String>,
+    /// GitHub repositories ("owner/repo") you added for third-party plug-ins. Only here, never built in.
+    #[serde(default)]
+    pub plugin_repos: Vec<String>,
+    /// Also offer pre-releases (test builds) of plug-ins on the Plug-ins page. Off unless you turn it on.
+    #[serde(default)]
+    pub plugin_test_releases: bool,
 }
 
 fn yes() -> bool {
@@ -80,11 +92,6 @@ pub fn save(s: &Settings) -> Result<(), String> {
     }
     // It holds API keys: keep it private to the user, from the moment it's created (fs::write would
     // create it readable by everyone for an instant before the permissions were tightened).
-    use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let text = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
-    let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&f).map_err(|e| e.to_string())?;
-    let _ = fs::set_permissions(&f, fs::Permissions::from_mode(0o600)); // files made before this change
-    file.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
-    Ok(())
+    crate::os::write_private(&f, text.as_bytes()).map_err(|e| e.to_string())
 }

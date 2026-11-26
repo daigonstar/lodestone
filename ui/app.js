@@ -18,6 +18,18 @@ const STORES = {
   emulation: { label: "Emulation", color: "#e0598b" },
 };
 const store = (s) => STORES[s] || { label: s, color: "#9aa0a6" };
+// Windows: games run natively and launchers come through winget (WebView2 reports Windows).
+const WIN = /Windows/.test(navigator.userAgent);
+// Lodestone's data folder on this system (~/.local/share/lodestone, or %APPDATA%\lodestone on Windows).
+invoke("data_folder").then((d) => { state.dataDir = d; document.querySelectorAll(".data-dir").forEach((el) => (el.textContent = d)); }).catch(() => {});
+// Problems in this page go to logs/ui.log on this PC (for bug reports; never sent anywhere).
+window.addEventListener("error", (e) => { try { window.__TAURI__.core.invoke("ui_error", { message: `${e.message} at ${e.filename}:${e.lineno}:${e.colno}` }); } catch {} });
+window.addEventListener("unhandledrejection", (e) => { try { window.__TAURI__.core.invoke("ui_error", { message: `unhandled: ${e.reason && (e.reason.stack || e.reason)}` }); } catch {} });
+if (WIN) {
+  document.body.classList.add("win");
+  document.querySelectorAll("[data-win-placeholder]").forEach((el) => (el.placeholder = el.dataset.winPlaceholder));
+}
+
 
 const $ = (s) => document.querySelector(s);
 const ls = {
@@ -242,6 +254,7 @@ async function load(quiet = false) {
     state.games = await invoke("list_games");
     keyCache.clear();
     try { state.systems = await invoke("emu_systems"); } catch { state.systems = []; }
+    try { state.plugins = await invoke("plugins_list"); } catch { state.plugins = []; }
     try { const st = await invoke("get_settings"); state.kilnPlay = st.kiln_play !== false; state.steamBg = st.steam_background !== false; state.mangohudAll = !!st.mangohud; state.emuMenu = !!st.emu_menu_entry; } catch { state.kilnPlay = true; state.steamBg = true; }
   } catch (e) {
     toast(String(e), true);
@@ -379,7 +392,8 @@ function renderNav() {
   const counts = {};
   for (const g of visible) if (inst(g)) counts[g.store] = (counts[g.store] || 0) + 1;
   $("#nav-stores").innerHTML = Object.keys(STORES)
-    .filter((k) => k !== "emulation" && (counts[k] || ["battlenet", "ea", "ubisoft", "arenanet"].includes(k)))
+    // Stores with a setup banner are always listed (on Windows: Steam, Epic and GOG too, installed via winget).
+    .filter((k) => k !== "emulation" && (counts[k] || ["battlenet", "ea", "ubisoft", "arenanet", ...(WIN ? ["steam", "epic", "gog"] : [])].includes(k)))
     .map((k) => `<button data-view="${k}" class="${state.view === k ? "active" : ""}"><span class="dot" style="background:${STORES[k].color}"></span>${STORES[k].label}<span class="count">${counts[k] || 0}</span></button>`)
     .join("");
   // Each emulated system is its own library.
@@ -390,6 +404,11 @@ function renderNav() {
   $("#nav-systems").innerHTML = systems
     .map((s) => `<button data-view="sys:${esc(s.id)}" class="${state.view === "sys:" + s.id ? "active" : ""}" title="${esc(s.emulators.length ? "Plays with " + s.emulators.join(", ") : "No emulator installed for this system yet")}"><span class="dot" style="background:${s.emulators.length ? STORES.emulation.color : "#5b5f6a"}"></span>${esc(s.name)}<span class="count">${sysCount[s.id]}</span></button>`)
     .join("");
+  // Plug-ins: the installed ones, then the management page.
+  const PLUGIN_VIEW = { beacon: "beacon" };
+  $("#nav-plugins").innerHTML = (state.plugins || []).filter((p) => p.installed && PLUGIN_VIEW[p.id]).map((p) =>
+    `<button data-view="${PLUGIN_VIEW[p.id]}" class="${state.view === PLUGIN_VIEW[p.id] ? "active" : ""}"><span class="dot" style="background:${p.running ? "#3ddc97" : "#5b5f6a"}"></span>${esc(p.name.replace(/^Lodestone /, ""))}</button>`).join("")
+    + `<button data-view="plugins" class="${state.view === "plugins" ? "active" : ""}"><span class="dot" style="background:transparent;border:1px solid #5b5f6a"></span>Manage plug-ins</button>`;
 }
 
 function cardHTML(g) {
@@ -453,9 +472,17 @@ function rowHTML(g) {
   </div>`;
 }
 
-const WINAPP_FOR = { battlenet: "battlenet", ea: "ea", ubisoft: "ubisoft", arenanet: "gw2" };
+const WINAPP_FOR = WIN
+  ? { battlenet: "battlenet", ea: "ea", ubisoft: "ubisoft", arenanet: "gw2", steam: "steam", epic: "epic", gog: "gog" }
+  : { battlenet: "battlenet", ea: "ea", ubisoft: "ubisoft", arenanet: "gw2" };
 // Store clients Lodestone installs into their own Proton prefix.
 const CLIENTS = {
+  steam: { name: "Steam", account: "Steam",
+    owned: "Your installed Steam games are below and start from Lodestone through Steam.", tip: "" },
+  epic: { name: "Epic Games Launcher", account: "Epic",
+    owned: "Games you install in the Epic Games Launcher show up below after a Rescan and start from Lodestone through the launcher.", tip: "" },
+  gog: { name: "GOG GALAXY", account: "GOG",
+    owned: "Games you install with GOG GALAXY show up below after a Rescan and start from Lodestone through GALAXY.", tip: "" },
   battlenet: { name: "Battle.net", account: "Blizzard",
     owned: "Your owned and free Battle.net games are below. <b>Install</b> opens Battle.net on that game's page; after it finishes, Rescan and play it from Lodestone.",
     tip: 'Tip: in Battle.net\'s settings, set "When I launch a game" to exit or minimize to tray so its window stays out of the way.' },
@@ -476,7 +503,7 @@ function renderSystemPanel(el) {
   const status = cur.installed
     ? `Your ${sys.games} ${esc(sys.name)} games play with <b>${esc(cur.label)}</b>.`
     : cur.can_install
-      ? `<b>${esc(cur.label)}</b> isn't installed yet. Install sets it up from Flathub${cur.core ? ", with its core from libretro" : ""}, in the background.`
+      ? `<b>${esc(cur.label)}</b> isn't installed yet. Install sets it up ${WIN ? "with winget, from its official download (installing accepts its licence)" : "from Flathub"}${cur.core ? ", with its core from libretro" : ""}, in the background.`
       : `<b>${esc(cur.label)}</b> isn't installed. Install ${esc(cur.emulator)} yourself, or pick another emulator.`;
   el.innerHTML = `<div><h2>${esc(sys.name)}</h2><p class="muted">${status}</p></div>
     <div class="row-btns emu-pick">
@@ -484,7 +511,8 @@ function renderSystemPanel(el) {
         <select id="emu-choice">${sys.options.map((o) => `<option value="${o.index}" ${o.index === cur.index ? "selected" : ""}>${esc(o.label)}${o.installed ? "" : " (not installed)"}</option>`).join("")}</select>
       </label>
       ${!cur.installed && cur.can_install ? `<button class="play" id="emu-install" ${busy ? "disabled" : ""}>${busy ? "Installing…" : "Install"}</button>` : ""}
-      ${!cur.installed && cur.can_install && cur.in_menu == null ? `<label class="emu-menu" title="Flatpak adds installed apps to your desktop's app menu. Leave this off to only start ${esc(cur.emulator)} from Lodestone.">
+      ${updateFor(cur.emulator) ? `<button class="ghost" data-prog-update="${esc(updateFor(cur.emulator).id)}">Update ${esc(cur.emulator)}${updateFor(cur.emulator).latest ? " to " + esc(updateFor(cur.emulator).latest) : ""}</button>` : ""}
+      ${!WIN && !cur.installed && cur.can_install && cur.in_menu == null ? `<label class="emu-menu" title="Flatpak adds installed apps to your desktop's app menu. Leave this off to only start ${esc(cur.emulator)} from Lodestone.">
         <input type="checkbox" id="emu-menu" ${state.emuMenu ? "checked" : ""}> Add to my app menu</label>` : ""}
       ${cur.in_menu != null ? `<label class="emu-menu" title="Hiding adds a copy of its menu entry marked NoDisplay to ~/.local/share/applications; showing removes it.">
         <input type="checkbox" id="emu-menu-toggle" ${cur.in_menu ? "checked" : ""}> Show ${esc(cur.emulator)} in my app menu</label>` : ""}
@@ -522,7 +550,10 @@ function renderSetup() {
   const busy = state.setupBusy === app.id;
   const c = CLIENTS[app.id];
   if (!app.installed) {
-    el.innerHTML = c
+    el.innerHTML = WIN && c
+      ? `<div><h2>Install ${c.name}</h2><p class="muted">Lodestone installs ${c.name} with winget, Windows' own package manager, from ${c.account}'s official download (winget checks it before installing). Installing accepts ${c.name}'s licence, as installing it yourself would, and Windows may ask for permission. Then sign in with your ${c.account} account, install your games there, and Rescan.</p></div>
+         <button class="play" data-winsetup="${app.id}" ${busy ? "disabled" : ""}>${busy ? "Installing…" : `Install ${c.name}`}</button>`
+      : c
       ? `<div><h2>${c.name} on Proton</h2><p class="muted">Lodestone downloads ${c.account}'s official installer and installs ${c.name} into its own Proton prefix: no Steam, Lutris or Wine setup needed. Sign in with your ${c.account} account in the window that opens, install your games there, then Rescan. The first run also downloads the Proton runtime, so it can take a few minutes.</p></div>
          <button class="play" data-winsetup="${app.id}" ${busy ? "disabled" : ""}>${busy ? "Setting up…" : `Set up ${c.name}`}</button>`
       : `<div><h2>Guild Wars 2 on Proton</h2><p class="muted">Lodestone downloads ArenaNet's official installer and runs it in its own Proton prefix. Sign in with your ArenaNet account in the game's launcher.</p></div>
@@ -530,7 +561,7 @@ function renderSetup() {
   } else {
     const from = app.found_in ? ` <b>Using the ${c.name} you installed with ${app.found_in}</b>, and the games installed there.` : "";
     el.innerHTML = `<div><h2>${c.name} is set up</h2><p class="muted">${c.owned}${from} ${c.tip}</p></div>
-      <div class="row-btns"><button class="ghost" data-winopen="${app.id}">Open ${c.name}</button><button class="play" data-click="btn-refresh">Rescan</button></div>`;
+      <div class="row-btns">${updateFor(app.name) ? `<button class="ghost" data-prog-update="${esc(updateFor(app.name).id)}">Update${updateFor(app.name).latest ? " to " + esc(updateFor(app.name).latest) : ""}</button>` : ""}<button class="ghost" data-winopen="${app.id}">Open ${c.name}</button><button class="play" data-click="btn-refresh">Rescan</button></div>`;
   }
 }
 
@@ -584,7 +615,7 @@ function detailCard() {
 }
 function placeDetail() {
   const d = $("#detail");
-  const gridView = !["home", "minecraft", "downloads"].includes(state.view) && !state.view.startsWith("shop:");
+  const gridView = !["home", "minecraft", "downloads", "beacon", "plugins"].includes(state.view) && !state.view.startsWith("shop:");
   const card = state.open && gridView ? detailCard() : null;
   if (!card) {
     if (state.open && gridView && state.selected) state.open = false;
@@ -848,7 +879,7 @@ function sortChoices() {
   const sys = state.view.startsWith("sys:");
   return SORT_LABELS.filter(([k]) => {
     if (k === "ra") return sys;
-    if (k === "protondb") return !sys && state.view !== "minecraft";
+    if (k === "protondb") return !WIN && !sys && state.view !== "minecraft";
     if (k === "store") return !sys && !STORES[state.view];
     return true;
   });
@@ -872,10 +903,30 @@ function render() {
   const shopView = state.view.startsWith("shop:");
   const home = state.view === "home";
   const dlv = state.view === "downloads";
-  const mc = state.view === "minecraft" || shopView || home || dlv;
+  const beaconView = state.view === "beacon";
+  const pluginsView = state.view === "plugins";
+  const mc = state.view === "minecraft" || shopView || home || dlv || beaconView || pluginsView;
   for (const el of ["#hero", ".grid-head", "#grid", "#setup", "#filters"]) $(el).classList.toggle("hidden", mc);
   $("#home").classList.toggle("hidden", !home);
   $("#dlv").classList.toggle("hidden", !dlv);
+  $("#beacon").classList.toggle("hidden", !beaconView);
+  $("#plugins").classList.toggle("hidden", !pluginsView);
+  // Opening Plug-ins looks up the latest Beacon release (only then: never in the background).
+  if (pluginsView && render.prevView !== "plugins") { checkBeaconRelease(); checkPluginReleases(); }
+  render.prevView = state.view;
+  if (pluginsView) {
+    for (const el of ["#empty", "#mini", "#mc", "#shop", "#downloads"]) $(el).classList.add("hidden");
+    shopHide();
+    renderPluginsPage();
+    return;
+  }
+  document.querySelector("main").classList.toggle("beacon-open", beaconView);
+  if (beaconView) {
+    for (const el of ["#empty", "#mini", "#mc", "#shop", "#downloads"]) $(el).classList.add("hidden");
+    shopHide();
+    openBeacon();
+    return;
+  }
   $("#downloads").classList.toggle("hidden", dlv);
   if (mc) $("#about").classList.add("hidden");
   if (dlv) {
@@ -920,7 +971,7 @@ function render() {
 async function winSetup(id) {
   state.setupBusy = id;
   renderSetup();
-  toast("Downloading the official installer (and Proton tools on first use)…");
+  toast(WIN ? "Installing with winget, from the official download…" : "Downloading the official installer (and Proton tools on first use)…");
   try {
     await invoke("winapp_setup", { id });
     toast("Installer is starting. Follow it in its window; this can take a minute on first run.");
@@ -1232,6 +1283,7 @@ $("#ws-list").onclick = (e) => {
 
 // ---------- settings ----------
 async function renderProton() {
+  if (WIN) return; // Windows games run natively: no Proton
   const p = await invoke("proton_info");
   document.querySelectorAll(".umu-status").forEach((el) => (el.textContent = p.umu ? `Proton runner ready (umu-launcher ${p.umu})` : "Proton runner not set up yet"));
   document.querySelectorAll(".umu-setup").forEach((el) => { el.textContent = p.umu ? "Update" : "Set up Proton"; el.disabled = false; });
@@ -1269,6 +1321,7 @@ const onStoreOrderClick = (e) => {
 document.querySelectorAll(".store-order").forEach((el) => (el.onclick = onStoreOrderClick));
 $("#steam-bg").onchange = async (e) => { await invoke("set_steam_background", { on: e.target.checked }); state.steamBg = e.target.checked; };
 async function renderMangohud() {
+  if (WIN) return; // MangoHud is for Linux
   const m = await invoke("mangohud_info");
   $("#mh-status").textContent = m.installed === "system" ? "MangoHud is installed on your system" : m.installed ? `MangoHud ${m.installed} is set up` : "MangoHud isn't set up yet";
   $("#mh-setup").textContent = m.installed === "system" ? "Installed" : m.installed ? "Update" : "Set up MangoHud";
@@ -1586,7 +1639,7 @@ async function menuAction(act) {
     if (act === "uninstall") {
       const own = g.via.startsWith("Lodestone") || (g.store === "steam" && state.steamBg);
       const msg = g.store === "gog" ? `Uninstall ${g.title}? Its folder goes to the trash.`
-        : g.store === "steam" ? `Uninstall ${g.title}? Its game files are deleted. Saves in Steam Cloud and its Proton prefix are kept.`
+        : g.store === "steam" ? `Uninstall ${g.title}? Its game files are deleted. Saves in Steam Cloud${WIN ? "" : " and its Proton prefix"} are kept.`
         : `Uninstall ${g.title}? Its files are deleted.`;
       if (own && !confirm(msg)) return;
       const how = await invoke("uninstall_game", { id: g.id });
@@ -1602,6 +1655,216 @@ async function menuAction(act) {
   } catch (e) {
     toast(String(e), true);
   }
+}
+
+// ---------- Lodestone Beacon (a plug-in: its own program, shown in a frame) ----------
+// The frame shows a page Beacon serves on 127.0.0.1. It can't use Lodestone's commands; Beacon only reaches
+// Lodestone through the bridge, for the permissions you approve here.
+async function openBeacon() {
+  const msg = $("#beacon-msg"), frame = $("#beacon-frame");
+  if (frame.src && !frame.classList.contains("hidden")) return;
+  msg.innerHTML = '<p class="muted">Starting Lodestone Beacon…</p>';
+  try {
+    let st = await invoke("beacon_status");
+    if (!st.installed) {
+      msg.innerHTML = `<div class="beacon-intro"><h2>Lodestone Beacon</h2>
+        <p>Text chat with your friends on servers you host yourselves, end-to-end encrypted. It's a separate program with its own sandbox: it can't see your store sign-ins, and it only gets what you allow below.</p>
+        <p class="muted">Beacon isn't installed yet. It's in early development.</p>
+        <p><button class="play" id="beacon-install">Install Beacon</button></p>
+        <p class="muted small">Downloaded from Lodestone's official releases on GitHub and checked against GitHub's published checksum before it's installed.</p></div>`;
+      $("#beacon-install").onclick = async (e) => {
+        const b = e.currentTarget;
+        b.disabled = true;
+        b.textContent = "Downloading and checking…";
+        try { const v = await invoke("beacon_install"); toast(`Beacon ${v} is installed.`); openBeacon(); refreshPlugins(); }
+        catch (err) { b.disabled = false; b.textContent = "Install Beacon"; toast(String(err), true); }
+      };
+      return;
+    }
+    st = await invoke("beacon_start");
+    if (st.needs_approval) return askBeaconPermissions(st);
+    showBeacon(st);
+  } catch (e) { msg.innerHTML = `<p class="err-text">${esc(String(e))}</p>`; }
+}
+function askBeaconPermissions(st) {
+  $("#beacon-msg").innerHTML = `<div class="beacon-intro"><h2>Allow Lodestone Beacon?</h2>
+    <p>Beacon ${esc(st.version || "")} runs as its own program and can't see your store sign-ins, keys or files. It asks Lodestone for:</p>
+    <ul>${st.requested.map(([, d]) => `<li>${esc(d)}</li>`).join("")}</ul>
+    <p class="muted">You can take this back in Settings → Plug-ins.</p>
+    <div class="row-btns"><button class="play" id="beacon-allow">Allow</button><button class="ghost" data-view="home">Not now</button></div></div>`;
+  $("#beacon-allow").onclick = async () => {
+    try { showBeacon(await invoke("beacon_approve", { permissions: st.requested.map(([p]) => p) })); } catch (e) { toast(String(e), true); }
+  };
+}
+function showBeacon(st) {
+  if (!st.ui) return ($("#beacon-msg").innerHTML = '<p class="err-text">Lodestone Beacon didn\'t start. Its log is lodestone-beacon.log in the logs folder of ' + esc(state.dataDir || "Lodestone's data folder") + '.</p>');
+  $("#beacon-msg").innerHTML = "";
+  const frame = $("#beacon-frame");
+  frame.classList.remove("hidden");
+  if (frame.src !== st.ui) frame.src = st.ui;
+  // Lodestone's colours, so Beacon matches.
+  const cs = getComputedStyle(document.documentElement);
+  const vars = Object.fromEntries(["--bg", "--bg-2", "--bg-3", "--line", "--text", "--muted", "--accent", "--danger"].map((k) => [k, cs.getPropertyValue(k).trim()]));
+  invoke("beacon_theme", { vars }).catch(() => {});
+}
+if (T) {
+  T.event.listen("beacon-ready", () => refreshPlugins());
+  T.event.listen("beacon-stopped", () => {
+    refreshPlugins(); const f = $("#beacon-frame"); f.removeAttribute("src"); f.classList.add("hidden"); if (state.view === "beacon") openBeacon(); });
+  // Beacon asked to invite a friend: copy the invite (Lodestone opened their Steam chat) and say so.
+  T.event.listen("beacon-open-chat", async (e) => {
+    const { store, id, text } = e.payload || {};
+    try { await navigator.clipboard.writeText(text); } catch { return toast("Couldn't copy the invite to the clipboard", true); }
+    toast(store === "steam" ? "Invite copied: paste it into the Steam chat that just opened." : "Invite copied: send it to your friend.");
+  });
+}
+
+// ---------- Plug-ins page ----------
+async function refreshPlugins() {
+  try { state.plugins = await invoke("plugins_list"); } catch (e) { toast(String(e), true); }
+  renderNav();
+  if (state.view === "plugins") renderPluginsPage();
+}
+function renderPluginsPage() {
+  const list = state.plugins || [];
+  $("#plugins-list").innerHTML = list.map((p) => {
+    const companion = p.kind === "companion";
+    const status = !p.installed ? "Not installed" : companion ? (p.enabled ? "Installed · on" : "Installed · off") : p.running ? `Running${p.version ? " · version " + esc(p.version) : ""}` : "Installed · not running";
+    const perms = p.permissions.map(([id, words, granted]) => `<li><span class="perm ${granted ? "on" : ""}">${granted ? "Allowed" : "Not allowed"}</span> ${esc(words)}</li>`).join("");
+    const anyGranted = p.permissions.some(([, , g]) => g);
+    const body = !p.installed ? `<p class="muted">${esc(p.install_hint)}</p>`
+      : companion ? `<h4>What Lodestone does with ${esc(p.name)}</h4><ul class="perm-list">${p.uses.map((u) => `<li>${esc(u)}</li>`).join("")}</ul><p class="muted">Nothing from Lodestone (sign-ins, keys, files) is shared with it.</p>`
+      : `<h4>Permissions</h4><ul class="perm-list">${perms}</ul>`;
+    return `<div class="plugin-card" data-plugin="${esc(p.id)}">
+      <div class="plugin-head"><div><h2>${esc(p.name)}</h2><p class="muted">${esc(p.description)}</p></div><span class="plugin-status ${p.running ? "on" : ""}">${status}</span></div>
+      ${p.note ? `<p class="warn-text">${esc(p.note)}</p>` : ""}
+      ${body}
+      ${p.id === "beacon" ? beaconReleaseHTML(p) : p.id === "kiln" ? releaseHTML("kiln", p) : ""}
+      <div class="row-btns">
+        ${p.installed && !companion ? `<button class="play" data-view="${p.id === "beacon" ? "beacon" : ""}">Open</button>` : ""}
+        ${companion && p.installed ? `<button class="${p.enabled ? "ghost" : "play"}" data-plugin-act="${p.enabled ? "disable" : "enable"}">${p.enabled ? "Turn off" : "Turn on"}</button>` : ""}
+        ${p.id === "beacon" && state.beaconRelease?.latest && (!p.installed || state.beaconRelease.update) ? `<button class="${p.installed ? "ghost" : "play"}" data-plugin-act="install">${p.installed ? "Update to" : "Install Beacon"} ${esc(state.beaconRelease.latest)}</button>` : ""}
+        ${p.id === "kiln" ? installBtn("kiln", p) : ""}
+        ${p.running ? '<button class="ghost" data-plugin-act="stop">Stop</button>' : ""}
+        ${anyGranted ? '<button class="ghost" data-plugin-act="revoke">Revoke permissions</button>' : ""}
+      </div></div>`;
+  }).join("") || '<p class="muted">No plug-ins yet.</p>';
+  const keep = document.querySelector("#plugin-repo-input")?.value || "";
+  $("#plugins-list").innerHTML += testReleasesHTML() + thirdPartyHTML();
+  const inp = document.querySelector("#plugin-repo-input");
+  if (inp) inp.value = keep;
+}
+$("#plugins-list").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-plugin-act]");
+  if (!b) return;
+  const id = b.dataset.pluginId || b.closest("[data-plugin]")?.dataset.plugin;
+  try {
+    if (b.dataset.pluginAct === "test-releases") {
+      await invoke("plugin_set_test_releases", { on: b.checked });
+      state.pluginTest = b.checked;
+      toast(b.checked ? "Test builds are on. Looking for them…" : "Test builds are off.");
+      checkBeaconRelease();
+      return checkPluginReleases();
+    }
+    if (b.dataset.pluginAct === "add-repo") {
+      const repo = await invoke("plugin_repo_add", { repo: $("#plugin-repo-input").value });
+      toast(`Added ${repo}. Looking for its latest release…`);
+      return checkPluginReleases();
+    }
+    if (b.dataset.pluginAct === "remove-repo") { await invoke("plugin_repo_remove", { repo: id }); return checkPluginReleases(); }
+    if (b.dataset.pluginAct === "install-release") {
+      b.disabled = true;
+      b.textContent = "Downloading and checking…";
+      const v = await invoke("plugin_install", { id });
+      toast(`Installed ${v}.`);
+      state.pluginReleases[id] = { ...state.pluginReleases[id], installed: v, update: false };
+      if (id === "kiln") load(true);
+    }
+    if (b.dataset.pluginAct === "stop") await invoke("plugin_stop", { id });
+    if (b.dataset.pluginAct === "enable" || b.dataset.pluginAct === "disable") {
+      await invoke("plugin_set_enabled", { id, enabled: b.dataset.pluginAct === "enable" });
+      toast(b.dataset.pluginAct === "enable" ? "Kiln is on. Reloading your library…" : "Kiln is off. Lodestone won't tag or launch games through it.");
+      load(true);
+    }
+    if (b.dataset.pluginAct === "install") {
+      b.disabled = true;
+      b.textContent = "Downloading and checking…";
+      const v = await invoke("beacon_install");
+      state.beaconRelease = { ...state.beaconRelease, installed: v, update: false };
+      const f = $("#beacon-frame"); f.removeAttribute("src"); f.classList.add("hidden");
+      toast(`Beacon ${v} is installed.`);
+    }
+    if (b.dataset.pluginAct === "revoke") {
+      await invoke("beacon_approve", { permissions: [] });
+      const f = $("#beacon-frame"); f.removeAttribute("src"); f.classList.add("hidden");
+      toast("Permissions removed. The plug-in will ask again next time you open it.");
+    }
+  } catch (err) { toast(String(err), true); }
+  refreshPlugins();
+});
+$("#open-plugins").onclick = () => { $("#dlg-settings").close(); state.view = "plugins"; ls.set("view", "plugins"); render(); refreshPlugins(); };
+
+// Beacon releases: looked up when you open Plug-ins (or Beacon while it isn't installed), never in the
+// background. Installing or updating only happens when you press the button.
+async function checkBeaconRelease() {
+  try { state.beaconRelease = await invoke("beacon_check_update"); } catch (e) { state.beaconRelease = { error: String(e) }; }
+  if (state.view === "plugins") renderPluginsPage();
+}
+// Other plug-ins' releases (Kiln, and repositories you added): looked up when you open Plug-ins, never in the background.
+async function checkPluginReleases() {
+  state.pluginReleases = {};
+  try { state.pluginRepos = await invoke("plugin_repos"); } catch { state.pluginRepos = []; }
+  try { state.pluginTest = await invoke("plugin_test_releases"); } catch { state.pluginTest = false; }
+  renderPluginsPage();
+  await Promise.all(["kiln", ...state.pluginRepos].map(async (id) => {
+    try { state.pluginReleases[id] = await invoke("plugin_release_check", { id }); } catch (e) { state.pluginReleases[id] = { error: String(e) }; }
+  }));
+  if (state.view === "plugins") renderPluginsPage();
+}
+function releaseHTML(id, p) {
+  const r = (state.pluginReleases || {})[id];
+  if (!r) return '<p class="muted small">Checking GitHub for the latest release…</p>';
+  if (r.error) return `<p class="muted small">${esc(r.error)}</p>`;
+  if (r.update) return `<p class="small">Version ${esc(r.latest)} is out (you have ${esc(r.installed)}).</p>`;
+  if (!r.installed && !(p && p.installed)) return `<p class="small">Latest: ${esc(r.latest)}. It's downloaded from that repository's GitHub releases and checked against GitHub's checksum before it's installed.</p>`;
+  return "";
+}
+function installBtn(id, p) {
+  const r = (state.pluginReleases || {})[id];
+  if (!r || r.error || !r.latest) return "";
+  const have = r.installed || (p && p.installed);
+  if (have && !r.update) return "";
+  return `<button class="${have ? "ghost" : "play"}" data-plugin-act="install-release" data-plugin-id="${esc(id)}">${have ? "Update to" : "Install"} ${esc(r.latest)}</button>`;
+}
+function testReleasesHTML() {
+  return `<h2 class="plugins-sub">Test builds</h2>
+    <label class="check-row"><input type="checkbox" data-plugin-act="test-releases" ${state.pluginTest ? "checked" : ""} /> Also offer test builds (pre-releases) of plug-ins</label>
+    <p class="muted small">Test builds are for people helping to test. They may be unfinished or broken, and nobody has checked them for you. Off by default; they are still downloaded only from the plug-in's own GitHub releases and checked against GitHub's checksum.</p>`;
+}
+function thirdPartyHTML() {
+  const repos = state.pluginRepos || [];
+  const rows = repos.map((repo) => {
+    const r = (state.pluginReleases || {})[repo];
+    const m = r && r.manifest;
+    const perms = m && m.permissions && m.permissions.length ? `<p class="small">Asks for: ${m.permissions.map(esc).join(", ")}</p>` : "";
+    return `<div class="plugin-card" data-plugin="${esc(repo)}">
+      <div class="plugin-head"><div><h2>${esc((m && m.name) || repo)}</h2><p class="muted">${esc((m && m.description) || "")}</p><p class="muted small">github.com/${esc(repo)}</p></div><span class="plugin-status">${r && r.installed ? "Installed " + esc(r.installed) : "Third-party"}</span></div>
+      ${perms}${releaseHTML(repo)}
+      <div class="row-btns">${installBtn(repo)}<button class="ghost" data-plugin-act="remove-repo" data-plugin-id="${esc(repo)}">Remove from list</button></div></div>`;
+  }).join("");
+  return `<h2 class="plugins-sub">Third-party plug-ins</h2>
+    <p class="muted">Plug-ins from other people. Lodestone didn't check them: they run as you, and only a Flatpak (Linux) is sandboxed. Add a repository only if you trust who publishes it. The list is kept only on this PC.</p>
+    <div class="row-btns"><input id="plugin-repo-input" type="text" placeholder="owner/repo, e.g. someone/their-plugin" spellcheck="false" /><button class="ghost" data-plugin-act="add-repo">Add</button></div>
+    ${rows}
+    ${repos.length ? '<p class="muted small">Running third-party plug-ins from inside Lodestone isn\'t supported yet: Lodestone can find, install and update them.</p>' : ""}`;
+}
+function beaconReleaseHTML(p) {
+  const r = state.beaconRelease;
+  if (!r) return '<p class="muted small">Checking for the latest Beacon…</p>';
+  if (r.error) return `<p class="muted small">${esc(r.error)}</p>`;
+  if (r.update) return `<p class="small">Beacon ${esc(r.latest)} is out (you have ${esc(r.installed)}). Updating keeps your communities and messages.</p>`;
+  if (!p.installed) return `<p class="small">Latest: Beacon ${esc(r.latest)}. It's downloaded from Lodestone's official GitHub releases and checked before it's installed.</p>`;
+  return "";
 }
 
 // ---------- collapsible sidebar sections (remembered) ----------
@@ -1714,8 +1977,25 @@ $("#f-region").onchange = (e) => { state.regionF = e.target.value; state.letter 
 $("#f-played").onchange = (e) => { state.playedF = e.target.value; state.letter = ""; renderGrid(); };
 $("#f-clear").onclick = () => { state.genre = state.series = state.compatF = state.letter = state.achF = state.regionF = state.playedF = ""; renderGrid(); };
 let searchTimer;
+// Close the search: clear it, and go back to where you searched from (Beacon, say).
+function closeSearch() {
+  $("#search").value = "";
+  state.search = "";
+  $("#search").blur();
+  $("#search-close").classList.add("hidden");
+  if (state.searchFrom) { state.view = state.searchFrom; ls.set("view", state.view); state.searchFrom = null; }
+  render();
+}
+$("#search-close").onclick = closeSearch;
 $("#search").oninput = (e) => {
   state.search = e.target.value;
+  $("#search-close").classList.toggle("hidden", !state.search && !state.searchFrom);
+  // Searching from a page without the game grid (Beacon, Plug-ins…) shows the results in the library;
+  // closing the search comes back here.
+  if (state.search && ["beacon", "plugins", "downloads", "home"].includes(state.view)) {
+    state.searchFrom = state.view;
+    state.view = "all"; ls.set("view", "all"); render();
+  }
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => { renderGrid(); renderHero(); }, 120);
 };
@@ -1739,7 +2019,7 @@ $("#form-add").onsubmit = async (e) => {
   err.hidden = true;
   const fail = (msg) => { err.textContent = msg; err.hidden = false; };
   const cmd = String(f.get("command") || "").trim().replace(/^"|"$/g, "");
-  if (f.get("proton") === "on" && !/\.exe$/i.test(cmd)) return fail("Point this at the game's .exe file, e.g. /home/you/Games/MyGame/Game.exe");
+  if (f.get("proton") === "on" && !/\.exe$/i.test(cmd)) return fail("Point this at the game's .exe file, e.g. ~/Games/MyGame/Game.exe");
   try {
     await invoke("add_custom_game", { title: f.get("title"), command: f.get("command"), store: f.get("store"), cover: f.get("cover") || null, proton: f.get("proton") === "on" });
     $("#dlg-add").close();
@@ -1756,8 +2036,11 @@ document.addEventListener("keydown", (e) => {
   if (document.querySelector("dialog[open]") || !$("#onboard").classList.contains("hidden")) return;
   if (state.view === "minecraft" || state.view.startsWith("shop:")) return;
   const inSearch = document.activeElement === $("#search");
-  if (e.key === "/" && !inSearch) { e.preventDefault(); return $("#search").focus(); }
-  if (e.key === "Escape" && inSearch) { $("#search").value = ""; state.search = ""; $("#search").blur(); return render(); }
+  if (e.key === "/" && !inSearch) {
+    e.preventDefault();
+    return $("#search").focus();
+  }
+  if (e.key === "Escape" && (inSearch || state.searchFrom)) return closeSearch();
   if (e.key === "Escape" && state.open && !friends.open) { e.preventDefault(); return closeDetail(); }
   if ((e.ctrlKey && e.key === "r") || e.key === "F5") { e.preventDefault(); return load(); }
   if (e.key === "Enter") { e.preventDefault(); return play(state.selected); }
@@ -1804,6 +2087,17 @@ async function obRenderFound() {
   const o = await invoke("setup_overview");
   const n = (store) => state.games.filter((g) => g.store === store && g.installed).length;
   const row = (ok, name, detail) => `<div class="ob-found-row ${ok ? "ok" : ""}"><span class="mark">${ok ? "✓" : "–"}</span><div><b>${name}</b><br><small class="muted">${detail}</small></div></div>`;
+  if (WIN) {
+    // Windows: the store launchers Lodestone can install with winget.
+    await loadWinapps();
+    const la = (id) => (state.winapps || []).find((a) => a.id === id);
+    $("#ob-found").innerHTML = ["steam", "epic", "gog", "battlenet", "ea", "ubisoft"].map((id) => {
+      const a = la(id);
+      const c = CLIENTS[id] || { name: a ? a.name : id };
+      return row(a && a.installed, c.name, a && a.installed ? `Found. ${n(a.store)} installed games.` : "Not installed. You can install it in the next step.");
+    }).join("");
+    return o;
+  }
   $("#ob-found").innerHTML = [
     row(o.steam.found, "Steam", o.steam.found ? `${o.steam.account ? `Signed in as ${esc(o.steam.account)}. ` : ""}${n("steam")} installed games. Steam stays in the tray; Lodestone launches its games.` : "Not found. Install Steam if you have a Steam library."),
     row(o.heroic, "Heroic", o.heroic ? "Found. Its installed Epic/GOG games show up here. Lodestone can also take over its sign-ins in the next steps, so Heroic isn't needed anymore." : "Not needed: Lodestone handles Epic and GOG itself."),
@@ -1814,6 +2108,20 @@ async function obRenderFound() {
   ].join("");
   return o;
 }
+// Windows guide, step 2: each store's launcher, installed or with an Install (winget) button.
+async function renderObLaunchers() {
+  await loadWinapps();
+  $("#ob-launchers").innerHTML = ["steam", "epic", "gog", "battlenet", "ea", "ubisoft"].map((id) => {
+    const a = (state.winapps || []).find((x) => x.id === id);
+    if (!a) return "";
+    const c = CLIENTS[id] || { name: a.name };
+    const busy = state.setupBusy === id;
+    return `<div class="ob-launcher"><span class="dot" style="background:${store(a.store).color}"></span><span class="grow"><b>${esc(c.name)}</b></span>${a.installed
+      ? '<span class="muted">Installed ✓</span>'
+      : `<button type="button" class="play small" data-winsetup="${id}" ${busy ? "disabled" : ""}>${busy ? "Installing…" : "Install"}</button>`}</div>`;
+  }).join("");
+}
+
 async function obShow(step) {
   obStep = Math.max(0, Math.min(OB_STEPS - 1, step));
   document.querySelectorAll(".ob-step").forEach((s) => s.classList.toggle("on", Number(s.dataset.step) === obStep));
@@ -1823,7 +2131,7 @@ async function obShow(step) {
   $("#ob-next").textContent = obStep === 0 ? "Let's set it up" : obStep === OB_STEPS - 1 ? "Open my library" : "Next";
   try {
     if (obStep === 1) await obRenderFound();
-    if (obStep === 2) await renderProton();
+    if (obStep === 2) await (WIN ? renderObLaunchers() : renderProton());
     if (obStep === 3) {
       renderAccounts();
       $("#ob-steamkey").value = (await invoke("get_settings")).steam_api_key || "";
@@ -1847,7 +2155,7 @@ async function obShow(step) {
   }
 }
 async function obSaveStep() {
-  if (obStep === 2) await invoke("set_proton", { path: $("#ob-proton").value });
+  if (obStep === 2 && !WIN) await invoke("set_proton", { path: $("#ob-proton").value });
   if (obStep === 4) {
     const s = await invoke("get_settings");
     await invoke("save_settings", { curseforgeApiKey: s.curseforge_api_key || "", gamesDir: $("#ob-gamesdir").value, steamApiKey: null });
@@ -2038,7 +2346,7 @@ async function renderAchievements(g) {
 
 async function renderAbout(g) {
   const el = $("#about");
-  if (!g || ["home", "minecraft", "downloads"].includes(state.view) || state.view.startsWith("shop:")) return el.classList.add("hidden");
+  if (!g || ["home", "minecraft", "downloads", "beacon", "plugins"].includes(state.view) || state.view.startsWith("shop:")) return el.classList.add("hidden");
   el.classList.remove("hidden");
   const id = g.id;
   const facts = (d) => {
@@ -2091,7 +2399,8 @@ const TIERS = { platinum: "Platinum", gold: "Gold", silver: "Silver", bronze: "B
 state.compat = new Map();
 let compatBusy = false;
 async function loadCompat() {
-  if (compatBusy) return;
+  // ProtonDB is about running Windows games on Linux: not asked on Windows.
+  if (compatBusy || WIN) return;
   const ids = state.games.filter((g) => !["minecraft", "custom"].includes(g.store) && !state.compat.has(g.id)).map((g) => g.id);
   if (!ids.length) return;
   compatBusy = true;
@@ -2111,6 +2420,7 @@ function compatOf(g) {
   return "";
 }
 function compatBadge(g, cls = "") {
+  if (WIN) return "";
   const t = compatOf(g);
   if (!t || t === "pending") return "";
   const label = t === "native" ? "Native" : TIERS[t] || t;
@@ -2120,6 +2430,7 @@ function compatBadge(g, cls = "") {
 
 function renderCompat(g, d) {
   const el = $("#about-compat");
+  if (WIN) { el.innerHTML = ""; return; }
   const id = g.id;
   const draw = (p) => {
     if (state.selected !== id) return;
@@ -2505,3 +2816,58 @@ for (const id of ["dlg-settings", "dlg-accounts", "dlg-log", "dlg-shot", "dlg-wo
   d.addEventListener("mousedown", (e) => { downOutside = outside(e); });
   d.addEventListener("click", (e) => { if (downOutside && outside(e)) d.close(); downOutside = false; });
 }
+
+// The sidebar folds away for more room (remembered).
+function setSidebar(collapsed) {
+  document.body.classList.toggle("side-collapsed", collapsed);
+  ls.set("sideCollapsed", collapsed);
+}
+$("#side-collapse").onclick = () => setSidebar(true);
+$("#side-expand").onclick = () => setSidebar(false);
+setSidebar(!!ls.get("sideCollapsed", false));
+
+// ---------- updates for the programs Lodestone installs ----------
+// Only when you press "Check for updates" (Settings → Programs). The result also shows as Update
+// buttons on store and emulator pages until Lodestone closes.
+state.updates = [];
+function updateFor(name) {
+  return (state.updates || []).find((u) => u.name === name);
+}
+function renderUpdates() {
+  const el = $("#prog-list");
+  if (!el) return;
+  const list = state.updates || [];
+  el.innerHTML = state.updatesChecked
+    ? list.length
+      ? list.map((u) => `<div class="prog-row"><span class="grow"><b>${esc(u.name)}</b> <small class="muted">${u.have ? esc(u.have) + " → " : ""}${esc(u.latest || "newer version")}</small></span><button type="button" class="ghost small" data-prog-update="${esc(u.id)}">Update</button></div>`).join("")
+        + (list.length > 1 ? '<div class="prog-row"><span class="grow"></span><button type="button" class="play small" id="prog-all">Update all</button></div>' : "")
+      : '<p class="muted small">Everything Lodestone installed is up to date.</p>'
+    : "";
+}
+async function checkUpdates() {
+  const b = $("#prog-check");
+  b.disabled = true;
+  b.textContent = "Checking…";
+  try { state.updates = await invoke("program_updates"); state.updatesChecked = true; }
+  catch (e) { toast(String(e), true); }
+  b.disabled = false;
+  b.textContent = "Check for updates";
+  renderUpdates();
+  render();
+}
+async function updateProgram(id) {
+  const u = (state.updates || []).find((x) => x.id === id);
+  try {
+    await invoke("program_update", { id });
+    state.updates = state.updates.filter((x) => x.id !== id);
+    toast(`Updating ${u ? u.name : id} in the background (see Downloads).`);
+  } catch (e) { toast(String(e), true); }
+  renderUpdates();
+  render();
+}
+$("#prog-check").onclick = checkUpdates;
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-prog-update]");
+  if (b) { b.disabled = true; return updateProgram(b.dataset.progUpdate); }
+  if (e.target.closest("#prog-all")) for (const u of [...(state.updates || [])]) updateProgram(u.id);
+});

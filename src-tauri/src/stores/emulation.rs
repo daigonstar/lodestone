@@ -82,6 +82,49 @@ const EMULATORS: &[(&str, &str, &[&str], &[&str], &[&str])] = &[
 
 /// EmuDeck/ES-DE folders in roms/ that aren't game systems (shortcuts to emulators, PC launchers, ports
 /// run through other tools).
+/// Windows: each emulator's winget package (installs from its publisher's official download; checked
+/// November 2026) and the program names to look for. None: not in winget, or only an outdated build
+/// there (Dolphin's is 5.0 from 2016), so you install it yourself and Lodestone finds it.
+#[cfg_attr(not(windows), allow(dead_code))]
+const WINDOWS_EMUS: &[(&str, Option<&str>, &[&str])] = &[
+    ("RETROARCH", Some("Libretro.RetroArch"), &["retroarch.exe"]),
+    ("DUCKSTATION", Some("Stenzek.DuckStation"), &["duckstation-qt-x64-ReleaseLTCG.exe", "duckstation-qt-x64-Release.exe", "duckstation-qt.exe"]),
+    ("PCSX2", Some("PCSX2Team.PCSX2"), &["pcsx2-qt.exe", "pcsx2.exe"]),
+    ("DOLPHIN", None, &["Dolphin.exe"]),
+    ("PRIMEHACK", None, &["PrimeHack.exe"]),
+    ("PPSSPP", Some("PPSSPPTeam.PPSSPP"), &["PPSSPPWindows64.exe", "PPSSPPWindows.exe"]),
+    ("RPCS3", None, &["rpcs3.exe"]),
+    ("AZAHAR", Some("AzaharEmu.Azahar"), &["azahar.exe", "azahar-qt.exe"]),
+    ("RYUBING", None, &["Ryujinx.exe"]),
+    ("XEMU", Some("xemu-project.xemu"), &["xemu.exe"]),
+    ("MELONDS", Some("melonDS.melonDS"), &["melonDS.exe"]),
+    ("CEMU", Some("Cemu.Cemu"), &["Cemu.exe"]),
+    ("VITA3K", Some("Vita3K.Vita3K"), &["Vita3K.exe"]),
+    ("MAME", Some("MAMEdev.MAME"), &["mame.exe"]),
+    ("FLYCAST", None, &["flycast.exe"]),
+    ("SCUMMVM", Some("ScummVM.ScummVM"), &["scummvm.exe"]),
+];
+
+/// The emulator packages Lodestone installs and can update: (package id, name). Windows: winget IDs;
+/// Linux: Flathub IDs.
+pub fn managed_packages() -> Vec<(&'static str, &'static str)> {
+    if cfg!(windows) {
+        WINDOWS_EMUS.iter().filter_map(|(key, id, _)| Some((id.as_ref().copied()?, EMULATORS.iter().find(|e| e.0 == *key)?.1))).collect()
+    } else {
+        EMULATORS.iter().filter_map(|e| Some((*e.2.first()?, e.1))).collect()
+    }
+}
+
+/// A RetroArch core's file on this system: "snes9x_libretro.so" on Linux, "snes9x_libretro.dll" on
+/// Windows (launch commands and saved choices use the Linux name).
+pub fn core_file(core: &str) -> String {
+    if cfg!(windows) {
+        core.replace("_libretro.so", "_libretro.dll")
+    } else {
+        core.to_string()
+    }
+}
+
 const NOT_SYSTEMS: &[&str] = &["emulators", "portmaster", "ports", "desktop", "lutris", "steam", "epic", "flatpak", "android", "kodi", "windows", "windows3x", "windows9x", "emulation"];
 
 /// Folders inside a system folder that hold media, not games.
@@ -173,14 +216,30 @@ pub fn roots() -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = chosen_dir().and_then(|d| roms_in(&d)).into_iter().collect();
     let mut cands: Vec<PathBuf> = Vec::new();
     cands.extend([h.join("Emulation"), h.join("retrodeck")]);
-    // Other drives: /run/media/<user>/<drive>/..., /media/<user>/<drive>/..., /mnt/<drive>/...
-    let mut drives: Vec<PathBuf> = Vec::new();
-    for base in ["/run/media", "/media"] {
-        for u in fs::read_dir(base).into_iter().flatten().flatten() {
-            drives.extend(fs::read_dir(u.path()).into_iter().flatten().flatten().map(|d| d.path()));
+    // Windows: an Emulation folder at the top of any drive (EmuDeck for Windows' usual place).
+    #[cfg(windows)]
+    for letter in b'C'..=b'Z' {
+        let d = PathBuf::from(format!("{}:\\", letter as char));
+        if d.is_dir() {
+            cands.push(d.join("Emulation"));
+            cands.push(d.join("Emulation").join("Emulation"));
         }
     }
-    drives.extend(fs::read_dir("/mnt").into_iter().flatten().flatten().map(|d| d.path()));
+    // Linux: other drives: /run/media/<user>/<drive>/..., /media/<user>/<drive>/..., /mnt/<drive>/...
+    #[cfg(not(windows))]
+    let drives: Vec<PathBuf> = {
+        let mut drives: Vec<PathBuf> = Vec::new();
+        for base in ["/run/media", "/media"] {
+            for u in fs::read_dir(base).into_iter().flatten().flatten() {
+                drives.extend(fs::read_dir(u.path()).into_iter().flatten().flatten().map(|d| d.path()));
+            }
+        }
+        drives.extend(fs::read_dir("/mnt").into_iter().flatten().flatten().map(|d| d.path()));
+        drives
+    };
+    // Windows: the drive tops were checked above.
+    #[cfg(windows)]
+    let drives: Vec<PathBuf> = Vec::new();
     for d in drives {
         for name in ["Emulation", "retrodeck"] {
             cands.push(d.join(name));
@@ -216,11 +275,26 @@ pub fn create_layout(dir: &str) -> Result<(PathBuf, usize), String> {
     Ok((roms, made))
 }
 
-/// Ask the desktop for a folder (zenity or kdialog, whichever is installed). None if cancelled or
-/// neither is there.
+/// Ask the desktop for a folder. Windows: the system's own folder dialog (through PowerShell).
+/// Linux: zenity or kdialog, whichever is installed. None if cancelled.
+#[cfg(windows)]
 pub fn pick_folder(start: &str) -> Result<Option<String>, String> {
     let start = expand(start).filter(|p| p.is_dir()).unwrap_or_else(home);
-    let mut cmd = if crate::host::which("zenity").is_some() {
+    // The start folder goes in through the environment, never into the script text.
+    let script = "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = 'Choose your Emulation or ROMs folder'; $d.SelectedPath = $env:LODESTONE_PICK_START; if ($d.ShowDialog() -eq 'OK') { [Console]::Out.Write($d.SelectedPath) }";
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args(["-NoProfile", "-STA", "-NonInteractive", "-Command", script]).env("LODESTONE_PICK_START", &start);
+    crate::os::detach_console(&mut cmd);
+    let out = cmd.stdin(std::process::Stdio::null()).output().map_err(|e| e.to_string())?;
+    let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok((out.status.success() && !p.is_empty()).then_some(p))
+}
+
+/// Linux: zenity or kdialog, whichever is installed.
+#[cfg(not(windows))]
+pub fn pick_folder(start: &str) -> Result<Option<String>, String> {
+    let start = expand(start).filter(|p| p.is_dir()).unwrap_or_else(home);
+    let cmd = if crate::host::which("zenity").is_some() {
         let mut c = std::process::Command::new("zenity");
         c.args(["--file-selection", "--directory", "--title=Choose your Emulation or ROMs folder"]).arg(format!("--filename={}/", start.display()));
         c
@@ -431,6 +505,7 @@ pub struct Emulator {
     pub cores: Option<PathBuf>,
 }
 
+#[cfg(not(windows))]
 /// Installed Flatpak apps (checked on the host when Lodestone is a Flatpak), cached for a minute.
 fn flatpak_apps() -> HashSet<String> {
     static C: Mutex<Option<(Instant, HashSet<String>)>> = Mutex::new(None);
@@ -451,11 +526,13 @@ fn flatpak_apps() -> HashSet<String> {
     apps
 }
 
+#[cfg(not(windows))]
 /// Where the Flatpak RetroArch keeps its cores (and where Lodestone puts the ones it downloads).
 pub fn flatpak_cores_dir() -> PathBuf {
     home().join(".var/app/org.libretro.RetroArch/config/retroarch/cores")
 }
 
+#[cfg(not(windows))]
 fn retroarch_cores(flatpak: bool) -> Option<PathBuf> {
     let h = home();
     if flatpak {
@@ -466,8 +543,60 @@ fn retroarch_cores(flatpak: bool) -> Option<PathBuf> {
     c.into_iter().find(|p| p.is_dir())
 }
 
+/// Windows: every emulator Lodestone can find, by key: its program in the usual install places
+/// (Program Files, your Programs folder, winget's packages and links), cached for a minute.
+#[cfg(windows)]
+static EMU_CACHE: Mutex<Option<(Instant, HashMap<&'static str, Emulator>)>> = Mutex::new(None);
+
+#[cfg(windows)]
+pub fn installed_emulators() -> HashMap<&'static str, Emulator> {
+    if let Some((at, v)) = EMU_CACHE.lock().unwrap().as_ref() {
+        if at.elapsed() < Duration::from_secs(60) {
+            return v.clone();
+        }
+    }
+    let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
+    let local = env("LOCALAPPDATA").unwrap_or_default();
+    let roots: Vec<(PathBuf, usize)> = vec![
+        (local.join("Microsoft").join("WinGet").join("Links"), 1),
+        (local.join("Microsoft").join("WinGet").join("Packages"), 4),
+        (local.join("Programs"), 3),
+        (env("ProgramFiles").unwrap_or_default(), 3),
+        (env("ProgramFiles(x86)").unwrap_or_default(), 3),
+        (PathBuf::from("C:\\RetroArch-Win64"), 1),
+        (home().join("Emulation").join("tools"), 3),
+    ];
+    let mut out = HashMap::new();
+    for (key, _, exes) in WINDOWS_EMUS {
+        let Some(name) = EMULATORS.iter().find(|e| e.0 == *key).map(|e| e.1) else { continue };
+        if let Some(p) = roots.iter().find_map(|(r, depth)| find_file(r, exes, *depth)) {
+            let cores = (*key == "RETROARCH").then(|| p.parent().map(|d| d.join("cores"))).flatten();
+            out.insert(*key, Emulator { key, name, program: path_str(&p), pre_args: vec![], cores });
+        }
+    }
+    *EMU_CACHE.lock().unwrap() = Some((Instant::now(), out.clone()));
+    out
+}
+
+/// Windows: the first file named one of `names` (any case) in `dir`, looking `depth` folders down.
+#[cfg(windows)]
+fn find_file(dir: &Path, names: &[&str], depth: usize) -> Option<PathBuf> {
+    let entries: Vec<_> = fs::read_dir(dir).ok()?.flatten().collect();
+    // In the order given (the 64-bit program before the 32-bit one, say).
+    for want in names {
+        if let Some(e) = entries.iter().find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(want) && e.path().is_file()) {
+            return Some(e.path());
+        }
+    }
+    if depth == 0 {
+        return None;
+    }
+    entries.iter().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).find_map(|e| find_file(&e.path(), names, depth - 1))
+}
+
 /// Every emulator Lodestone can find, by key ("RETROARCH", "DOLPHIN"…). Flatpak first, then a program
 /// on the PATH, then an AppImage in ~/Applications.
+#[cfg(not(windows))]
 pub fn installed_emulators() -> HashMap<&'static str, Emulator> {
     let apps = flatpak_apps();
     let appimages: Vec<PathBuf> = fs::read_dir(home().join("Applications")).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("appimage"))).collect();
@@ -518,7 +647,7 @@ fn build_launch(command: &str, rom: &Path, sys_dir: &Path, emus: &HashMap<&'stat
                 let mut a = w.to_string();
                 if a.contains("%CORE_RETROARCH%") {
                     let cores = emu.and_then(|e| e.cores.as_ref())?;
-                    a = a.replace("%CORE_RETROARCH%", &path_str(cores));
+                    a = core_file(&a.replace("%CORE_RETROARCH%", &path_str(cores)));
                     if !Path::new(&a).is_file() {
                         return None; // the core isn't installed in RetroArch
                     }
@@ -548,9 +677,14 @@ fn build_launch(command: &str, rom: &Path, sys_dir: &Path, emus: &HashMap<&'stat
 
 // ---------------- installing emulators and cores ----------------
 
+#[cfg(not(windows))]
 const CORES_URL: &str = "https://buildbot.libretro.com/nightly/linux/x86_64/latest";
+#[cfg(windows)]
+const CORES_URL: &str = "https://buildbot.libretro.com/nightly/windows/x86_64/latest";
+#[cfg(not(windows))]
 const FLATHUB_REPO: &str = "https://dl.flathub.org/repo/flathub.flatpakrepo";
 
+#[cfg(not(windows))]
 /// Install what a system's chosen way of playing needs: the emulator from Flathub (a background job
 /// in Downloads, then its core) or just the RetroArch core. Returns "installing" (watch Downloads),
 /// "done", or "already".
@@ -559,8 +693,10 @@ fn flatpak_id(e: &Emulator) -> Option<&str> {
     (e.program == "flatpak").then(|| e.pre_args.get(1).map(String::as_str)).flatten()
 }
 
+#[cfg(not(windows))]
 const MENU_MARK: &str = "# Hidden from the app menu by Lodestone. Delete this file to show it again.";
 
+#[cfg(not(windows))]
 /// The menu entries Flatpak exported for an app (user and system installs).
 fn exported_entries(app_id: &str) -> Vec<PathBuf> {
     let dirs = [home().join(".local/share/flatpak/exports/share/applications"), PathBuf::from("/var/lib/flatpak/exports/share/applications")];
@@ -578,10 +714,12 @@ fn exported_entries(app_id: &str) -> Vec<PathBuf> {
     out
 }
 
+#[cfg(not(windows))]
 fn menu_override(entry: &Path) -> PathBuf {
     home().join(".local/share/applications").join(entry.file_name().unwrap_or_default())
 }
 
+#[cfg(not(windows))]
 /// An exported menu entry with NoDisplay=true added to its [Desktop Entry] section.
 fn hidden_entry(original: &str) -> String {
     let mut out = format!("{MENU_MARK}\n");
@@ -606,10 +744,12 @@ fn hidden_entry(original: &str) -> String {
     out
 }
 
+#[cfg(not(windows))]
 fn menu_hidden(app_id: &str) -> bool {
     exported_entries(app_id).iter().any(|e| fs::read_to_string(menu_override(e)).is_ok_and(|t| t.starts_with(MENU_MARK)))
 }
 
+#[cfg(not(windows))]
 /// Show or hide an emulator in the desktop's app menu. Hiding puts a copy of Flatpak's menu entry with
 /// NoDisplay=true in ~/.local/share/applications (which wins over Flatpak's); showing removes that copy.
 /// Files Lodestone didn't write are never touched.
@@ -642,6 +782,7 @@ pub fn set_menu_entry(app_id: &str, show: bool) -> Result<(), String> {
 }
 
 /// Show or hide the emulator a system plays with in the app menu.
+#[cfg(not(windows))]
 pub fn set_system_menu_entry(system: &str, index: usize, show: bool) -> Result<(), String> {
     let sys = systems().into_iter().find(|s| s.id == system).ok_or("Unknown system")?;
     let opt = sys.options.into_iter().find(|o| o.index == index).ok_or("Unknown emulator choice")?;
@@ -662,6 +803,23 @@ pub async fn install(system: &str, index: usize, menu: bool) -> Result<&'static 
         }
     }
     let emus = tauri::async_runtime::spawn_blocking(installed_emulators).await.map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    if !emus.contains_key(def.0) {
+        let _ = menu; // Windows installers make their own Start menu shortcuts.
+        let id = WINDOWS_EMUS.iter().find(|w| w.0 == def.0).and_then(|w| w.1).ok_or_else(|| format!("{} isn't in winget (or only an outdated build is); install it from its website and Lodestone will find it", def.1))?;
+        let spec = crate::winget::install_spec(id);
+        let core = core.filter(|_| def.0 == "RETROARCH");
+        let finish: Option<Box<dyn FnOnce() -> Result<(), String> + Send>> = Some(Box::new(move || {
+            clear_emulator_cache();
+            match core {
+                Some(c) => tauri::async_runtime::block_on(download_core(&c)),
+                None => Ok(()),
+            }
+        }));
+        crate::downloads::start(&format!("emulation-install:{}", def.0.to_ascii_lowercase()), &format!("Installing {} (winget)", def.1), &spec, finish)?;
+        return Ok("installing");
+    }
+    #[cfg(not(windows))]
     if !emus.contains_key(def.0) {
         let app_id = *def.2.first().ok_or_else(|| format!("{} isn't on Flathub; install it yourself", def.1))?;
         // Flathub for your user (already there on most systems), then the emulator, in the background.
@@ -686,8 +844,8 @@ pub async fn install(system: &str, index: usize, menu: bool) -> Result<&'static 
         return Ok("installing");
     }
     match core {
-        Some(c) if !emus[def.0].cores.as_ref().is_some_and(|d| d.join(&c).is_file()) => {
-            if emus[def.0].program != "flatpak" {
+        Some(c) if !emus[def.0].cores.as_ref().is_some_and(|d| d.join(core_file(&c)).is_file()) => {
+            if emus[def.0].program != "flatpak" && !cfg!(windows) {
                 return Err(format!("Install the {} core from RetroArch's own menu (Online Updater → Core Downloader).", core_label(&c)));
             }
             download_core(&c).await?;
@@ -700,26 +858,48 @@ pub async fn install(system: &str, index: usize, menu: bool) -> Result<&'static 
 /// Download a RetroArch core from libretro's official build server into the Flatpak RetroArch's
 /// cores folder, checked against the CRC32 libretro publishes for the core.
 pub async fn download_core(core: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        // Windows: into the installed RetroArch's own cores folder.
+        let emus = tauri::async_runtime::spawn_blocking(installed_emulators).await.map_err(|e| e.to_string())?;
+        let dir = emus.get("RETROARCH").and_then(|e| e.cores.clone()).ok_or("Install RetroArch first")?;
+        return download_core_to(core, &dir).await.map_err(|e| {
+            if e.contains("denied") || e.contains("os error 5") {
+                format!("Lodestone can't write to RetroArch's cores folder; install the {} core from RetroArch's menu (Online Updater → Core Downloader)", core_label(core))
+            } else {
+                e
+            }
+        });
+    }
+    #[cfg(not(windows))]
     download_core_to(core, &flatpak_cores_dir()).await
+}
+
+/// Windows: forget the found emulators (after installing one).
+#[cfg(windows)]
+pub fn clear_emulator_cache() {
+    *EMU_CACHE.lock().unwrap() = None;
 }
 
 async fn download_core_to(core: &str, dir: &Path) -> Result<(), String> {
     if !valid_core(core) {
         return Err(format!("Not a RetroArch core name: {core}"));
     }
-    let zip_name = format!("{core}.zip");
+    // libretro builds cores per system; the file inside the zip is the core itself.
+    let core_name = core_file(core);
+    let zip_name = format!("{core_name}.zip");
     let index = crate::net::client().get(format!("{CORES_URL}/.index-extended")).send().await.map_err(crate::net::err)?.error_for_status().map_err(crate::net::err)?.text().await.map_err(crate::net::err)?;
-    let want = core_crc(&index, &zip_name).ok_or_else(|| format!("libretro has no {} core for Linux", core_label(core)))?;
+    let want = core_crc(&index, &zip_name).ok_or_else(|| format!("libretro has no {} core for this system", core_label(core)))?;
     let bytes = crate::net::client().get(format!("{CORES_URL}/{zip_name}")).send().await.map_err(crate::net::err)?.error_for_status().map_err(crate::net::err)?.bytes().await.map_err(crate::net::err)?;
     // libretro's CRC32 is for the core itself (the file inside the zip), which is what gets run.
-    let so = unzip_one(&bytes, core)?;
+    let so = unzip_one(&bytes, &core_name)?;
     if crc32fast::hash(&so) != want {
         return Err(format!("The {} core download didn't match libretro's checksum, so it wasn't installed", core_label(core)));
     }
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let tmp = dir.join(format!("{core}.part"));
+    let tmp = dir.join(format!("{core_name}.part"));
     fs::write(&tmp, so).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, dir.join(core)).map_err(|e| e.to_string())
+    fs::rename(&tmp, dir.join(&core_name)).map_err(|e| e.to_string())
 }
 
 /// The CRC32 libretro lists for a core zip in .index-extended ("<date> <crc32 hex> <file>" per line). It's
@@ -806,22 +986,27 @@ fn options_for(info: &SystemInfo, emus: &HashMap<&'static str, Emulator>) -> Vec
             let emu = emus.get(def.0);
             let core_ok = match (&core, emu.and_then(|e| e.cores.as_ref())) {
                 (None, _) => true,
-                (Some(c), Some(dir)) => dir.join(c).is_file(),
+                (Some(c), Some(dir)) => dir.join(core_file(c)).is_file(),
                 (Some(_), None) => false,
             };
             let label = match &core {
                 Some(c) => format!("{} · {}", def.1, core_label(c)),
                 None => def.1.to_string(),
             };
-            let flatpak = !def.2.is_empty();
+            // Linux: Lodestone installs from Flathub; Windows: through winget.
+            let flatpak = if cfg!(windows) { WINDOWS_EMUS.iter().any(|w| w.0 == key && w.1.is_some()) } else { !def.2.is_empty() };
+            let fetches_cores = cfg!(windows) || emu.is_some_and(|e| e.program == "flatpak");
             Some(EmuOption {
                 index,
                 label,
                 emulator: def.1.to_string(),
                 installed: emu.is_some() && core_ok,
                 // RetroArch cores come from libretro's server, so only for the Flatpak or a missing RetroArch.
-                can_install: (emu.is_none() && flatpak) || (emu.is_some() && !core_ok && core.as_deref().is_some_and(valid_core) && emu.is_some_and(|e| e.program == "flatpak")),
+                can_install: (emu.is_none() && flatpak) || (emu.is_some() && !core_ok && core.as_deref().is_some_and(valid_core) && fetches_cores),
+                #[cfg(not(windows))]
                 in_menu: emu.and_then(flatpak_id).map(|id| !menu_hidden(id)),
+                #[cfg(windows)]
+                in_menu: None,
                 core,
             })
         })
@@ -951,6 +1136,19 @@ pub fn scan() -> Vec<Game> {
 
 #[cfg(test)]
 mod tests {
+    /// Windows: which emulators Lodestone finds on this PC (looks at the real system, so only on
+    /// purpose: cargo test finds_windows_emulators -- --ignored --nocapture).
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn finds_windows_emulators() {
+        let found = super::installed_emulators();
+        for (k, e) in &found {
+            println!("found {k}: {}", e.program);
+        }
+        assert!(!found.is_empty(), "no emulators found");
+    }
+
     use super::*;
 
     #[test]
@@ -989,6 +1187,7 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn hides_menu_entries_with_nodisplay() {
         let src = "[Desktop Entry]\nName=RetroArch\nNoDisplay=false\nExec=flatpak run org.libretro.RetroArch\n\n[Desktop Action x]\nNoDisplay=false\n";
@@ -1029,6 +1228,8 @@ mod tests {
         assert_eq!(clean_title("Metal Gear Solid - The Twin Snakes (USA) (Disc 1).nkit.iso", Some(".iso")), "Metal Gear Solid - The Twin Snakes");
     }
 
+    #[cfg(unix)] // Linux behaviour (sh, Linux paths, symlinks)
+
     #[test]
     fn scans_a_system_folder_like_es_de() {
         let d = std::env::temp_dir().join(format!("lodestone-roms-{}", std::process::id()));
@@ -1051,6 +1252,8 @@ mod tests {
         assert_eq!(rels, ["Game A (USA).cue", "Multi/Game B.m3u", "Some Game.ps3dir"]);
         let _ = fs::remove_dir_all(d);
     }
+
+    #[cfg(unix)] // Linux behaviour (sh, Linux paths, symlinks)
 
     #[test]
     fn builds_launch_commands_for_installed_emulators_only() {

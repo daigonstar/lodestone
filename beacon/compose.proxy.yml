@@ -1,0 +1,60 @@
+# Lodestone Beacon behind a reverse proxy you already run (Zoraxy, Traefik, Nginx Proxy Manager, Caddy),
+# for example: Cloudflare Tunnel -> Zoraxy -> Beacon. Works as a Portainer stack too.
+#
+#   1. Create a .env next to this file (in Portainer: the stack's environment variables):
+#        BEACON_DOMAIN=beacon.yourdomain.com
+#        BEACON_MEDIA_ADDR=home.yourdomain.com:7881,192.168.1.10:7881   # for voice calls, see below
+#   2. docker compose -f compose.proxy.yml up -d      (or podman-compose)
+#   3. Read the one-time setup code:  docker compose -f compose.proxy.yml logs beacon
+#   4. In your proxy, send https://beacon.yourdomain.com to this container (see "Reaching Beacon").
+#
+# Beacon listens on plain HTTP; the proxy (and Cloudflare) provide HTTPS. BEACON_PUBLIC_URL must be the
+# exact address people use: it's part of every signed sign-in and every invite link.
+#
+# Voice and video calls use UDP port 7881, which a Cloudflare Tunnel or web proxy can't carry. Forward
+# UDP 7881 on your router to this server, and set BEACON_MEDIA_ADDR to the addresses clients reach it at:
+#   - first, a name for your home internet address that Cloudflare does NOT proxy (grey cloud), such as
+#     the one a DDNS container keeps up to date; the server reads it when it starts, so restart Beacon
+#     if your home IP changes;
+#   - second, the server's LAN address, so people on your own network can call even when the router
+#     can't loop back to its public address.
+# Leave BEACON_MEDIA_ADDR empty and voice is simply off; text chat still works.
+services:
+  beacon:
+    # The official image on Docker Hub. To build from this folder instead, replace `image:` with `build: .`
+    image: docker.io/daigonstar/lodestonebeacon:${BEACON_VERSION:-0.2.0}
+    restart: unless-stopped
+    environment:
+      BEACON_PUBLIC_URL: https://${BEACON_DOMAIN:?set BEACON_DOMAIN in .env}
+      BEACON_MEDIA_ADDR: ${BEACON_MEDIA_ADDR:-}
+      # BEACON_ADMIN_ONLY_COMMUNITIES: "true"   # only server admins may create communities
+    volumes:
+      - beacon-data:/data
+    ports:
+      # Reaching Beacon, option A: on the server itself at 127.0.0.1:8095. Point the proxy at
+      # http://127.0.0.1:8095 only if the proxy runs directly on the server (not in a container).
+      - "127.0.0.1:${BEACON_PORT:-8095}:8080"
+      # Voice and video calls (forward this UDP port on your router).
+      - "7881:7881/udp"
+    # Reaching Beacon, option B: the proxy runs in Docker (like Zoraxy usually does). Uncomment both
+    # `networks` blocks, set the proxy's network name, and point the proxy at http://lodestone-beacon:8080
+    # (port 8080, the container's own port, not 8095).
+    # networks:
+    #   - default
+    #   - proxy
+    container_name: lodestone-beacon
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  beacon-data:
+
+# networks:
+#   proxy:
+#     external: true
+#     name: zoraxy_default   # the network your proxy container is on (docker network ls)

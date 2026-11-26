@@ -1,0 +1,31 @@
+# Lodestone Beacon with automatic HTTPS (Caddy). Works with `docker compose up -d` or `podman-compose up -d`.
+# 1. Point a domain at this machine and open ports 80 and 443.
+# 2. Set BEACON_DOMAIN below (or in a .env file next to this one).
+# 3. Start it, then read the setup code once: `docker compose logs beacon`.
+services:
+  beacon:
+    build: .
+    restart: unless-stopped
+    environment:
+      BEACON_PUBLIC_URL: https://${BEACON_DOMAIN:?set BEACON_DOMAIN to your domain}
+      # BEACON_ADMIN_ONLY_COMMUNITIES: "true"   # only server admins may create communities
+    volumes:
+      - beacon-data:/data
+    expose:
+      - "8080"
+
+  caddy:
+    image: docker.io/library/caddy:2
+    restart: unless-stopped
+    command: caddy reverse-proxy --from ${BEACON_DOMAIN} --to beacon:8080
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy-data:/data
+    depends_on:
+      - beacon
+
+volumes:
+  beacon-data:
+  caddy-data:

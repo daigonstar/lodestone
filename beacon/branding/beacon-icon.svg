@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Lodestone Beacon app icon: same tile and colours as Lodestone, a faceted light with rays instead of a crystal -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1c1840"/><stop offset="0.55" stop-color="#11132a"/><stop offset="1" stop-color="#0a0b14"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#7c5cff" stop-opacity="0.6"/><stop offset="0.55" stop-color="#7c5cff" stop-opacity="0.14"/><stop offset="1" stop-color="#7c5cff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="fTop" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#b8a6ff"/><stop offset="1" stop-color="#8a6cff"/></linearGradient>
+    <linearGradient id="fLeft" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#4b2fd6"/></linearGradient>
+    <linearGradient id="fRight" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5fd4ff"/><stop offset="1" stop-color="#2a8fe0"/></linearGradient>
+    <linearGradient id="ray" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#5fd4ff"/><stop offset="1" stop-color="#8fd8ff"/></linearGradient>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#bg)"/>
+  <circle cx="512" cy="500" r="400" fill="url(#glow)"/>
+  <!-- rays: three arcs each side, fading outwards -->
+  <g fill="none" stroke="url(#ray)" stroke-linecap="round" stroke-width="30">
+    <path d="M330 390 A 220 220 0 0 0 330 610" opacity="0.95"/>
+    <path d="M250 330 A 320 320 0 0 0 250 670" opacity="0.6"/>
+    <path d="M178 280 A 420 420 0 0 0 178 720" opacity="0.3"/>
+    <path d="M694 390 A 220 220 0 0 1 694 610" opacity="0.95"/>
+    <path d="M774 330 A 320 320 0 0 1 774 670" opacity="0.6"/>
+    <path d="M846 280 A 420 420 0 0 1 846 720" opacity="0.3"/>
+  </g>
+  <!-- faceted light (a lodestone cut, standing on a small base) -->
+  <polygon points="512,330 612,500 512,560 412,500" fill="url(#fTop)"/>
+  <polygon points="412,500 512,560 512,700 400,610" fill="url(#fLeft)"/>
+  <polygon points="612,500 512,560 512,700 624,610" fill="url(#fRight)"/>
+  <polygon points="512,330 612,500 512,470" fill="#ffffff" opacity="0.28"/>
+  <rect x="446" y="712" width="132" height="26" rx="13" fill="#5fd4ff" opacity="0.85"/>
+</svg>

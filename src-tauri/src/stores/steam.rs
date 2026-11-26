@@ -22,6 +22,22 @@ struct Root {
     flatpak: bool,
 }
 
+/// Windows: Steam's folder, from where Steam records it (or its installer's default).
+#[cfg(windows)]
+fn roots() -> Vec<Root> {
+    let p = crate::os::registry_string(false, "Software\\Valve\\Steam", "SteamPath")
+        .or_else(|| crate::os::registry_string(true, "SOFTWARE\\WOW6432Node\\Valve\\Steam", "InstallPath"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("C:\\Program Files (x86)\\Steam"));
+    // Not canonicalized: on Windows that gives \\\\?\\C:\\... paths, which some programs don't accept.
+    if p.join("steamapps").is_dir() || p.join("steam.exe").is_file() {
+        vec![Root { path: p, flatpak: false }]
+    } else {
+        vec![]
+    }
+}
+
+#[cfg(not(windows))]
 fn roots() -> Vec<Root> {
     let h = home();
     let mut seen = HashSet::new();
@@ -65,6 +81,8 @@ fn client(root: &Root, args: &[&str]) -> LaunchSpec {
         let mut a = vec!["run", FLATPAK_ID];
         a.extend(args);
         LaunchSpec::new("flatpak", &a)
+    } else if cfg!(windows) {
+        LaunchSpec::new(root.path.join("steam.exe").to_string_lossy().into_owned(), args)
     } else {
         LaunchSpec::new("steam", args)
     }
@@ -119,6 +137,15 @@ fn steam_update(app: &vdf::Vdf, flags: u32) -> Option<(&'static str, Option<u64>
         Some(("available", size))
     } else {
         None
+    }
+}
+
+/// How to spot a Steam game running. Linux: Steam's launch wrapper carries "AppId=<id>". Windows: only
+/// program paths are visible, so a program running from the game's install folder.
+fn steam_detect(appid: &str, lib: &Path, installdir: Option<&str>) -> Detect {
+    match installdir.filter(|_| cfg!(windows)) {
+        Some(d) => Detect::Contains(path_str(&lib.join("steamapps").join("common").join(d))),
+        None => Detect::Arg(format!("AppId={appid}")),
     }
 }
 
@@ -178,7 +205,7 @@ pub fn scan() -> Vec<Game> {
                     hero,
                     size: app.str("SizeOnDisk").and_then(|s| s.parse().ok()),
                     launch: Some(launch),
-                    detect: Some(Detect::Arg(format!("AppId={appid}"))),
+                    detect: Some(steam_detect(appid, &lib, app.str("installdir"))),
                     install: Some(client(&root, &[&format!("steam://install/{appid}")])),
                     uninstall: Some(client(&root, &[&format!("steam://uninstall/{appid}")])),
                     can_install: true,
@@ -315,4 +342,18 @@ pub fn app_meta(appid: u32) -> Option<(String, String)> {
     let info = steam_appinfo::load(&root);
     let i = info.get(&appid)?;
     Some((i.name.clone(), i.installdir.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    /// Windows: where Lodestone finds Steam on this PC (real system, so only on purpose).
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn finds_windows_steam() {
+        let r = super::roots();
+        println!("roots: {:?}", r.iter().map(|x| x.path.display().to_string()).collect::<Vec<_>>());
+        println!("libraries: {:?}", super::library_dirs());
+        assert!(!r.is_empty(), "Steam not found");
+    }
 }

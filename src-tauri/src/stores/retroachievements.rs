@@ -119,9 +119,9 @@ fn dir() -> PathBuf {
 
 /// Create the cache folder readable only by you: it holds your achievement progress.
 fn ensure_dir(d: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
     fs::create_dir_all(d)?;
-    fs::set_permissions(dir(), fs::Permissions::from_mode(0o700))
+    crate::os::set_private(&dir(), true);
+    Ok(())
 }
 
 fn list_file(console: u32) -> PathBuf {

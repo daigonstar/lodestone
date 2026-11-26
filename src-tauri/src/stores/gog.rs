@@ -194,6 +194,14 @@ pub fn installed() -> Vec<Installed> {
     read("installed.json")
 }
 
+/// Windows: gogdl starts the game itself, natively.
+#[cfg(windows)]
+fn launch_spec(i: &Installed) -> Option<LaunchSpec> {
+    gogdl(&["launch", &i.path, &i.id, "--platform", "windows"]).ok()
+}
+
+/// Linux: through Proton (umu), with GOG's own setup steps first.
+#[cfg(not(windows))]
 fn launch_spec(i: &Installed) -> Option<LaunchSpec> {
     let umu = tools::umu_path()?;
     let mut s = gogdl(&["launch", &i.path, &i.id, "--platform", "windows", "--no-wine", "--wrapper", &umu.to_string_lossy()]).ok()?;
@@ -220,7 +228,7 @@ pub fn scan() -> Vec<Game> {
             Game {
                 id: format!("gog:{}", e.id),
                 store: "gog".into(),
-                via: "Lodestone · Proton".into(),
+                via: if cfg!(windows) { "Lodestone".into() } else { "Lodestone · Proton".into() },
                 title: e.title.clone(),
                 installed: i.is_some(),
                 cover: e.cover.clone(),
@@ -229,7 +237,8 @@ pub fn scan() -> Vec<Game> {
                 detect: i.and_then(|i| Path::new(&i.path).file_name()).map(|n| Detect::Contains(n.to_string_lossy().into_owned())),
                 can_install: i.is_none(),
                 can_uninstall: i.is_some(),
-                prefix: Some(path_str(&prefix(&e.id))),
+                // Windows games run natively there: no Wine prefix.
+                prefix: (!cfg!(windows)).then(|| path_str(&prefix(&e.id))),
                 update: update.then(|| "available".into()),
                 update_via: update.then(|| "lodestone".into()),
                 genres: e.genres.clone().unwrap_or_default(),
@@ -274,7 +283,7 @@ pub fn set_path(id: &str, path: &str) -> Result<(), String> {
 pub fn uninstall(id: &str) -> Result<(), String> {
     let mut list = installed();
     if let Some(i) = list.iter().find(|i| i.id == id) {
-        let ok = std::process::Command::new("gio").arg("trash").arg(&i.path).status().map(|s| s.success()).unwrap_or(false);
+        let ok = crate::os::trash(Path::new(&i.path));
         if !ok {
             fs::remove_dir_all(&i.path).map_err(|e| e.to_string())?;
         }

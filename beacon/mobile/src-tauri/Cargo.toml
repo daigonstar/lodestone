@@ -1,0 +1,29 @@
+[package]
+name = "lodestone-beacon-mobile"
+version = "0.1.0"
+description = "Lodestone Beacon for Android: your identity on your phone, and approving new PCs by scanning their QR code"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/daigonstar/lodestone"
+edition = "2021"
+rust-version = "1.90"
+
+# Not part of the desktop workspace (it has no GStreamer, and builds only for the phone).
+[workspace]
+
+[lib]
+name = "beacon_mobile_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+lodestone-beacon-client = { path = "../../client" }
+tauri = { version = "2", features = [] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

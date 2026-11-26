@@ -39,12 +39,7 @@ pub struct Store {
 /// themselves, with ordinary permissions, so their folders are closed off as a whole (and the token
 /// files too), along with Lodestone's own settings folder (keys, EA and Ubisoft sessions).
 pub fn lock_down_secrets() {
-    use std::os::unix::fs::PermissionsExt;
-    let private = |p: PathBuf, mode: u32| {
-        if p.exists() {
-            let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode));
-        }
-    };
+    let private = |p: PathBuf, mode: u32| crate::os::set_private(&p, mode == 0o700);
     let d = data_dir();
     private(d.join("legendary"), 0o700);
     private(d.join("gog"), 0o700);

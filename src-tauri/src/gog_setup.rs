@@ -63,12 +63,23 @@ pub fn main_hook() {
         }
     }
     let Some((prog, a)) = rest.split_first() else { std::process::exit(2) };
-    use std::os::unix::process::CommandExt;
     let mut c = Command::new(prog);
     c.args(a);
-    let e = crate::host::wrap(c).exec();
-    eprintln!("couldn't start {prog}: {e}");
-    std::process::exit(1);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let e = crate::host::wrap(c).exec();
+        eprintln!("couldn't start {prog}: {e}");
+        std::process::exit(1);
+    }
+    #[cfg(not(unix))]
+    match c.status() {
+        Ok(s) => std::process::exit(s.code().unwrap_or(1)),
+        Err(e) => {
+            eprintln!("couldn't start {prog}: {e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 fn win_path(p: &Path) -> String {

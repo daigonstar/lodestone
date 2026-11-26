@@ -58,13 +58,11 @@ pub struct Owned {
 
 /// Write a file only the user can read (it holds a sign-in token).
 pub fn write_private(p: &Path, text: &str) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
     if let Some(d) = p.parent() {
         fs::create_dir_all(d).map_err(|e| e.to_string())?;
     }
     let tmp = p.with_extension("tmp");
-    fs::write(&tmp, text).map_err(|e| e.to_string())?;
-    let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
+    crate::os::write_private(&tmp, text.as_bytes()).map_err(|e| e.to_string())?;
     fs::rename(&tmp, p).map_err(|e| e.to_string())
 }
 

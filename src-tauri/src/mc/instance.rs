@@ -1,6 +1,7 @@
 //! Minecraft instances (ATLauncher / Prism): version + loader info and the files in mods/,
 //! resourcepacks/ and shaderpacks/. ATLauncher tracks mods in instance.json, so we keep that in sync.
 
+#[cfg(not(windows))]
 use crate::model::home;
 use serde::Serialize;
 use serde_json::Value;
@@ -67,17 +68,31 @@ impl Kind {
     }
 }
 
+#[cfg(not(windows))]
 fn atl_dirs() -> Vec<PathBuf> {
     let h = home();
     vec![h.join(".var/app/com.atlauncher.ATLauncher/data/instances"), h.join(".local/share/atlauncher/instances")]
 }
 
+#[cfg(not(windows))]
 fn prism_dirs() -> Vec<PathBuf> {
     let h = home();
     vec![
         h.join(".var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances"),
         h.join(".local/share/PrismLauncher/instances"),
     ]
+}
+
+/// Windows: ATLauncher has no fixed folder (it runs from wherever it was unpacked), so it isn't looked for.
+#[cfg(windows)]
+fn atl_dirs() -> Vec<PathBuf> {
+    vec![]
+}
+
+/// Windows: Prism Launcher's default data folder, %APPDATA%\PrismLauncher.
+#[cfg(windows)]
+fn prism_dirs() -> Vec<PathBuf> {
+    dirs::data_dir().map(|d| vec![d.join("PrismLauncher").join("instances")]).unwrap_or_default()
 }
 
 pub fn all() -> Vec<Instance> {
@@ -307,7 +322,7 @@ impl Instance {
 }
 
 fn trash(path: &Path) -> Result<(), String> {
-    let ok = std::process::Command::new("gio").arg("trash").arg(path).status().map(|s| s.success()).unwrap_or(false);
+    let ok = crate::os::trash(path);
     if ok {
         Ok(())
     } else {

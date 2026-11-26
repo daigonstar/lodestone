@@ -9,12 +9,15 @@
 </head>
 <body>
   <aside class="sidebar">
+    <button id="side-expand" class="side-expand" title="Show the sidebar">»</button>
     <div class="brand"><img class="brand-icon" src="lodestone.svg" alt="" />Lodestone<a href="#" class="app-version" id="app-version" title="What's new in this version"></a></div>
     <nav id="nav-library" class="nav"></nav>
     <button type="button" class="nav-label" data-section="nav-stores" aria-expanded="true">Stores</button>
     <nav id="nav-stores" class="nav"></nav>
     <button type="button" class="nav-label hidden" id="nav-systems-label" data-section="nav-systems" aria-expanded="true">Systems</button>
     <nav id="nav-systems" class="nav"></nav>
+    <button type="button" class="nav-label" data-section="nav-plugins" aria-expanded="true">Plug-ins</button>
+    <nav id="nav-plugins" class="nav"></nav>
     <button type="button" class="nav-label" data-section="nav-shop" aria-expanded="true">Shop</button>
     <nav id="nav-shop" class="nav"></nav>
     <div class="sidebar-foot">
@@ -22,12 +25,13 @@
       <button id="btn-refresh" class="ghost" title="Rescan all libraries (Ctrl+R)">⟳ Rescan</button>
       <button id="btn-accounts" class="ghost">👤 Accounts</button>
       <button id="btn-settings" class="ghost">⚙ Settings</button>
+      <button id="side-collapse" class="side-collapse" title="Fold the sidebar away for more room">« Hide sidebar</button>
     </div>
   </aside>
 
   <main>
     <header class="topbar">
-      <input id="search" type="search" placeholder="Search your games   ( / )" autocomplete="off" spellcheck="false" />
+      <div class="search-box"><input id="search" type="search" placeholder="Search your games   ( / )" autocomplete="off" spellcheck="false" /><button id="search-close" class="search-close hidden" title="Close the search (Esc)">✕</button></div>
       <select id="sort" title="Sort">
         <option value="recent">Recently played</option>
         <option value="title">A–Z</option>
@@ -78,7 +82,7 @@
                 <button data-act="emu-system" class="hidden rom-only">Change the emulator for this system</button>
                 <button data-act="rom-reveal" class="hidden rom-only">Show the ROM file</button>
                 <button data-act="ra-page" class="hidden">On RetroAchievements</button>
-                <button data-act="mangohud">MangoHud overlay: off</button>
+                <button data-act="mangohud" class="linux-only">MangoHud overlay: off</button>
                 <button data-act="log">View launch log</button>
                 <button data-act="runtimes">Install DirectX &amp; VC++ runtimes</button>
                 <button data-act="client">Open store app</button>
@@ -109,6 +113,15 @@
     </section>
     </div>
 
+    <section id="plugins" class="plugins-page hidden">
+      <h1>Plug-ins</h1>
+      <p class="muted">Plug-ins are separate programs that show inside Lodestone. Each runs in its own sandbox: it can't see your store sign-ins, keys or files, and it only gets what you allow here.</p>
+      <div id="plugins-list"></div>
+    </section>
+    <section id="beacon" class="beacon hidden">
+      <div id="beacon-msg" class="beacon-msg"></div>
+      <iframe id="beacon-frame" class="hidden" title="Lodestone Beacon" referrerpolicy="no-referrer" allow="fullscreen"></iframe>
+    </section>
     <section id="dlv" class="dlv hidden">
       <div class="dlv-head">
         <h2>Downloads</h2>
@@ -164,7 +177,7 @@
     <div id="filters" class="filters">
       <select id="f-genre" title="Genre"></select>
       <select id="f-series" title="Series"></select>
-      <select id="f-compat" title="ProtonDB rating"></select>
+      <select id="f-compat" class="linux-only" title="ProtonDB rating"></select>
       <select id="f-ach" class="hidden" title="RetroAchievements"></select>
       <select id="f-region" class="hidden" title="Region (from the ROM's file name)"></select>
       <select id="f-played" class="hidden" title="Played or not"></select>
@@ -243,10 +256,11 @@
   <dialog id="dlg-add">
     <form method="dialog" id="form-add">
       <h2>Add a game</h2>
-      <p class="hint">Anything with a command line: a native game, a Windows game through <code>umu-run</code> or <code>wine</code>, an emulator, a script.
+      <p class="hint linux-only">Anything with a command line: a native game, a Windows game through <code>umu-run</code> or <code>wine</code>, an emulator, a script.
         Battle.net and Guild Wars 2 are easiest to install in Lutris; they'll show up here automatically.</p>
+      <p class="hint win-only">Anything with a program to start: a game, an emulator or a script. Pick its .exe or type its command.</p>
       <label>Title<input name="title" required placeholder="Guild Wars 2" /></label>
-      <label class="check"><input type="checkbox" name="proton" /> Windows game: run it with Proton (own prefix, no Steam needed)</label>
+      <label class="check linux-only"><input type="checkbox" name="proton" /> Windows game: run it with Proton (own prefix, no Steam needed)</label>
       <label><span id="cmd-label">Command</span><input name="command" required placeholder="/home/you/Games/mygame/start.sh" /></label>
       <label>Store
         <select name="store">
@@ -329,7 +343,7 @@
     </form>
   </dialog>
 
-  <dialog id="dlg-mh" class="wide">
+  <dialog id="dlg-mh" class="wide linux-only">
     <form method="dialog" id="form-mh">
       <h2>MangoHud overlay</h2>
       <p class="hint">What the overlay shows and where. Saved to <code id="mh-path">MangoHud.conf</code>, so it applies wherever you use MangoHud. Settings Lodestone doesn't list here are kept.</p>
@@ -397,7 +411,7 @@
 
   <dialog id="dlg-accounts">
     <h2>Accounts</h2>
-    <p class="hint">Sign in on each store's own page in a Lodestone window. Lodestone never sees your password; it only receives the store's sign-in token, kept in <code>~/.local/share/lodestone</code>.</p>
+    <p class="hint">Sign in on each store's own page in a Lodestone window. Lodestone never sees your password; it only receives the store's sign-in token, kept in <code class="data-dir">Lodestone's data folder</code>.</p>
     <div id="acct-list" class="acct-list"></div>
     <div class="dlg-actions"><button class="ghost" data-close-dialog>Close</button></div>
   </dialog>
@@ -405,12 +419,14 @@
   <dialog id="dlg-settings">
     <form method="dialog" id="form-settings">
       <h2>Settings</h2>
+      <div class="linux-only">
       <h3>Compatibility (Proton)</h3>
       <div class="row-line"><span id="umu-status" class="umu-status muted">Checking…</span><button type="button" id="umu-setup" class="umu-setup ghost">Set up Proton</button></div>
       <label>Proton version
         <select name="proton" id="proton-select" class="proton-select"></select>
       </label>
       <p class="hint">Windows games and launchers (Battle.net, Guild Wars 2, games you add) run through Proton using umu-launcher, which Lodestone keeps in its own folder. Steam isn't needed.</p>
+      </div>
       <h3>Library</h3>
       <label class="check"><input type="checkbox" id="merge-dupes" /> Show each game once in All games, Favorites and Recently played</label>
       <p class="hint">When you own a game on several stores, Lodestone shows the installed copy, or else the first store in this order. Use the arrows to change it.</p>
@@ -426,28 +442,35 @@
       <p class="hint">Without a key, Lodestone finds artwork from Steam's store. A free SteamGridDB key (<a href="#" data-href="https://www.steamgriddb.com/profile/preferences/api">steamgriddb.com → Preferences → API</a>) adds thousands of community covers and banners, including for games that aren't on Steam.</p>
       <h3>Emulation</h3>
       <label><span>ROMs folder <small>(optional)</small></span>
-        <div class="row-line emu-folder"><input name="emudir" autocomplete="off" spellcheck="false" placeholder="~/Emulation" />
+        <div class="row-line emu-folder"><input name="emudir" autocomplete="off" spellcheck="false" placeholder="~/Emulation" data-win-placeholder="C:\Emulation" />
           <button type="button" class="ghost" id="emu-browse">Browse…</button>
           <button type="button" class="ghost" id="emu-create">Create folders</button></div>
       </label>
       <p class="hint" id="emu-found"></p>
-      <p class="hint">Lodestone looks for EmuDeck's layout (<code>Emulation/roms/&lt;system&gt;</code>) in your home folder, RetroDECK's folder and on mounted drives. If your ROMs are somewhere else, choose the Emulation folder, its <code>roms</code> folder, or any folder with one folder per system (<code>snes</code>, <code>gba</code>, <code>psx</code>…). Starting from scratch? <b>Create folders</b> makes that layout in the folder above (or <code>~/Emulation</code>), with a folder for every system Lodestone knows; put each system's ROMs in its folder and Rescan. Nothing existing is changed.</p>
+      <p class="hint">Lodestone looks for EmuDeck's layout (<code>Emulation/roms/&lt;system&gt;</code>) in your home folder, RetroDECK's folder and <span class="linux-only">on mounted drives</span><span class="win-only">at the top of each drive</span>. If your ROMs are somewhere else, choose the Emulation folder, its <code>roms</code> folder, or any folder with one folder per system (<code>snes</code>, <code>gba</code>, <code>psx</code>…). Starting from scratch? <b>Create folders</b> makes that layout in the folder above (or <code>~/Emulation</code>), with a folder for every system Lodestone knows; put each system's ROMs in its folder and Rescan. Nothing existing is changed.</p>
       <h3>RetroAchievements</h3>
       <div class="row-line ra-row">
         <label><span>Username</span><input name="rauser" autocomplete="off" spellcheck="false" placeholder="your RA username" /></label>
         <label><span>Web API key</span><input name="rakey" type="password" autocomplete="off" spellcheck="false" placeholder="paste key" /></label>
       </div>
       <p class="hint">For your ROMs: proper names, box art and details from RetroAchievements, and each game's achievements with your progress. Get the key from your <a href="#" data-href="https://retroachievements.org/controlpanel.php">RetroAchievements settings → Keys</a>. Lodestone matches ROMs to RA on your PC (no ROM or fingerprint is sent) and only sends your username and key to RA. Your progress counts when you play with achievements turned on in the emulator (RetroArch: Settings → Achievements).</p>
+      <div class="linux-only">
       <h3>Performance overlay (MangoHud)</h3>
       <div class="row-line"><span id="mh-status" class="muted">Checking…</span><button type="button" id="mh-setup" class="ghost">Set up MangoHud</button></div>
       <div class="row-line"><button type="button" class="ghost" id="mh-config">Customize the overlay…</button></div>
       <label class="check"><input type="checkbox" id="mh-all" /> Show MangoHud in every game (turn it off or on per game in the game's ⋯ menu)</label>
       <p class="hint">FPS, frame times, CPU and GPU load over your games. Lodestone uses MangoHud from your system, or sets up the official release in its own folder. It works for games Lodestone starts; for Steam games, add <code>mangohud %command%</code> to the game's launch options in Steam.</p>
+      </div>
+      <h3>Programs</h3>
+      <div class="row-line"><span class="muted" id="prog-status">Emulators<span class="win-only"> and store launchers</span> that Lodestone installs. Updates are only looked for when you ask.</span><button type="button" class="ghost" id="prog-check">Check for updates</button></div>
+      <div id="prog-list" class="prog-list"></div>
+      <h3>Plug-ins</h3>
+      <div class="row-line"><span class="muted">Installed plug-ins, their permissions, and stopping them.</span><button type="button" class="ghost" id="open-plugins">Manage plug-ins…</button></div>
       <h3>Mods</h3>
       <label class="check"><input type="checkbox" id="kiln-play" /> Play modded games through Kiln (checks mods are deployed and loaders set up first)</label>
       <h3>Games</h3>
       <label>Install Epic and GOG games to
-        <input name="gamesdir" placeholder="~/Games" />
+        <input name="gamesdir" placeholder="~/Games" data-win-placeholder="C:\Games" />
       </label>
       <h3>Minecraft</h3>
       <label>CurseForge API key
@@ -455,7 +478,7 @@
       </label>
       <p class="hint">Modrinth works without a key. CurseForge requires a free personal key: sign in at
         <a href="#" data-href="https://console.curseforge.com/">console.curseforge.com</a> → API keys. It's stored only in
-        <code>~/.config/lodestone/settings.json</code> (readable only by you).</p>
+        <code class="linux-only">~/.config/lodestone/settings.json</code><code class="win-only">%APPDATA%\lodestone\settings.json</code> (readable only by you).</p>
       <div class="dlg-actions">
         <button type="button" class="ghost" id="btn-rerun-setup">Run setup guide again</button>
         <small class="muted settings-version" id="settings-version" style="margin-right:auto"></small>
@@ -476,7 +499,7 @@
         <ul class="ob-points">
           <li><b>Steam, Epic, GOG, Battle.net, Guild Wars 2, Minecraft</b> and anything else you add, side by side.</li>
           <li><b>Press Play and the game starts.</b> Other launchers stay hidden in the background.</li>
-          <li><b>Windows games run through Proton</b> without needing Steam, Heroic or Lutris.</li>
+          <li class="linux-only"><b>Windows games run through Proton</b> without needing Steam, Heroic or Lutris.</li>
           <li><b>A Minecraft mod manager</b> for Modrinth and CurseForge.</li>
         </ul>
         <p class="muted">This takes about two minutes. Everything here can be changed later in Settings.</p>
@@ -489,6 +512,12 @@
       </section>
 
       <section class="ob-step" data-step="2">
+        <div class="win-only">
+        <h2>Your store launchers</h2>
+        <p class="muted">Lodestone starts your games through each store's own launcher. Install the ones you use: Lodestone installs them with winget, Windows' own package manager, from each store's official download. Installing accepts the launcher's licence, as installing it yourself would.</p>
+        <div class="ob-box" id="ob-launchers"></div>
+        </div>
+        <div class="linux-only">
         <h2>Windows games (Proton)</h2>
         <p class="muted">Epic, GOG, Battle.net and Windows games you add run through Proton, the same compatibility layer Steam uses. Lodestone keeps its own runner (umu-launcher), so Steam isn't needed for these.</p>
         <div class="ob-box">
@@ -497,6 +526,7 @@
             <select id="ob-proton" class="proton-select"></select>
           </label>
           <p class="hint">"Automatic" uses the newest GE-Proton on this PC, or downloads one the first time a game needs it.</p>
+        </div>
         </div>
       </section>
 
@@ -523,7 +553,7 @@
         <div id="ob-store-order" class="store-order"></div>
         <h3>New installs</h3>
         <label>Install Epic and GOG games to
-          <input id="ob-gamesdir" placeholder="~/Games" />
+          <input id="ob-gamesdir" placeholder="~/Games" data-win-placeholder="C:\Games" />
         </label>
         <label class="check"><input type="checkbox" id="ob-minimize" /> Minimize Lodestone when a game starts</label>
       </section>

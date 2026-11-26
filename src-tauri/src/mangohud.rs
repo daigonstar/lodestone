@@ -84,7 +84,7 @@ pub async fn install() -> Result<String, String> {
     let _ = fs::remove_dir_all(&stage);
     let current = dir().join("current");
     let _ = fs::remove_file(&current);
-    std::os::unix::fs::symlink(&target, &current).map_err(net::err)?;
+    crate::tools::link_dir(&target, &current).map_err(net::err)?;
     fs::write(dir().join("version.txt"), &tag).map_err(net::err)?;
     register(&current.join("usr/lib/mangohud"))?;
     Ok(tag)
