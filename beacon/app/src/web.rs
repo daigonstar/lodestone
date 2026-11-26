@@ -58,6 +58,7 @@ pub fn router(app: Shared) -> Router {
         .route("/api/icon", get(icon).post(set_icon))
         .route("/api/banner", get(banner).post(set_banner).layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)))
         .route("/api/probe", post(probe))
+        .route("/api/local-server", post(local_server))
         .route("/api/voice", get(voice_status))
         .route("/api/voice/join", post(voice_join))
         .route("/api/voice/leave", post(voice_leave))
@@ -692,6 +693,12 @@ async fn set_icon(State(app): State<Shared>, Json(r): Json<SetIcon>) -> R {
 
 async fn set_banner(State(app): State<Shared>, Json(r): Json<SetIcon>) -> R {
     put_community_image(&app, r, "banner").await
+}
+
+/// The setup guide's "Start it for me": run a server on this computer only (see local.rs).
+async fn local_server() -> R {
+    let (server, code) = crate::local::start(&crate::data_dir().join("local-server")).await.map_err(Fail)?;
+    Ok(Json(json!({ "server": server, "code": code })))
 }
 
 #[derive(Deserialize)]

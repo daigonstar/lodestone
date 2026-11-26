@@ -10,6 +10,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod bridge;
+mod local;
 mod servers;
 mod voice;
 mod web;
@@ -117,6 +118,8 @@ async fn run(ready: Option<std::sync::mpsc::Sender<String>>) {
     } else if !bridged {
         eprintln!("Lodestone Beacon (no Lodestone bridge): open {ui}");
     }
+    // A server set up on this computer from the setup guide comes back up with Beacon.
+    tokio::spawn(async { local::resume(&data_dir().join("local-server")).await });
     servers::start_sync(app.clone());
     servers::start_live(app.clone());
     servers::start_playing(app.clone());

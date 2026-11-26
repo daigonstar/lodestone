@@ -43,6 +43,8 @@ port forwarded to the server. Text chat works through the tunnel as it is.
 The container runs as a non-root user with a read-only filesystem and no Linux capabilities; only its
 data volume is writable.
 
+To just try Beacon on one computer, the app's setup guide has a **Start it for me** button: it runs the server inside the app, on `127.0.0.1:8080` only (nothing outside this computer can reach it), with its data in Beacon's own data folder (`local-server`). Voice calls are off in that mode. It starts again whenever Beacon starts, once you've set it up.
+
 Without containers (for development): `cargo run -p lodestone-beacon-server`, listening on port 8080.
 
 | Setting | Default | What it does |

@@ -1049,23 +1049,23 @@ function renderWizard() {
   } else if (w.step === "run") {
     const local = here && w.reach === "local";
     const where = here ? "on this computer" : "on the other device";
-    body = `<h2>Start the server ${where}</h2>` + (local ? `
-      <p class="muted">From the Beacon folder of the Lodestone source, in a terminal:</p>
-      ${cmd("cargo run -p lodestone-beacon-server")}
-      <p class="muted">It listens on port 8080 and prints a <b>one-time setup code</b> in its output. Keep that window open and copy the code.</p>` : `
+    body = `<h2>${local ? "Start a server on this computer" : `Start the server ${where}`}</h2>` + (local ? `
+      <p class="muted">Beacon can run a small server for you, reachable only from this computer (it can't be reached from the internet). It's the same server program friends would use, and your data stays in Beacon's own folder. Voice calls are off in this mode.</p>
+      <p class="err" id="wiz-err"></p>
+      <div class="row end wiz-nav"><button type="button" class="ghost" data-wiz="reach">Back</button><button type="button" class="primary" id="wiz-start">Start it for me</button></div>` : `
       <p class="muted">You need Docker on ${here ? "this computer" : "that device"}. Copy the <b>beacon</b> folder (it holds <code>compose.yml</code>) there, open a terminal in it, and run, with your own domain:</p>
       ${cmd("BEACON_DOMAIN=beacon.yourdomain.com docker compose up -d")}
       ${cmd("docker compose logs beacon")}
       <p class="muted">The second command shows the <b>one-time setup code</b>; copy it.</p>
       <div class="wiz-note"><b>Make it reachable.</b> Point your domain at ${here ? "this computer" : "that device"} and forward the ports the compose file opens on your router. If you use a reverse proxy or a Cloudflare Tunnel instead, the README has a variant (<code>compose.proxy.yml</code>). ${here ? "Friends can only join while this computer is on." : ""}</div>
-      <div class="wiz-note"><b>Voice and video</b> travel over UDP: forward port 7881 and set <code>BEACON_MEDIA_ADDR</code> (see the README). Text chat works without it.</div>`) + nav(here ? "reach" : "where", "connect");
+      <div class="wiz-note"><b>Voice and video</b> travel over UDP: forward port 7881 and set <code>BEACON_MEDIA_ADDR</code> (see the README). Text chat works without it.</div>` ) + (local ? "" : nav(here ? "reach" : "where", "connect"));
   } else if (w.step === "connect") {
     const local = here && w.reach === "local";
     body = `<h2>Connect and create your admin account</h2>
       <form id="wiz-form" class="stack">
         <label>Server address<div class="row"><input name="server" autocomplete="off" spellcheck="false" required value="${esc(w.server || (local ? "localhost:8080" : ""))}" placeholder="beacon.yourdomain.com"><button type="button" class="ghost" id="wiz-check">Check</button></div></label>
         <p class="muted" id="wiz-probe"></p>
-        <label>Setup code<input name="code" autocomplete="off" required placeholder="From the server's output"></label>
+        <label>Setup code<input name="code" autocomplete="off" required value="${esc(w.code || "")}" placeholder="From the server's output"></label>
         <label>Your username<input name="username" autocomplete="off" spellcheck="false" required placeholder="2 to 32: a-z 0-9 _ . -"></label>
         <p class="err" id="wiz-err"></p>
         <div class="row end wiz-nav"><button type="button" class="ghost" data-wiz="run">Back</button><button class="primary">Create account</button></div>
@@ -1078,6 +1078,17 @@ function renderWizard() {
         <div class="row end wiz-nav"><button type="button" class="ghost" data-wiz="exit">Skip for now</button><button class="primary">Create community</button></div></form>`;
   }
   $("#chat").innerHTML = `<div class="home-page wizard"><button type="button" class="ghost wiz-exit" data-wiz="exit">${ic("close")} Exit setup</button>${steps}<div class="wiz-body">${body}</div></div>`;
+  const start = $("#wiz-start");
+  if (start) start.onclick = async () => {
+    start.disabled = true;
+    try {
+      const r = await api("/api/local-server", {});
+      w.server = r.server;
+      w.code = r.code || "";
+      w.step = "connect";
+      renderWizard();
+    } catch (err) { $("#wiz-err").textContent = err.message; start.disabled = false; }
+  };
   const form = $("#wiz-form");
   if (form) {
     const probe = async () => {
