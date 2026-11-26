@@ -41,7 +41,7 @@ tolerated (older Kiln versions lack `mods`), so a companion can add fields witho
   install knows nothing else.
 - **Third-party**: you type `owner/repo` on the Plug-ins page; it's stored only in your settings
   (`plugin_repos`), like a Beacon server address. GitHub only, name checked (`parse_repo`).
-- A release is usable when it isn't a draft (nor a pre-release, unless the user turned on *Show test builds*), has the tag prefix, and has a file ending
+- A release is usable when it isn't a draft (nor a pre-release, unless the user turned on test builds on the Plug-ins page), has the tag prefix, and has a file ending
   `-linux-x86_64.flatpak` (Linux) or `-windows-x86_64.zip` (Windows). The file must be downloaded from
   `https://github.com/<repo>/releases/download/` and carry GitHub's `sha256:` digest, which is checked.
 - Optional `lodestone-plugin.json` in the release (≤16 KB): `name`, `description`, `kind`

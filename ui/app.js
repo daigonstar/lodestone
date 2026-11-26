@@ -1750,31 +1750,22 @@ function renderPluginsPage() {
       </div></div>`;
   }).join("") || '<p class="muted">No plug-ins yet.</p>';
   const keep = document.querySelector("#plugin-repo-input")?.value || "";
-  $("#plugins-list").innerHTML += thirdPartyHTML() + testBuildsHTML();
+  $("#plugins-list").innerHTML += testReleasesHTML() + thirdPartyHTML();
   const inp = document.querySelector("#plugin-repo-input");
   if (inp) inp.value = keep;
 }
-// "Show test builds": off unless you turn it on; changing it looks the releases up again.
-function testBuildsHTML() {
-  return `<h2 class="plugins-sub">Test builds</h2>
-    <label class="check"><input type="checkbox" id="test-builds" ${state.testBuilds ? "checked" : ""} /> Show test builds</label>
-    <p class="muted small">Also offers releases marked as pre-release, for every plug-in on this page, including your third-party ones. They are unfinished and may break. Turning this off doesn't remove a test build you already installed.</p>`;
-}
-const testBuildNote = (r) => (r && r.prerelease ? " (test build)" : "");
-$("#plugins-list").addEventListener("change", async (e) => {
-  if (e.target.id !== "test-builds") return;
-  try {
-    await invoke("set_test_builds", { on: e.target.checked });
-    state.testBuilds = e.target.checked;
-    state.beaconRelease = null;
-    await Promise.all([checkBeaconRelease(), checkPluginReleases()]);
-  } catch (err) { toast(String(err), true); renderPluginsPage(); }
-});
 $("#plugins-list").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-plugin-act]");
   if (!b) return;
   const id = b.dataset.pluginId || b.closest("[data-plugin]")?.dataset.plugin;
   try {
+    if (b.dataset.pluginAct === "test-releases") {
+      await invoke("plugin_set_test_releases", { on: b.checked });
+      state.pluginTest = b.checked;
+      toast(b.checked ? "Test builds are on. Looking for them…" : "Test builds are off.");
+      checkBeaconRelease();
+      return checkPluginReleases();
+    }
     if (b.dataset.pluginAct === "add-repo") {
       const repo = await invoke("plugin_repo_add", { repo: $("#plugin-repo-input").value });
       toast(`Added ${repo}. Looking for its latest release…`);
@@ -1823,7 +1814,7 @@ async function checkBeaconRelease() {
 async function checkPluginReleases() {
   state.pluginReleases = {};
   try { state.pluginRepos = await invoke("plugin_repos"); } catch { state.pluginRepos = []; }
-  try { state.testBuilds = (await invoke("get_settings")).test_builds; } catch {}
+  try { state.pluginTest = await invoke("plugin_test_releases"); } catch { state.pluginTest = false; }
   renderPluginsPage();
   await Promise.all(["kiln", ...state.pluginRepos].map(async (id) => {
     try { state.pluginReleases[id] = await invoke("plugin_release_check", { id }); } catch (e) { state.pluginReleases[id] = { error: String(e) }; }
@@ -1834,8 +1825,8 @@ function releaseHTML(id, p) {
   const r = (state.pluginReleases || {})[id];
   if (!r) return '<p class="muted small">Checking GitHub for the latest release…</p>';
   if (r.error) return `<p class="muted small">${esc(r.error)}</p>`;
-  if (r.update) return `<p class="small">Version ${esc(r.latest)}${testBuildNote(r)} is out (you have ${esc(r.installed)}).</p>`;
-  if (!r.installed && !(p && p.installed)) return `<p class="small">Latest: ${esc(r.latest)}${testBuildNote(r)}. It's downloaded from that repository's GitHub releases and checked against GitHub's checksum before it's installed.</p>`;
+  if (r.update) return `<p class="small">Version ${esc(r.latest)} is out (you have ${esc(r.installed)}).</p>`;
+  if (!r.installed && !(p && p.installed)) return `<p class="small">Latest: ${esc(r.latest)}. It's downloaded from that repository's GitHub releases and checked against GitHub's checksum before it's installed.</p>`;
   return "";
 }
 function installBtn(id, p) {
@@ -1844,6 +1835,11 @@ function installBtn(id, p) {
   const have = r.installed || (p && p.installed);
   if (have && !r.update) return "";
   return `<button class="${have ? "ghost" : "play"}" data-plugin-act="install-release" data-plugin-id="${esc(id)}">${have ? "Update to" : "Install"} ${esc(r.latest)}</button>`;
+}
+function testReleasesHTML() {
+  return `<h2 class="plugins-sub">Test builds</h2>
+    <label class="check-row"><input type="checkbox" data-plugin-act="test-releases" ${state.pluginTest ? "checked" : ""} /> Also offer test builds (pre-releases) of plug-ins</label>
+    <p class="muted small">Test builds are for people helping to test. They may be unfinished or broken, and nobody has checked them for you. Off by default; they are still downloaded only from the plug-in's own GitHub releases and checked against GitHub's checksum.</p>`;
 }
 function thirdPartyHTML() {
   const repos = state.pluginRepos || [];
@@ -1866,8 +1862,8 @@ function beaconReleaseHTML(p) {
   const r = state.beaconRelease;
   if (!r) return '<p class="muted small">Checking for the latest Beacon…</p>';
   if (r.error) return `<p class="muted small">${esc(r.error)}</p>`;
-  if (r.update) return `<p class="small">Beacon ${esc(r.latest)}${testBuildNote(r)} is out (you have ${esc(r.installed)}). Updating keeps your communities and messages.</p>`;
-  if (!p.installed) return `<p class="small">Latest: Beacon ${esc(r.latest)}${testBuildNote(r)}. It's downloaded from Lodestone's official GitHub releases and checked before it's installed.</p>`;
+  if (r.update) return `<p class="small">Beacon ${esc(r.latest)} is out (you have ${esc(r.installed)}). Updating keeps your communities and messages.</p>`;
+  if (!p.installed) return `<p class="small">Latest: Beacon ${esc(r.latest)}. It's downloaded from Lodestone's official GitHub releases and checked before it's installed.</p>`;
   return "";
 }
 

@@ -56,9 +56,9 @@ pub struct Settings {
     /// GitHub repositories ("owner/repo") you added for third-party plug-ins. Only here, never built in.
     #[serde(default)]
     pub plugin_repos: Vec<String>,
-    /// Also offer plug-in releases marked "pre-release" on GitHub (test builds). Off unless you turn it on.
+    /// Also offer pre-releases (test builds) of plug-ins on the Plug-ins page. Off unless you turn it on.
     #[serde(default)]
-    pub test_builds: bool,
+    pub plugin_test_releases: bool,
 }
 
 fn yes() -> bool {

@@ -135,7 +135,7 @@ Wine prefix; Lodestone only turns its "keep me logged in" option back on. Signin
 
 **Plug-ins and test builds.** The Plug-ins page asks `api.github.com` for each plug-in's releases when you
 open it, and downloads one only when you press the button, checking it against GitHub's published SHA-256.
-Releases marked as pre-release (test builds, which are unfinished) are skipped unless you turn on *Show test
+Releases marked as pre-release (test builds, which are unfinished) are skipped unless you turn on *Also offer test
 builds* on that page. It's off by default and applies to every plug-in, third-party ones included.
 
 **Unofficial APIs.** Steam's Web API is public, but Epic, GOG, EA, Ubisoft and Battle.net are reached

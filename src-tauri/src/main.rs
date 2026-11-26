@@ -1539,11 +1539,16 @@ fn plugin_repo_remove(repo: String) -> Result<(), String> {
     plugin_sources::remove_repo(&repo)
 }
 
-/// Offer plug-in test builds (GitHub pre-releases) or not.
+/// Whether pre-releases (test builds) of plug-ins are offered on the Plug-ins page.
 #[tauri::command]
-fn set_test_builds(on: bool) -> Result<(), String> {
+fn plugin_test_releases() -> bool {
+    settings::load().plugin_test_releases
+}
+
+#[tauri::command]
+fn plugin_set_test_releases(on: bool) -> Result<(), String> {
     let mut s = settings::load();
-    s.test_builds = on;
+    s.plugin_test_releases = on;
     settings::save(&s)
 }
 
@@ -1741,7 +1746,8 @@ fn main() {
             plugin_install,
             plugin_repos,
             plugin_repo_add,
-            set_test_builds,
+            plugin_test_releases,
+            plugin_set_test_releases,
             plugin_repo_remove,
             rom_reveal,
             emu_open,

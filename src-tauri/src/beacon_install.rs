@@ -31,10 +31,10 @@ pub fn installed_version() -> Option<String> {
 
 /// Is there a Beacon to install, or a newer one than yours? (Only asked when you open Plug-ins or Beacon.)
 pub async fn check(running_version: Option<String>) -> Result<Value, String> {
-    let rel = plugin_sources::latest(&source()).await.map_err(|e| if e.contains("no release") { "No Beacon release for this system yet. Test builds only show with “Show test builds” on, on the Plug-ins page.".to_string() } else { e })?;
+    let rel = plugin_sources::latest(&source()).await.map_err(|e| if e.contains("no release") { "No Beacon release has been published yet".to_string() } else { e })?;
     let have = running_version.or_else(installed_version);
     let update = have.as_deref().is_some_and(|h| newer(&rel.version, h));
-    Ok(json!({ "latest": rel.version, "installed": have, "update": update, "prerelease": rel.prerelease }))
+    Ok(json!({ "latest": rel.version, "installed": have, "update": update }))
 }
 
 /// Download, check and install the newest Beacon (or update to it). Returns the version installed.

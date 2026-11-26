@@ -6,9 +6,6 @@
 //! - **Third-party** plug-ins come from repositories you add yourself (stored only in your own settings,
 //!   like a Beacon server address). They are always labelled third-party.
 //!
-//! Releases marked "pre-release" are test builds: they're skipped unless you turn on "Show test builds"
-//! on the Plug-ins page. Drafts are always skipped.
-//!
 //! A release is used only if its file for this system is named `…-linux-x86_64.flatpak` (Linux) or
 //! `…-windows-x86_64.zip` (Windows), is downloaded from that same repository's releases, and carries the
 //! SHA-256 checksum GitHub publishes. An optional `lodestone-plugin.json` in the release says what the
@@ -96,8 +93,6 @@ pub struct Release {
     pub version: String,
     pub asset: Value,
     pub manifest: Option<Manifest>,
-    /// A test build (marked "pre-release" on GitHub).
-    pub prerelease: bool,
 }
 
 #[cfg(not(windows))]
@@ -123,18 +118,17 @@ fn clean_version(v: &str) -> Option<String> {
     (!v.is_empty() && v.len() <= 40 && v.chars().all(|c| c.is_ascii_alphanumeric() || ".-".contains(c))).then(|| v.to_string())
 }
 
-/// Pick the newest usable release from GitHub's list (newest first): not a draft, not a pre-release unless
-/// `test_builds`, with the tag prefix, and a file for this system. Returns the version, this system's
-/// file, all the release's files, and whether it's a pre-release.
-pub fn pick(list: &Value, tag_prefix: &str, suffix: &str, test_builds: bool) -> Option<(String, Value, Value, bool)> {
-    for rel in list.as_array()?.iter().filter(|r| r["draft"] != json!(true) && (test_builds || r["prerelease"] != json!(true))) {
+/// Pick the newest usable release from GitHub's list (newest first): not a draft, and not a pre-release unless
+/// `test_releases` (an opt-in on the Plug-ins page), with the tag prefix and a file for this system.
+pub fn pick(list: &Value, tag_prefix: &str, suffix: &str, test_releases: bool) -> Option<(String, Value, Value)> {
+    for rel in list.as_array()?.iter().filter(|r| r["draft"] != json!(true) && (test_releases || r["prerelease"] != json!(true))) {
         let tag = rel["tag_name"].as_str().unwrap_or_default();
         let Some(rest) = tag.strip_prefix(tag_prefix) else { continue };
         let rest = if tag_prefix.is_empty() { rest.strip_prefix('v').unwrap_or(rest) } else { rest };
         let Some(version) = clean_version(rest) else { continue };
         let assets = rel["assets"].as_array().cloned().unwrap_or_default();
         if let Some(a) = assets.iter().find(|a| a["name"].as_str().is_some_and(|n| n.ends_with(suffix))) {
-            return Some((version, a.clone(), json!(assets), rel["prerelease"] == json!(true)));
+            return Some((version, a.clone(), json!(assets)));
         }
     }
     None
@@ -142,8 +136,7 @@ pub fn pick(list: &Value, tag_prefix: &str, suffix: &str, test_builds: bool) -> 
 
 pub async fn latest(src: &Source) -> Result<Release, String> {
     let list = net::get_json(&release_url(&src.repo), &[("accept", "application/vnd.github+json")]).await?;
-    let test_builds = crate::settings::load().test_builds;
-    let (version, asset, assets, prerelease) = pick(&list, src.tag_prefix, src.suffix, test_builds).ok_or_else(|| format!("{} has no release for this system yet", src.repo))?;
+    let (version, asset, assets) = pick(&list, src.tag_prefix, src.suffix, crate::settings::load().plugin_test_releases).ok_or_else(|| format!("{} has no release for this system yet", src.repo))?;
     // The optional description of the plug-in (small, and only read as text).
     let mut manifest = None;
     if let Some(m) = assets.as_array().into_iter().flatten().find(|a| a["name"].as_str() == Some("lodestone-plugin.json")) {
@@ -154,7 +147,7 @@ pub async fn latest(src: &Source) -> Result<Release, String> {
             }
         }
     }
-    Ok(Release { version, asset, manifest, prerelease })
+    Ok(Release { version, asset, manifest })
 }
 
 /// Download this release's file and check it against GitHub's published checksum. A file without a
@@ -201,7 +194,7 @@ pub async fn check(src: &Source) -> Result<Value, String> {
     let rel = latest(src).await?;
     let have = installed_version(&src.id);
     let update = have.as_deref().is_some_and(|h| newer(&rel.version, h));
-    Ok(json!({ "id": src.id, "repo": src.repo, "official": src.official, "latest": rel.version, "installed": have, "update": update, "manifest": rel.manifest, "prerelease": rel.prerelease }))
+    Ok(json!({ "id": src.id, "repo": src.repo, "official": src.official, "latest": rel.version, "installed": have, "update": update, "manifest": rel.manifest }))
 }
 
 #[cfg(test)]
@@ -358,15 +351,14 @@ mod tests {
             { "tag_name": "beacon-v0.1.0", "assets": [asset(&format!("x-0.1.0{SUFFIX}"))] },
             { "tag_name": "beacon-v../../x", "assets": [asset(&format!("y{SUFFIX}"))] },
         ]);
-        let (v, a, _, test) = pick(&list, "beacon-v", SUFFIX, false).unwrap();
-        assert!(!test);
+        let (v, a, _) = pick(&list, "beacon-v", SUFFIX, false).unwrap();
         assert_eq!((v.as_str(), a["name"].as_str().unwrap()), ("0.1.0", format!("x-0.1.0{SUFFIX}").as_str()));
         // No prefix (a third-party repo): the leading "v" is dropped.
         assert_eq!(pick(&list, "", SUFFIX, false).unwrap().0, "9.9.9");
         assert!(pick(&list, "kiln-v", SUFFIX, false).is_none());
-        // With test builds on, the pre-release is offered (and marked); the draft still isn't.
-        let (v, _, _, test) = pick(&list, "beacon-v", SUFFIX, true).unwrap();
-        assert_eq!((v.as_str(), test), ("0.3.0", true));
+        // With test releases switched on, the pre-release is offered; drafts never are.
+        let (v, _, _) = pick(&list, "beacon-v", SUFFIX, true).unwrap();
+        assert_eq!(v, "0.3.0");
     }
 
     fn make_zip(names: &[&str]) -> Vec<u8> {
