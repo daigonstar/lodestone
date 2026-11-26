@@ -252,6 +252,15 @@ who was mentioned.
   `offline`, with no message.
 - The server keeps "last checked in" in memory only. Statuses and messages are visible to the server.
 
+## Channel types
+
+`POST /v1/communities/{community}/channels` takes `kind`: `text` (default), `voice`, `forum`, `announcement` or `media`. Every kind except `voice` is an ordinary encrypted message channel (one MLS group, same posting rules, private channels and reactions); the kind only changes how apps show it. The server only checks the kind is one of these.
+
+- **announcement**: starts with `post_rule: admins` (members read, owners and admins post). Because the server can't tell a reaction from a message, members can't react either. An owner or admin can change the rule.
+- **forum**: apps list posts. A post is a normal encrypted `text` message with a `title` (1 to 120 characters); a reply is a `text` message with `thread` set to the post's sequence number. Both fields are inside the encrypted payload, so the server never sees titles. Older apps show posts and replies as plain messages. Apps keep and copy them with message history (`th`, `ti` in the history copy). A forum shows the last 300 messages per channel.
+- **media**: apps show only messages that carry a file, as a gallery with captions and reactions. Text-only messages are not shown there.
+- Only `text` channels can have child channels.
+
 ## Calls (voice channels)
 
 Channels have a `kind`: `text` (default) or `voice` (`POST /v1/communities/{community}/channels` `{ name, kind }`).

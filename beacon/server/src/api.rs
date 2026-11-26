@@ -171,7 +171,7 @@ async fn me(State(app): State<Shared>, me: Auth) -> ApiResult<Json<Value>> {
 #[derive(Deserialize)]
 struct NameReq {
     name: String,
-    /// "text" (default) or "voice".
+    /// "text" (default), "voice", "forum", "announcement" or "media".
     #[serde(default)]
     kind: Option<String>,
     /// Put the new channel in this category.
@@ -253,9 +253,11 @@ async fn create_channel(State(app): State<Shared>, me: Auth, Path(community): Pa
     require_admin(&app, &community, &me)?;
     let name = clean_name(&r.name)?;
     let kind = r.kind.clone().unwrap_or_else(|| "text".into());
-    if kind != "text" && kind != "voice" {
-        return Err(ApiError::bad("kind must be text or voice"));
+    if !["text", "voice", "forum", "announcement", "media"].contains(&kind.as_str()) {
+        return Err(ApiError::bad("kind must be text, voice, forum, announcement or media"));
     }
+    // Announcement channels start as read-only for members (an owner or admin can change that).
+    let post_rule = if kind == "announcement" { "admins" } else { "everyone" };
     let id = new_id();
     let count: i64 = app.db.with(|c| c.query_row("SELECT COUNT(*) FROM channels WHERE community = ?1", [&community], |r| r.get(0)))?;
     if count >= 200 {
@@ -268,8 +270,8 @@ async fn create_channel(State(app): State<Shared>, me: Auth, Path(community): Pa
     app.db.with(|c| {
         let tx = c.transaction()?;
         tx.execute(
-            "INSERT INTO channels (id, community, name, created, position, kind, category, parent, private) VALUES (?1, ?2, ?3, ?4, (SELECT COALESCE(MAX(position), -1) + 1 FROM channels WHERE community = ?2), ?5, ?6, ?7, ?8)",
-            params![id, community, name, now(), kind, if r.parent.is_some() { None } else { r.category.clone() }, r.parent.clone(), private],
+            "INSERT INTO channels (id, community, name, created, position, kind, category, parent, private, post_rule) VALUES (?1, ?2, ?3, ?4, (SELECT COALESCE(MAX(position), -1) + 1 FROM channels WHERE community = ?2), ?5, ?6, ?7, ?8, ?9)",
+            params![id, community, name, now(), kind, if r.parent.is_some() { None } else { r.category.clone() }, r.parent.clone(), private, post_rule],
         )?;
         for a in access.iter().flatten() {
             tx.execute("INSERT OR IGNORE INTO channel_access (channel, account) VALUES (?1, ?2)", params![id, a])?;
@@ -281,7 +283,7 @@ async fn create_channel(State(app): State<Shared>, me: Auth, Path(community): Pa
         // Admins who aren't on the list still see that it exists.
         app.live.to_community(&app, &community, json!({ "type": "community_updated", "community": community }));
     }
-    Ok(Json(json!({ "id": id, "name": name, "epoch": 0, "kind": kind, "private": private })))
+    Ok(Json(json!({ "id": id, "name": name, "epoch": 0, "kind": kind, "private": private, "post_rule": post_rule })))
 }
 
 // ---------- invites and members ----------

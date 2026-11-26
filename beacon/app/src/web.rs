@@ -273,8 +273,11 @@ struct ChannelReq {
 async fn create_channel(State(app): State<Shared>, Json(r): Json<ChannelReq>) -> R {
     let c = client(&app, &r.server)?;
     ensure_signed_in(&c).await?;
-    let kind = if r.kind == "voice" { "voice" } else { "text" };
-    let id = if r.private { c.create_private_channel(&r.community, &r.name, kind, &r.access).await? } else if kind == "voice" { c.create_voice_channel(&r.community, &r.name).await? } else { c.create_channel(&r.community, &r.name).await? };
+    let kind = match r.kind.as_str() {
+        "voice" | "forum" | "announcement" | "media" => r.kind.as_str(),
+        _ => "text",
+    };
+    let id = if r.private { c.create_private_channel(&r.community, &r.name, kind, &r.access).await? } else { c.create_channel_kind(&r.community, &r.name, kind).await? };
     let _ = app.events.send(json!({ "type": "state" }).to_string());
     Ok(Json(json!({ "channel": id })))
 }
@@ -314,6 +317,12 @@ struct SendReq {
     server: String,
     channel: String,
     text: String,
+    /// A forum reply: the post's sequence number.
+    #[serde(default)]
+    thread: Option<i64>,
+    /// A new forum post's title.
+    #[serde(default)]
+    title: Option<String>,
 }
 
 async fn send(State(app): State<Shared>, Json(r): Json<SendReq>) -> R {
@@ -323,7 +332,12 @@ async fn send(State(app): State<Shared>, Json(r): Json<SendReq>) -> R {
     }
     let c = client(&app, &r.server)?;
     ensure_signed_in(&c).await?;
-    let m = c.send_text(&r.channel, text).await?;
+    let m = match (&r.title, r.thread) {
+        (Some(title), None) => c.send_post(&r.channel, title, text).await?,
+        (None, Some(thread)) => c.send_reply(&r.channel, thread, text).await?,
+        (None, None) => c.send_text(&r.channel, text).await?,
+        _ => return Err(Fail("A message is a post (with a title) or a reply, not both".into())),
+    };
     let _ = app.events.send(json!({ "type": "messages", "server": r.server, "channels": [r.channel] }).to_string());
     Ok(Json(json!(m)))
 }
