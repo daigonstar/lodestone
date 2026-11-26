@@ -156,13 +156,20 @@ function renderHome() {
   renderVoice();
   $("#chat").dataset.key = "";
   $("#chat").innerHTML = `<div class="home-page">
-    <div class="test-banner"><b>${ic("beacon")} Test build</b><span>This is an early test version of Lodestone Beacon for testers. Expect rough edges and missing pieces, and things may change or need resetting between builds. Messages, files, calls, cameras and screen shares are end-to-end encrypted, but please don't rely on it for anything important yet. If something breaks or feels wrong, tell whoever invited you.</span></div>
-    <h1>Welcome to Beacon</h1>
-    <p class="muted">Chat, voice calls, cameras and screen sharing with your friends, in communities on servers you or they run. Everything is encrypted on your PC; the server only passes it on.</p>
+    <div class="hero">
+      <div class="hero-mark"><span class="hero-rings" aria-hidden="true"></span>${ic("beacon")}</div>
+      <h1>Welcome to Beacon</h1>
+      <p class="hero-sub">Chat, voice calls, cameras and screen sharing with your friends, in communities on servers you or they run. Everything is encrypted on your PC; the server only passes it on.</p>
+      <ul class="hero-chips">
+        <li>${ic("lock")} End-to-end encrypted</li>
+        <li>${ic("volume")} Voice calls</li>
+        <li>${ic("camera")} Cameras</li>
+        <li>${ic("screen")} Screen sharing</li>
+      </ul>
+    </div>
     <div class="home-cards">
       <section class="card">
-        <h3>Join a community</h3>
-        <p class="muted">Paste the invite link a friend sent you.</p>
+        <div class="card-head"><span class="card-ic">${ic("link")}</span><div><h3>Join a community</h3><p class="muted">Paste the invite link a friend sent you.</p></div></div>
         <form id="home-join" class="stack">
           <input name="link" placeholder="beacon.example.com/join/…" autocomplete="off" spellcheck="false" required>
           <input name="username" placeholder="Your username (first time on that server)" autocomplete="off" spellcheck="false">
@@ -170,28 +177,29 @@ function renderHome() {
         </form>
       </section>
       <section class="card">
-        <h3>Create a community</h3>
-        ${servers.length ? `<p class="muted">Make your own community with text and voice channels, then invite people.</p>
-          <form id="home-create" class="stack">
+        <div class="card-head"><span class="card-ic">${ic("plus")}</span><div><h3>Create a community</h3>
+        ${servers.length ? `<p class="muted">Make your own community with text and voice channels, then invite people.</p>` : `<p class="muted">Communities live on a server. Join one with an invite first, or set up your own server below.</p>`}</div></div>
+        ${servers.length ? `<form id="home-create" class="stack">
             <input name="name" maxlength="64" placeholder="Community name, e.g. Friday raids" required>
             ${servers.length > 1 ? `<select name="server">${servers.map((h) => `<option value="${esc(h.url)}">on ${esc(h.url.replace(/^https?:\/\//, ""))}</option>`).join("")}</select>` : `<input type="hidden" name="server" value="${esc(servers[0].url)}"><small class="muted">on ${esc(servers[0].url.replace(/^https?:\/\//, ""))}</small>`}
             <button class="primary">Create</button>
-          </form>` : `<p class="muted">Communities live on a server. Join one with an invite first, or set up your own server below.</p>`}
+          </form>` : ""}
       </section>
     </div>
     <div class="home-more">
-      <button type="button" class="ghost" data-act="pair">Sign in with another device</button>
-      <button type="button" class="ghost" data-act="setup">Set up your own server</button>
+      <button type="button" class="ghost" data-act="pair">${ic("users")} Sign in with another device</button>
+      <button type="button" class="ghost" data-act="setup">${ic("settings")} Set up your own server</button>
     </div>
     ${(state.pairing || []).map((p) => `<p class="muted">Waiting for approval as <b>${esc(p.username)}</b> on ${esc(p.url.replace(/^https?:\/\//, ""))}… Your other device should show <code>${esc(p.fingerprint)}</code>.</p>`).join("")}
-    <h3>Getting around</h3>
-    <ul class="tips">
-      <li><b>Communities</b> are on the left; <b>right-click</b> one to invite people, open its settings or leave it.</li>
-      <li><b>Voice channels</b> (${ic("volume")}) are calls: click one to join, and click it again to see everyone.</li>
-      <li>In a call, the bar at the bottom left has <b>mute</b>, <b>deafen</b>, <b>camera</b> ${ic("camera")}, <b>screen share</b> ${ic("screen")} and <b>leave</b>. ${ic("settings")} picks your microphone, speakers and camera.</li>
-      <li>Someone sharing their screen shows <span class="live">LIVE</span>: click it to watch.</li>
-      <li>Your status, profile, look and devices are under your name at the bottom left.</li>
-    </ul>
+    <h3 class="home-h">Getting around</h3>
+    <div class="tips">
+      <div class="tip">${ic("users")}<p><b>Communities</b> are along the top; <b>right-click</b> one to invite people, open its settings or leave it.</p></div>
+      <div class="tip">${ic("volume")}<p><b>Voice channels</b> are calls: click one to join, and click it again to see everyone.</p></div>
+      <div class="tip">${ic("camera")}<p>In a call, use <b>mute</b>, <b>deafen</b>, <b>camera</b>, <b>screen share</b> and <b>leave</b>. ${ic("settings")} picks your microphone, speakers and camera.</p></div>
+      <div class="tip">${ic("screen")}<p>Someone sharing their screen shows a banner in the call: press <b>Watch</b> to see it.</p></div>
+      <div class="tip">${ic("shield")}<p>Your status, profile, look and devices are under your name at the bottom left.</p></div>
+    </div>
+    <div class="test-banner"><b>${ic("beacon")} Test build</b><span>This is an early test version of Lodestone Beacon for testers. Expect rough edges and missing pieces, and things may change or need resetting between builds. Messages, files, calls, cameras and screen shares are end-to-end encrypted, but please don't rely on it for anything important yet. If something breaks or feels wrong, tell whoever invited you.</span></div>
   </div>`;
   $("#home-join").onsubmit = async (e) => {
     e.preventDefault();
