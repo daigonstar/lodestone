@@ -1,6 +1,6 @@
 pkgbase = lodestone-bin
 	pkgdesc = One library for every game on Linux: Steam, Epic, GOG, Battle.net, EA, Ubisoft, Lutris, Heroic and Minecraft (prebuilt)
-	pkgver = 0.2.1
+	pkgver = 0.2.2
 	pkgrel = 1
 	url = https://github.com/daigonstar/lodestone
 	arch = x86_64
@@ -25,9 +25,9 @@ pkgbase = lodestone-bin
 	conflicts = lodestone
 	options = !strip
 	options = !debug
-	source = lodestone-0.2.1-x86_64.tar.gz::https://github.com/daigonstar/lodestone/releases/download/0.2.1/lodestone-0.2.1-x86_64.tar.gz
+	source = lodestone-0.2.2-x86_64.tar.gz::https://github.com/daigonstar/lodestone/releases/download/0.2.2/lodestone-0.2.2-x86_64.tar.gz
 	source = lodestone.desktop
-	sha256sums = 40958a06907600145880c426a48f4a69c3f7fc7764b82492da81ca82c7d0eb65
+	sha256sums = 4047a1765419318ff2836e04d35596dbf002770c75285d0b732ce60064b0c252
 	sha256sums = 4ef274f902d4a9cc2a2b0ea5d8a4473f421b80eb6f0f40535d8d1b30e5f7d622
 
 pkgname = lodestone-bin
