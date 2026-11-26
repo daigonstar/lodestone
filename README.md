@@ -120,6 +120,12 @@ Wine prefix; Lodestone only turns its "keep me logged in" option back on. Signin
   libretro's official GitHub repositories (`api.github.com`, two requests per system, refreshed weekly and
   cached in `~/.local/share/lodestone/libretro-thumbnails/`), and the images from `raw.githubusercontent.com`.
   ROMs are matched on your PC; only the system's name is sent. No key or account.
+- **Kiln (the mod manager plug-in, only when you use it):** Nexus Mods (`api.nexusmods.com`, with your own
+  Nexus API key, which Kiln keeps in `~/.config/kiln/settings.json`, `600`; `www.nexusmods.com` pages in Kiln's
+  own window, where you sign in yourself), the official downloads of the mod loaders a game needs (GitHub
+  releases such as SMAPI, BepInEx, UE4SS, and Microsoft's Visual C++ runtime installer from `aka.ms`), and
+  SMAPI's mod database (`smapi.io`) to find a Stardew mod's Nexus page. Kiln has no telemetry. Its optional
+  AI helper talks only to an Ollama on your own PC. Every address is in [network-hosts.txt](network-hosts.txt).
 - **Tools Lodestone sets up for you:** the official GitHub releases of umu-launcher (runs Proton),
   legendary (Epic), gogdl (GOG) and MangoHud, and the official installers of Battle.net, the EA app,
   Ubisoft Connect and Guild Wars 2. These are downloaded over HTTPS from their publishers. The GitHub tools are
@@ -159,6 +165,13 @@ named, and are listed so nothing is a surprise:
   as they are.
 - **Minecraft (ATLauncher):** the instance's `instance.json` when you add or remove mods (backed up as
   `instance.json.lodestone-backup` first).
+- **Kiln (when you use it):** it makes your mods appear in a game's folder (hardlinks, taken out again on
+  *Purge*, with the files it replaced kept), writes the game's plugin list (`plugins.txt`) in its Proton
+  prefix and some game `.ini` settings, and sets Steam's launch options for script extenders in
+  `localconfig.vdf` (only while Steam is closed, with a `.kiln-<time>.bak` backup first). *Make Kiln the
+  nxm handler* adds `kiln.desktop` to your app menu and sets the `nxm://` link handler, remembering the
+  previous one so it can be restored. Kiln's own files are in `~/.config/kiln/` and `~/.local/share/kiln/`.
+  Not all of this has been re-checked for this README: Kiln's own README lists what each feature does.
 - **Wine prefixes:** Battle.net, EA, Ubisoft and games run in prefixes under
   `~/.local/share/lodestone/prefixes/`. If Battle.net, EA or Ubisoft is already installed through Lutris
   or Steam, Lodestone uses that prefix instead, and Proton may update it.
@@ -288,11 +301,16 @@ Click **Minecraft** in the sidebar, or start straight into it with `lodestone --
 
 ## Mods with Kiln
 
-Modding goes through **Kiln**, a separate mod manager released alongside Lodestone. When Kiln is installed,
+Modding goes through **Kiln**, a mod manager that is part of this repository (`kiln/`) and installed as a plug-in from Lodestone's own GitHub releases (tagged `kiln-v<version>`). When Kiln is installed,
 Lodestone shows which games it can mod (the **Modded (Kiln)** view and a *Modded* tag), and **Play modded** starts
 a game through Kiln's Guarded Play, which checks that mods are deployed and loaders are set up first
 (⚙ Settings → Mods; the ▾ next to Play also offers *Play without mods*). Without Kiln, everything else in
 Lodestone works as usual and these options don't appear.
+
+Kiln is a *companion plug-in* (⚙ Settings → Manage plug-ins): you can turn it off there, and Lodestone then
+stops asking Kiln anything. Lodestone shares nothing with Kiln; it only runs Kiln's command line
+(`kiln --games`, `--status`, `--game`, `--play`, `--play-vanilla`). Kiln can be installed from the Plug-ins page (official release from its GitHub, checksum checked). It runs on your system's Python, so it needs PySide6 and requests installed (Arch: `pacman -S pyside6 python-requests qt6-webengine libarchive`); Lodestone tells you if they're missing. Kiln only runs on Linux so far, so on
+Windows the plug-in shows "not installed" until Kiln has a Windows build. This hasn't been tested on Windows.
 
 ## Run
 

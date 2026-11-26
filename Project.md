@@ -3,7 +3,7 @@
 What needs doing to get Lodestone to users, and where each item stands. Update this file whenever an
 item is finished or partly done.
 
-Last updated: 2026-11-26 (Android test app and PRs merged into comms)
+Last updated: 2026-11-26 (merged PRs into comms; test builds)
 
 ## Current focus
 
@@ -21,7 +21,7 @@ tracked here.
 | --- | --- | --- |
 | 1 | Windows version at the same level as the Linux version | In progress: audit done, see "Windows parity" below |
 | 2 | Write-up on how other people can make plugins for Lodestone | Written: [docs/PLUGINS.md](docs/PLUGINS.md) with a runnable example and a test that plays Lodestone's part (PR into `comms`). It says plainly that Lodestone only knows Beacon today: making Lodestone's plug-in list, install and approval general (official list built in, user-added sources only in their own settings) is **not built** |
-| 3 | Convert Kiln into a plugin, released as 0.3.0 (target: mid December 2026) | Not started |
+| 3 | Convert Kiln into a plugin, released as 0.3.0 (target: mid December 2026) | **Partly done** on the `comms` branch (not merged to `main`): see below |
 
 ## Windows parity (roadmap item 1)
 
@@ -31,7 +31,7 @@ changes are untested and compile-checked only by reading. Linux builds and its 6
 
 Already on the Windows side (`comms` branch): builds and runs, Steam/Epic/GOG launchers via winget and
 registry/manifest scanning, emulators via winget, Battle.net/EA/Ubisoft via winget, detached launches,
-process list, Comms plug-in install, update checks for installed programs.
+process list, Beacon plug-in install, update checks for installed programs.
 
 | Gap | Priority | Status |
 | --- | --- | --- |
@@ -99,8 +99,6 @@ look too, moving away from Discord's look. Plan and inventory: `beacon/NAMING-PL
 | Channel types: forum, announcement, media | Built (PR into `comms`), Robb chose all three. Pick the type when creating a channel. **Forum:** list of posts with titles, open one to read and reply (titles and threads are inside the encrypted message). **Announcement:** starts admins-only, members read (can't react, the server can't tell reactions from messages). **Media:** gallery of pictures and files with captions. New icons for each. Tested end-to-end (client) and in two app instances in a headless browser. **Not done:** attach a picture to a forum post or reply, edit or delete messages/posts, pinned posts, forum posts older than the last 300 messages |
 | Identity, cross-server username, QR pairing | Built on the same branch as the channel menus (PR into `comms`): first run asks for an identity before anything else (new with a 24-word recovery phrase, restore from phrase, or link to another device); the identity's public key is recorded on each server account and the same username is offered on every server (the person can pick another if taken); "Reconnect to a server" brings a restored identity back into its account with no approval; pairing shows a QR code and text that also hands the identity to the new device, sealed with a key that stays off the server. Server, client and app tested (new tests for register, recover and the hand-over). **For the phone app:** it needs a QR scanner and the same pair/recover calls. **Not done:** warning when a name shows up with a different identity, mobile app, push notifications |
 | Copy history when pairing a device | Built (PR into `comms`), Robb's choice "copy at pairing, backup later": approving a QR-paired device first uploads the last 300 messages per channel (and their reactions) encrypted with the QR key, up to 6 MiB, kept 10 minutes, collected once by the new device; failure never blocks approval. Tests: server permissions and once-only, client end-to-end. Not tested on a real phone. **Not done:** encrypted server backup for older history, no copy for hand-typed (no-QR) pairing |
-| PR #7 (plug-in installer) still uses `comms`, `comms-v` and the old Flatpak id | Needs merging with this rename before either lands |
-| Existing `comms-v*` draft releases on GitHub | Would be re-published as `beacon-v*` |
 
 ## Beacon mobile apps (Android and iOS)
 
@@ -119,6 +117,27 @@ Recommendation: Tauri 2 mobile reusing the Rust core and web UI, native Kotlin/S
 | Robb tries the test APK on a phone | Waiting on Robb |
 | Phase 1: Android pairing and chat, history copy, report/block, account deletion | Not started |
 | Phase 2: F-Droid listing, notifications | Not started |
+| Lodestone's plug-in installer (PR #7) uses the Beacon names (`beacon`, tag `beacon-v`, Flatpak id `io.github.daigonstar.Lodestone.Beacon`) | Done 2026-11-26 when PR #7 was merged into `comms` |
+| Existing `comms-v*` draft releases on GitHub | Would be re-published as `beacon-v*` |
+
+## Kiln as a plugin (roadmap item 3)
+
+Work stays on the `comms` branch until 0.3.0. Kiln is a *companion* plugin: it keeps its own Qt window, and
+Lodestone talks to it only through its command line, so it needs no bridge permissions. Notes on the
+shape of the plugin API are in `docs/plugin-api-notes.md`.
+
+| Item | Status |
+| --- | --- |
+| Kiln listed on the Plug-ins page with an on/off switch (off hides all Kiln tags and launching) | Done, builds and unit test pass on Linux; UI not clicked through yet |
+| Windows-aware Kiln lookup (replaces the Linux-only `.desktop` search on Windows: `kiln.exe` on PATH, `%LOCALAPPDATA%\Lodestone\Kiln`, `%LOCALAPPDATA%\Programs\Kiln`) | Done in code, not built or run on Windows |
+| Kiln itself running on Windows | **Not started**: Kiln is Linux-only (Proton prefixes, Steam's Linux folders, Qt). Needs a port before the Windows lookup finds anything |
+| One-click install/update from official GitHub releases (checksum-verified), shared by Beacon and Kiln; users can add their own GitHub repos for third-party plug-ins | Done in code, unit-tested; page smoke-tested with a stubbed backend only, never against real releases. Kiln's code now lives in this repository (`kiln/`, imported with its history) and releases from here with tags `kiln-v<version>`; no release has been published yet, so nothing has been downloaded from GitHub |
+| Kiln installable from Lodestone: Kiln ships its Python source as `kiln-<version>-linux-any.zip`, Lodestone unpacks it to `~/.local/share/lodestone/plugins/kiln/<version>` and runs it with the system's Python | Done. Unzip, find and `--games` run tested through Lodestone's code with a locally built zip; GUI, Play and the real download not tested |
+| Kiln needs PySide6, QtWebEngine and requests from the system (not bundled) | Lodestone warns on the Kiln card when missing; bundling or a Flatpak not planned (Kiln needs the host's Steam and Proton) |
+| Kiln code moved into the Lodestone repo (`kiln/`) so it ships and merges with `comms`; its web addresses are in `network-hosts.txt` and `check-network.py` now scans it | Done. Kiln's Nexus key file is now created `600` from the start (was chmod after writing). Not a full audit of Kiln against AGENTS.md |
+| First Kiln release: after `comms` merges to `main` (or from `comms` if wanted), `git tag kiln-v0.1.0 && git push origin kiln-v0.1.0` | **Waiting on Robb** (the standalone `daigonstar/kiln` repo is no longer the source; archive it when ready) |
+| Running third-party embedded plug-ins; release signing | Not started |
+| Kiln speaks the Lodestone bridge (`--lodestone-bridge`) and shows its page in Lodestone | Not started: decide whether it's wanted (needs a web UI) |
 
 ## Releases
 

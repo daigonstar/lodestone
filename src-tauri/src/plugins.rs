@@ -1,5 +1,9 @@
 //! Plug-ins: separate programs that show their interface inside Lodestone (see beacon/PLUGIN.md).
-//! Lodestone Beacon is the only one so far.
+//! There are two kinds:
+//! - embedded (Lodestone Beacon): its own program whose page shows inside Lodestone, over the bridge below.
+//! - companion (Kiln): a separate app with its own window that Lodestone talks to through its
+//!   command line. Lodestone gives a companion nothing (no bridge, no permissions); the plug-in only
+//!   decides whether Lodestone uses the app (tags, Play modded, "Set up mods"). See docs/plugin-api-notes.md.
 //!
 //! A plug-in runs as its own program (normally its own Flatpak, with its own sandbox and data). Lodestone
 //! talks to it only over its standard input and output, and answers only the requests you approved.
@@ -17,6 +21,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 pub const BEACON: &str = "beacon";
+pub const KILN: &str = "kiln";
 #[cfg(not(windows))]
 const BEACON_FLATPAK: &str = "io.github.daigonstar.Lodestone.Beacon";
 
@@ -227,6 +232,26 @@ fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Value, String
     }
 }
 
+/// Is this plug-in switched on? (Everything is on until you switch it off.)
+pub fn enabled(id: &str) -> bool {
+    !settings::load().plugins_disabled.iter().any(|p| p == id)
+}
+
+/// Switch a companion plug-in on or off. (Beacon is started and stopped from its own page.)
+pub fn set_enabled(id: &str, on: bool) -> Result<(), String> {
+    if id != KILN {
+        return Err("This plug-in has no on/off switch".into());
+    }
+    let mut s = settings::load();
+    s.plugins_disabled.retain(|p| p != id);
+    if !on {
+        s.plugins_disabled.push(id.to_string());
+    }
+    settings::save(&s)?;
+    crate::kiln::forget();
+    Ok(())
+}
+
 /// A plug-in Lodestone knows about, for the Plug-ins page.
 #[derive(Serialize)]
 pub struct PluginInfo {
@@ -239,6 +264,13 @@ pub struct PluginInfo {
     /// Every permission this plug-in can ask for: (permission, plain words, granted).
     pub permissions: Vec<(String, String, bool)>,
     pub install_hint: &'static str,
+    /// "embedded" (its page shows inside Lodestone) or "companion" (its own window; Lodestone uses its command line).
+    pub kind: &'static str,
+    pub enabled: bool,
+    /// What Lodestone does with a companion plug-in, in plain words (empty for embedded ones).
+    pub uses: Vec<&'static str>,
+    /// Something to know on this system (e.g. no build for it yet).
+    pub note: Option<String>,
 }
 
 /// The plug-ins Lodestone knows (only Beacon so far).
@@ -251,6 +283,7 @@ pub fn list() -> Vec<PluginInfo> {
             perms.push(p.to_string());
         }
     }
+    let kiln_here = crate::kiln::installed();
     vec![PluginInfo {
         id: BEACON,
         name: "Lodestone Beacon",
@@ -260,15 +293,40 @@ pub fn list() -> Vec<PluginInfo> {
         version: s.version,
         permissions: perms.iter().map(|p| (p.clone(), describe(p).unwrap_or("Unknown permission").to_string(), granted.contains(p))).collect(),
         install_hint: "Beacon isn't installed. Lodestone can install it from its official releases on GitHub (it's in early development).",
+        kind: "embedded",
+        enabled: true,
+        uses: vec![],
+        note: None,
+    },
+    PluginInfo {
+        id: KILN,
+        name: "Kiln",
+        description: "Mod manager for Steam games (Nexus mods, load order, profiles, crash checks). It keeps its own window.",
+        installed: kiln_here,
+        running: false,
+        version: None,
+        permissions: vec![],
+        install_hint: "Kiln isn't installed. Lodestone can install it from its official releases on GitHub. It runs on your system's Python, so it needs PySide6 and requests installed (on Arch: pacman -S pyside6 python-requests qt6-webengine libarchive).",
+        kind: "companion",
+        enabled: enabled(KILN),
+        uses: vec![
+            "Ask Kiln which of your games it supports and which already have mods (it only reads its own files)",
+            "Tag those games Modded and list them under Modded (Kiln)",
+            "Start Kiln on a game when you press Set up mods or Manage mods",
+            "Start modded games through Kiln's Guarded Play (Settings → Mods), or without mods",
+        ],
+        note: if cfg!(windows) { Some("Kiln only runs on Linux so far (it works with Proton and Steam's Linux folders). Lodestone will pick it up on Windows once Kiln has a Windows build.".to_string()) } else { crate::kiln::missing_deps() },
     }]
 }
 
 /// Stop a running plug-in (it starts again when you open it).
 pub fn stop_plugin(id: &str) -> Result<(), String> {
-    if id != BEACON {
-        return Err("Unknown plug-in".into());
+    match id {
+        BEACON => stop(),
+        // Kiln has its own window; Lodestone only runs it for a moment at a time.
+        KILN => {}
+        _ => return Err("Unknown plug-in".into()),
     }
-    stop();
     Ok(())
 }
 
