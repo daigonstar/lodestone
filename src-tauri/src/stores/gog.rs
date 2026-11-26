@@ -194,11 +194,15 @@ pub fn installed() -> Vec<Installed> {
     read("installed.json")
 }
 
+/// Windows: gogdl starts the game itself, natively.
+#[cfg(windows)]
 fn launch_spec(i: &Installed) -> Option<LaunchSpec> {
-    // Windows: gogdl starts the game itself, natively.
-    if cfg!(windows) {
-        return gogdl(&["launch", &i.path, &i.id, "--platform", "windows"]).ok();
-    }
+    gogdl(&["launch", &i.path, &i.id, "--platform", "windows"]).ok()
+}
+
+/// Linux: through Proton (umu), with GOG's own setup steps first.
+#[cfg(not(windows))]
+fn launch_spec(i: &Installed) -> Option<LaunchSpec> {
     let umu = tools::umu_path()?;
     let mut s = gogdl(&["launch", &i.path, &i.id, "--platform", "windows", "--no-wine", "--wrapper", &umu.to_string_lossy()]).ok()?;
     let pfx = prefix(&i.id);

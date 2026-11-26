@@ -1280,6 +1280,7 @@ $("#ws-list").onclick = (e) => {
 
 // ---------- settings ----------
 async function renderProton() {
+  if (WIN) return; // Windows games run natively: no Proton
   const p = await invoke("proton_info");
   document.querySelectorAll(".umu-status").forEach((el) => (el.textContent = p.umu ? `Proton runner ready (umu-launcher ${p.umu})` : "Proton runner not set up yet"));
   document.querySelectorAll(".umu-setup").forEach((el) => { el.textContent = p.umu ? "Update" : "Set up Proton"; el.disabled = false; });
@@ -1317,6 +1318,7 @@ const onStoreOrderClick = (e) => {
 document.querySelectorAll(".store-order").forEach((el) => (el.onclick = onStoreOrderClick));
 $("#steam-bg").onchange = async (e) => { await invoke("set_steam_background", { on: e.target.checked }); state.steamBg = e.target.checked; };
 async function renderMangohud() {
+  if (WIN) return; // MangoHud is for Linux
   const m = await invoke("mangohud_info");
   $("#mh-status").textContent = m.installed === "system" ? "MangoHud is installed on your system" : m.installed ? `MangoHud ${m.installed} is set up` : "MangoHud isn't set up yet";
   $("#mh-setup").textContent = m.installed === "system" ? "Installed" : m.installed ? "Update" : "Set up MangoHud";

@@ -256,8 +256,9 @@
   <dialog id="dlg-add">
     <form method="dialog" id="form-add">
       <h2>Add a game</h2>
-      <p class="hint">Anything with a command line: a native game, a Windows game through <code>umu-run</code> or <code>wine</code>, an emulator, a script.
+      <p class="hint linux-only">Anything with a command line: a native game, a Windows game through <code>umu-run</code> or <code>wine</code>, an emulator, a script.
         Battle.net and Guild Wars 2 are easiest to install in Lutris; they'll show up here automatically.</p>
+      <p class="hint win-only">Anything with a program to start: a game, an emulator or a script. Pick its .exe or type its command.</p>
       <label>Title<input name="title" required placeholder="Guild Wars 2" /></label>
       <label class="check linux-only"><input type="checkbox" name="proton" /> Windows game: run it with Proton (own prefix, no Steam needed)</label>
       <label><span id="cmd-label">Command</span><input name="command" required placeholder="/home/you/Games/mygame/start.sh" /></label>
@@ -342,7 +343,7 @@
     </form>
   </dialog>
 
-  <dialog id="dlg-mh" class="wide">
+  <dialog id="dlg-mh" class="wide linux-only">
     <form method="dialog" id="form-mh">
       <h2>MangoHud overlay</h2>
       <p class="hint">What the overlay shows and where. Saved to <code id="mh-path">MangoHud.conf</code>, so it applies wherever you use MangoHud. Settings Lodestone doesn't list here are kept.</p>

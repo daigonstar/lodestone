@@ -3,7 +3,7 @@
 What needs doing to get Lodestone to users, and where each item stands. Update this file whenever an
 item is finished or partly done.
 
-Last updated: 2026-11-26 (Windows parity audit added)
+Last updated: 2026-11-26 (Windows-only build pass)
 
 ## Current focus
 
@@ -51,6 +51,23 @@ process list, Comms plug-in install, update checks for installed programs.
 
 Suggested order, all on `comms`: add a Windows build to CI and releases; test the Epic/GOG and Steam
 changes on a Windows PC; then the Medium items. Merge `comms` to `main` only for the 0.3.0 release.
+
+### Windows-only build (Robb, 2026-11-26: "100% Windows for that version")
+
+Done: the Windows build no longer contains Linux code for MangoHud, Proton and umu (Windows runs
+programs directly), GOG setup in Wine, Heroic, Lutris, ATLauncher and Prism scanning, the Flatpak host
+layer (`host_windows.rs` replaces `host.rs`), the Battle.net Proton helper, Linux play-time files, and
+the Flatpak update check. Windows has its own versions of the same calls (winget, registry, process
+snapshot). The Windows build is now compile-checked here with `cargo check --tests --target
+x86_64-pc-windows-gnu` (needs `gcc-mingw-w64-x86-64`), zero warnings. Linux: 62 tests pass.
+
+Still Linux code in the Windows build (next pass):
+- Emulators: Flatpak lookups, zenity/kdialog folder picker, `.desktop` menu entries (`stores/emulation.rs`).
+- Comms and plug-ins: Flatpak install and `flatpak` checks (`comms_install.rs`, `plugins.rs`).
+- Kiln: looks for a Linux `.desktop` file (`kiln.rs`); Minecraft hub folders (`mc/`) are Linux paths.
+- Settings and first-run text that still mention Proton, Flatpak or `~/` paths in places.
+- `tauri.conf.json` asset scope lists only `$HOME` and Linux mount points.
+- Not run on Windows: only compiled.
 
 ## Releases
 

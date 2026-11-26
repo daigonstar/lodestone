@@ -1,9 +1,9 @@
 //! Windows-only launchers and games that Lodestone installs into its own Proton prefixes:
 //! Battle.net, the EA app and Ubisoft Connect (and the games they install), and Guild Wars 2.
 // Parts of this file are Linux-only (Proton prefixes, Flatpak); on Windows they're simply unused.
-#![cfg_attr(windows, allow(dead_code, unused_imports))]
 
 use crate::model::*;
+#[allow(unused_imports)]
 use crate::proton::{self, Run};
 use serde::Serialize;
 use std::fs;
@@ -17,6 +17,7 @@ pub enum Kind {
     Game,
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 pub struct WinApp {
     pub id: &'static str,
     pub name: &'static str,
@@ -118,6 +119,7 @@ pub fn find(id: &str) -> Result<&'static WinApp, String> {
     apps().into_iter().find(|a| a.id == id).ok_or_else(|| format!("unknown app {id}"))
 }
 
+#[cfg(not(windows))]
 /// Wine prefixes other launchers made, where a store app may already be installed:
 /// Lutris games' prefixes, Lutris's usual ~/Games folders, and Steam's Proton prefixes (non-Steam games).
 fn foreign_prefixes() -> Vec<(PathBuf, &'static str)> {
@@ -156,6 +158,7 @@ fn foreign_prefixes() -> Vec<(PathBuf, &'static str)> {
     out
 }
 
+#[cfg(not(windows))]
 /// Where another launcher already installed this app, if Lodestone hasn't set it up itself.
 /// Checked at most every 30 seconds.
 fn foreign(app: &WinApp) -> Option<(PathBuf, &'static str)> {
@@ -173,6 +176,7 @@ fn foreign(app: &WinApp) -> Option<(PathBuf, &'static str)> {
     found
 }
 
+#[cfg(not(windows))]
 /// The app's executable is in this drive_c (the EA app after fixing its version link).
 fn app_in(app: &WinApp, drive_c: &Path) -> bool {
     if drive_c.join(app.exe).is_file() {
@@ -309,7 +313,8 @@ pub async fn setup(app: &WinApp) -> Result<LaunchSpec, String> {
         fs::write(&file, &bytes).map_err(|e| e.to_string())?;
         return app.run(&file, app.installer_args.iter().map(|s| s.to_string()).collect());
     }
-    #[allow(unreachable_code)]
+    #[cfg(not(windows))]
+    {
     if crate::tools::umu_path().is_none() {
         crate::tools::install_umu().await?;
     }
@@ -324,6 +329,7 @@ pub async fn setup(app: &WinApp) -> Result<LaunchSpec, String> {
     }
     fs::write(&file, &bytes).map_err(|e| e.to_string())?;
     app.run(&file, app.installer_args.iter().map(|s| s.to_string()).collect())
+    }
 }
 
 // ---------------- Battle.net games ----------------
@@ -331,10 +337,17 @@ pub async fn setup(app: &WinApp) -> Result<LaunchSpec, String> {
 /// Start a game through Battle.net without its window: "--autostarted" is Battle.net's tray start
 /// (with AutoStartMinimized on). If Battle.net is already running, the command goes to it.
 fn bnet_play(app: &WinApp, client: &Path, exec: String) -> Result<LaunchSpec, String> {
-    let spec = app.run(client, vec![])?;
-    Ok(super::bnet_agent::play_spec(spec, client, &exec))
+    // Windows: Battle.net takes the command itself; no helper program is needed.
+    #[cfg(windows)]
+    return app.run(client, vec!["--autostarted".to_string(), exec]);
+    #[cfg(not(windows))]
+    {
+        let spec = app.run(client, vec![])?;
+        Ok(super::bnet_agent::play_spec(spec, client, &exec))
+    }
 }
 
+#[cfg(not(windows))]
 /// Battle.net settings for Play from Lodestone: start in the tray, and close once the game is running
 /// (GameLaunchWindowBehavior 2; 1 is "minimize", which some desktops can't do), without coming back
 /// when the game ends.
@@ -344,11 +357,13 @@ pub fn bnet_quiet_launches(drive_c: &Path) {
     bnet_config_set(drive_c, "RestoreWindowOnGameEnd", "false");
 }
 
+#[cfg(not(windows))]
 /// Make Battle.net's tray start ("--autostarted", what Windows uses at login) stay in the tray.
 pub fn bnet_start_minimized(drive_c: &Path) {
     bnet_config_set(drive_c, "AutoStartMinimized", "true");
 }
 
+#[cfg(not(windows))]
 /// Launch code ("OSI") and download product ("osi") of a catalog game, for background installs.
 pub fn bnet_product(code: &str) -> Option<(String, String)> {
     if let Some((uid, _, tact, _)) = bnet_catalog::WOW.iter().find(|w| w.0.eq_ignore_ascii_case(code)) {
@@ -362,6 +377,7 @@ pub fn bnet_product(code: &str) -> Option<(String, String)> {
     Some((p.code.clone(), tact.clone()))
 }
 
+#[cfg(not(windows))]
 /// Battle.net deletes its saved sign-in on exit when "Keep me logged in" was unticked (Client.AutoLogin
 /// false in Battle.net.config), so every start asks for the password again. Turn it back on before
 /// starting Battle.net; only that one setting is touched.
@@ -369,6 +385,7 @@ fn bnet_keep_signed_in(drive_c: &Path) {
     bnet_config_set(drive_c, "AutoLogin", "true");
 }
 
+#[cfg(not(windows))]
 /// Set a Client setting in Battle.net.config, leaving everything else as it is.
 fn bnet_config_set(drive_c: &Path, key: &str, value: &str) {
     let Ok(users) = fs::read_dir(drive_c.join("users")) else { return };
@@ -771,6 +788,7 @@ fn same_title(a: &str, b: &str) -> bool {
 /// The EA app installs into `EA Desktop\\<version>\\EA Desktop` and points `EA Desktop\\EA Desktop` at it with
 /// a Windows junction, which Wine leaves as a broken folder. Everything (Lodestone, the EA app's own links,
 /// games starting it for sign-in) uses the junction path, so make it a real link to the newest version.
+#[cfg(not(windows))]
 fn ea_fix_link(drive_c: &Path) {
     let base = drive_c.join("Program Files/Electronic Arts/EA Desktop");
     let Ok(rd) = fs::read_dir(&base) else { return };
@@ -965,6 +983,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn keeps_battlenet_signed_in() {
         let c = std::env::temp_dir().join(format!("lodestone-bn-{}", std::process::id()));

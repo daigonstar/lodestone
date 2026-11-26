@@ -1,13 +1,16 @@
 //! Tools Lodestone manages itself in ~/.local/share/lodestone/tools: umu-launcher (runs Proton outside Steam).
 //! Plus discovery of Proton builds already on disk.
 
+#[cfg(not(windows))]
 use crate::model::{home, which};
 use crate::net::{self, get_json};
 use crate::state;
+#[cfg(not(windows))]
 use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
 
+#[cfg(not(windows))]
 /// PROTONPATH value that makes umu download and use the newest GE-Proton itself.
 pub const AUTO_GE: &str = "GE-Proton";
 
@@ -15,10 +18,12 @@ fn tools_dir() -> PathBuf {
     state::data_dir().join("tools")
 }
 
+#[cfg(not(windows))]
 fn umu_dir() -> PathBuf {
     tools_dir().join("umu")
 }
 
+#[cfg(not(windows))]
 /// Managed copy first, then a system install.
 pub fn umu_path() -> Option<PathBuf> {
     let managed = umu_dir().join("current/umu-run");
@@ -28,10 +33,12 @@ pub fn umu_path() -> Option<PathBuf> {
     which("umu-run")
 }
 
+#[cfg(not(windows))]
 pub fn umu_version() -> Option<String> {
     fs::read_to_string(umu_dir().join("version.txt")).ok().map(|s| s.trim().to_string()).or_else(|| which("umu-run").map(|_| "system".into()))
 }
 
+#[cfg(not(windows))]
 /// Download (or update to) the latest umu-launcher zipapp from its official GitHub releases.
 pub async fn install_umu() -> Result<String, String> {
     let rel = get_json("https://api.github.com/repos/Open-Wine-Components/umu-launcher/releases/latest", &[("accept", "application/vnd.github+json")]).await?;
@@ -71,6 +78,7 @@ pub async fn install_umu() -> Result<String, String> {
     Ok(tag)
 }
 
+#[cfg(not(windows))]
 fn walk_find(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
     for e in fs::read_dir(dir).ok()?.flatten() {
         let p = e.path();
@@ -85,12 +93,14 @@ fn walk_find(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
     None
 }
 
+#[cfg(not(windows))]
 #[derive(Serialize, Clone)]
 pub struct Proton {
     pub name: String,
     pub path: String,
 }
 
+#[cfg(not(windows))]
 /// Proton builds already on disk (Steam's, ProtonUp-Qt's, Lodestone's, umu's own downloads).
 pub fn protons() -> Vec<Proton> {
     let h = home();
@@ -124,11 +134,13 @@ pub fn protons() -> Vec<Proton> {
     out
 }
 
+#[cfg(not(windows))]
 fn natural_key(s: &str) -> (bool, Vec<u64>) {
     let nums = s.split(|c: char| !c.is_ascii_digit()).filter(|x| !x.is_empty()).filter_map(|x| x.parse().ok()).collect();
     (s.starts_with("GE-Proton"), nums)
 }
 
+#[cfg(not(windows))]
 /// The PROTONPATH to use: the user's choice, else the newest GE-Proton on disk, else umu's auto-download.
 pub fn proton_path() -> String {
     let chosen = crate::settings::load().proton;
@@ -242,6 +254,7 @@ mod tests {
     }
 }
 
+#[cfg(not(windows))]
 /// Point `link` at `target` (the "current" version of a tool). These tools (Wine, Proton and the
 /// like) are only used on Linux.
 pub fn link_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
